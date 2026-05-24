@@ -9,6 +9,10 @@ use clap::{Parser, Subcommand};
     version
 )]
 pub struct Cli {
+    /// Path to config JSON (overrides `RUSTY_JACK_CONFIG` and default file)
+    #[arg(long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -78,5 +82,20 @@ mod tests {
             Commands::Status(args) => assert!(args.json),
             _ => panic!("expected status"),
         }
+    }
+
+    #[test]
+    fn test_global_config_flag() {
+        let cli = Cli::try_parse_from([
+            "rusty-jack",
+            "--config",
+            "/tmp/rusty-jack.json",
+            "status",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.config.as_deref(),
+            Some(std::path::Path::new("/tmp/rusty-jack.json"))
+        );
     }
 }

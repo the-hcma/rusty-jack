@@ -1,13 +1,23 @@
 //! `rusty-jack status` — show active/default output and policy state.
 
+use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
 use crate::status::{build_status, print_json, print_text};
 use anyhow::Result;
+use std::path::Path;
 
 /// Show current default/active output and policy status.
-pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
+pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result<()> {
+    let resolved = resolve_config_path(config_path);
+    let explicit = config_path.is_some();
+    let config = if let Some(path) = resolved.as_deref() {
+        load_config_optional(path, explicit)?
+    } else {
+        None
+    };
+
     let list = hal.list_outputs()?;
-    let snapshot = build_status(list);
+    let snapshot = build_status(list, config.as_ref(), resolved.as_deref());
 
     if json {
         print_json(&snapshot)?;
@@ -24,6 +34,8 @@ mod tests {
     use crate::coreaudio::mock::MockHal;
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_run_json_does_not_panic() {
@@ -37,6 +49,34 @@ mod tests {
             is_active: true,
             monitor_name: Some("LG TV".into()),
         }]);
-        run(&hal, true).unwrap();
+        run(&hal, true, None).unwrap();
+    }
+
+    #[test]
+    fn test_run_with_config_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "auto_switch": true,
+  "preferred_device_uid": "hdmi",
+  "fallback_uids": []
+}}"#
+        )
+        .unwrap();
+
+        let hal = MockHal::new(vec![OutputDevice {
+            id: 1,
+            uid: "hdmi".into(),
+            name: "Monitor".into(),
+            transport: TransportKind::Hdmi,
+            is_alive: true,
+            is_default: true,
+            is_active: true,
+            monitor_name: None,
+        }]);
+
+        run(&hal, true, Some(file.path())).unwrap();
     }
 }

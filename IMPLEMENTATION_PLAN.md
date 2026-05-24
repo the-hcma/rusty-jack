@@ -916,7 +916,7 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 
 - [ ] `AudioHal` trait + `CoreAudioHal` impl + `MockHal` for tests
 - [ ] Enumerate output devices (UID, name, transport, alive)
-- [ ] `list` and `status` subcommands
+- [x] `list` and `status` subcommands
 - [ ] **Tests:** `coreaudio/device.rs` — filter HDMI, exclude aggregates, empty list; `default_output.rs` — get default from mock; parse transport FourCC
 
 ### Phase 2 — Write path (1 day)

@@ -37,7 +37,7 @@ For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Son
 
 ## Status
 
-**Phase 1 in progress:** device enumeration, `list`, and `status` work on macOS (transport, monitor name, active device highlighting). Routing, config, daemon, and the **virtual driver + software volume** path are planned — see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
+**Phase 1:** device enumeration, `list`, and `status` on macOS (transport, monitor name, active device highlighting, policy match). Routing write path, daemon, and the **virtual driver + software volume** path are planned — see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
 ### Build
 
@@ -82,8 +82,11 @@ cargo build --release
 
 | Command | Description |
 |---------|-------------|
-| `rusty-jack status` | Routing snapshot: device table (active row highlighted), virtual default details, policy |
+| `rusty-jack status` | Routing snapshot: device table (active row highlighted), virtual default details, policy match |
 | `rusty-jack status --json` | Same fields as JSON |
+| `rusty-jack status --config /path/to/config.json` | Evaluate policy against a specific config file |
+
+Config is read from `--config`, `RUSTY_JACK_CONFIG`, or `~/.config/rusty-jack/config.json`.
 
 ## Install via Homebrew (planned)
 
