@@ -1,5 +1,6 @@
 //! Rusty Jack — macOS HDMI output router.
 
+pub mod apply;
 pub mod cli;
 pub mod commands;
 pub mod config;
@@ -32,8 +33,8 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
         cli::Commands::Status(args) => {
             commands::status::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
-        cli::Commands::Apply => {
-            anyhow::bail!("apply is not implemented yet");
+        cli::Commands::Apply(args) => {
+            commands::apply::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
         cli::Commands::Daemon => {
             anyhow::bail!("daemon is not implemented yet");

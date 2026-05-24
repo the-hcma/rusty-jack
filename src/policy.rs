@@ -110,6 +110,95 @@ fn find_device<'a>(devices: &'a [OutputDevice], uid: &str) -> Option<&'a OutputD
     devices.iter().find(|d| d.uid == uid)
 }
 
+/// Why a device was chosen as the routing target.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingTargetSource {
+    Preferred,
+    Fallback { index: usize },
+}
+
+/// Device to route system audio to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RoutingTarget {
+    pub uid: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor_name: Option<String>,
+    pub source: RoutingTargetSource,
+}
+
+/// Failed to pick a routing target from config + live devices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectTargetError {
+    Resolve(ResolveError),
+    NoCandidateAvailable,
+}
+
+impl std::fmt::Display for SelectTargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Resolve(err) => write!(f, "{err}"),
+            Self::NoCandidateAvailable => {
+                write!(f, "no preferred or fallback output device is connected")
+            }
+        }
+    }
+}
+
+fn alive_device<'a>(devices: &'a [OutputDevice], uid: &str) -> Option<&'a OutputDevice> {
+    devices
+        .iter()
+        .find(|d| d.uid == uid && d.is_alive)
+        .or_else(|| devices.iter().find(|d| d.uid == uid))
+}
+
+fn to_routing_target(device: &OutputDevice, source: RoutingTargetSource) -> RoutingTarget {
+    RoutingTarget {
+        uid: device.uid.clone(),
+        name: device.name.clone(),
+        monitor_name: device.monitor_name.clone(),
+        source,
+    }
+}
+
+/// Pick the best connected output device from config (preferred, then fallbacks).
+pub fn select_routing_target(
+    config: &Config,
+    devices: &[OutputDevice],
+) -> Result<RoutingTarget, SelectTargetError> {
+    match resolve_device_selector(&config.preferred_selector(), devices) {
+        Ok(uid) => {
+            if let Some(device) = alive_device(devices, &uid) {
+                if device.is_alive {
+                    return Ok(to_routing_target(device, RoutingTargetSource::Preferred));
+                }
+                // fall through to fallbacks when preferred is unplugged
+            }
+        }
+        Err(err @ ResolveError::MonitorAmbiguous { .. }) | Err(err @ ResolveError::NotSpecified) => {
+            return Err(SelectTargetError::Resolve(err));
+        }
+        Err(ResolveError::MonitorNotFound(_)) | Err(ResolveError::UidNotFound(_)) => {}
+    }
+
+    for (index, fallback_uid) in config.fallback_uids.iter().enumerate() {
+        if crate::config::is_placeholder_uid(fallback_uid) {
+            continue;
+        }
+        if let Some(device) = alive_device(devices, fallback_uid) {
+            if device.is_alive {
+                return Ok(to_routing_target(
+                    device,
+                    RoutingTargetSource::Fallback { index },
+                ));
+            }
+        }
+    }
+
+    Err(SelectTargetError::NoCandidateAvailable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +229,7 @@ mod tests {
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
+            also_set_system_output: true,
             sony_speaker: None,
         }
     }
@@ -154,6 +244,22 @@ mod tests {
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
+            also_set_system_output: true,
+            sony_speaker: None,
+        }
+    }
+
+    fn config_with_fallback(preferred_monitor: &str, fallback_uid: &str) -> Config {
+        Config {
+            version: 1,
+            auto_switch: true,
+            preferred_device: DeviceSelectorConfig {
+                uid: None,
+                monitor_name: Some(preferred_monitor.into()),
+            },
+            preferred_device_uid: None,
+            fallback_uids: vec![fallback_uid.into()],
+            also_set_system_output: true,
             sony_speaker: None,
         }
     }
@@ -201,5 +307,22 @@ mod tests {
         };
         let policy = evaluate_policy(&list, Some(&config_with_monitor("DELL U3219Q")), None);
         assert!(policy.message.contains("no connected output"));
+    }
+
+    #[test]
+    fn test_select_routing_target_by_monitor() {
+        let devices = vec![hdmi("hdmi-1", "DELL U3219Q", true)];
+        let target = select_routing_target(&config_with_monitor("DELL U3219Q"), &devices).unwrap();
+        assert_eq!(target.uid, "hdmi-1");
+        assert!(matches!(target.source, RoutingTargetSource::Preferred));
+    }
+
+    #[test]
+    fn test_select_routing_target_uses_fallback() {
+        let devices = vec![hdmi("dp-1", "DELL U3223QE", true)];
+        let target =
+            select_routing_target(&config_with_fallback("DELL U3219Q", "dp-1"), &devices).unwrap();
+        assert_eq!(target.uid, "dp-1");
+        assert!(matches!(target.source, RoutingTargetSource::Fallback { index: 0 }));
     }
 }

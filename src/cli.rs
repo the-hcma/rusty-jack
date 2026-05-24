@@ -24,7 +24,7 @@ pub enum Commands {
     /// Show current default output and policy status
     Status(StatusArgs),
     /// Apply config policy once
-    Apply,
+    Apply(ApplyArgs),
     /// Run the background supervisor loop (used by launchd)
     Daemon,
 }
@@ -36,6 +36,13 @@ pub struct ListArgs {
     pub hdmi: bool,
 
     /// Emit JSON instead of a table
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ApplyArgs {
+    /// Emit JSON instead of human-readable text
     #[arg(long)]
     pub json: bool,
 }
@@ -81,6 +88,15 @@ mod tests {
         match cli.command {
             Commands::Status(args) => assert!(args.json),
             _ => panic!("expected status"),
+        }
+    }
+
+    #[test]
+    fn test_apply_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "apply", "--json"]).unwrap();
+        match cli.command {
+            Commands::Apply(args) => assert!(args.json),
+            _ => panic!("expected apply"),
         }
     }
 

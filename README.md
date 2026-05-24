@@ -88,6 +88,15 @@ cargo build --release
 
 Config is read from `--config`, `RUSTY_JACK_CONFIG`, or `~/.config/rusty-jack/config.json`.
 
+### `apply` command
+
+| Command | Description |
+|---------|-------------|
+| `rusty-jack apply` | Set default output to preferred device (or fallback) from config |
+| `rusty-jack apply --json` | Same result as JSON (`switched` or `no_change`) |
+
+Requires a valid config file. Resolves `preferred_device.monitor_name` or `uid`, then sets the system default output (and system/alert output when `also_set_system_output` is true).
+
 ### Configuration
 
 Preferred output — by **monitor name** (when unique) or CoreAudio UID:

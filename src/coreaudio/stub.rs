@@ -14,4 +14,16 @@ impl AudioHal for StubHal {
             "rusty-jack requires macOS (CoreAudio is not available on this platform)".into(),
         ))
     }
+
+    fn set_default_output(&self, _uid: &str, _also_system: bool) -> Result<(), RustyJackError> {
+        Err(RustyJackError::CoreAudio(
+            "rusty-jack requires macOS (CoreAudio is not available on this platform)".into(),
+        ))
+    }
+
+    fn default_output_uid(&self) -> Result<Option<String>, RustyJackError> {
+        Err(RustyJackError::CoreAudio(
+            "rusty-jack requires macOS (CoreAudio is not available on this platform)".into(),
+        ))
+    }
 }

@@ -113,8 +113,14 @@ pub struct Config {
     pub preferred_device_uid: Option<String>,
     #[serde(default)]
     pub fallback_uids: Vec<String>,
+    #[serde(default = "default_also_set_system_output")]
+    pub also_set_system_output: bool,
     #[serde(default)]
     pub sony_speaker: Option<SonySpeakerConfig>,
+}
+
+fn default_also_set_system_output() -> bool {
+    true
 }
 
 fn default_auto_switch() -> bool {

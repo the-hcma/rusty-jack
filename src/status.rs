@@ -173,6 +173,7 @@ mod tests {
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
+            also_set_system_output: true,
             sony_speaker: None,
         };
         let snapshot = build_status(

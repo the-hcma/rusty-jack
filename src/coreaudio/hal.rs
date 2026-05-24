@@ -91,4 +91,12 @@ impl AudioHal for CoreAudioHal {
             system_default,
         })
     }
+
+    fn set_default_output(&self, uid: &str, also_system: bool) -> Result<(), RustyJackError> {
+        crate::coreaudio::default_output::set_default_output(uid, also_system)
+    }
+
+    fn default_output_uid(&self) -> Result<Option<String>, RustyJackError> {
+        crate::coreaudio::default_output::default_output_uid()
+    }
 }
