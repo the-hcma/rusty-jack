@@ -31,7 +31,9 @@ For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Son
 ## Platform
 
 - **macOS 12 Monterey** or later (Intel and Apple Silicon)
+- **macOS only** — not built for or tested on Linux
 - Release builds cross-compile **`aarch64-apple-darwin`** and **`x86_64-apple-darwin`** (see `scripts/build-universal.sh`)
+- **GitHub Actions CI** runs on **`macos-14`** runners (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
 
 ## Status
 

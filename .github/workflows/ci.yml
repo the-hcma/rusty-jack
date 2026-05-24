@@ -1,3 +1,6 @@
+# Rusty Jack is macOS-only (CoreAudio HAL). All jobs must run on macOS runners.
+# Linux CI cannot compile or test the real audio stack; non-macOS stub exists only for local editor checks.
+
 name: CI
 
 on:
@@ -20,6 +23,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
@@ -40,18 +44,3 @@ jobs:
 
       - name: build release (x86_64)
         run: cargo build --release --target x86_64-apple-darwin
-
-  test-linux:
-    name: Test (Linux compile-only)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: check non-macOS stub compiles
-        run: cargo test --all-targets
