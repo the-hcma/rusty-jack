@@ -26,7 +26,7 @@ Switching the default output to a physical HDMI device alone **does not** fix vo
 
 ### Sony SRS-ZR5 wake (planned — Phase 8)
 
-For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Songpal protocol), the speaker is often in standby. **Planned:** when line-out is the preferred/active output and you press a **volume key**, rusty-jack will POST to the speaker’s local REST API (`system.setPowerStatus`) using a **native Rust client** — no Python or [python-songpal](https://github.com/rytilahti/python-songpal) at runtime (that project is protocol reference only). Configure `sony_speaker` in `config.example.json` — see [IMPLEMENTATION_PLAN.md §1.1](./IMPLEMENTATION_PLAN.md).
+For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Songpal protocol), the speaker is often in standby. **Planned:** when line-out is the preferred/active output and **mouse or keyboard activity** is detected, rusty-jack will POST to the speaker’s local REST API (`system.setPowerStatus`) using a **native Rust client** — no Python or [python-songpal](https://github.com/rytilahti/python-songpal) at runtime (that project is protocol reference only). Configure `sony_speaker` in `config.example.json` — see [IMPLEMENTATION_PLAN.md §1.1](./IMPLEMENTATION_PLAN.md).
 
 ## Platform
 

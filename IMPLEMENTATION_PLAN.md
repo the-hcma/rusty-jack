@@ -34,7 +34,7 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 |------|--------|
 | **Volume keys control audible level on HDMI/DP** | Primary outcome — same class of fix as eqMac |
 | **Route to chosen external output** | Required companion: user picks which monitor/dock |
-| **Wake Sony speakers on audio activity** | When line-out is the active/preferred output and a **volume key** is pressed, call Sony **ScalarWebAPI** (`system.setPowerStatus`) to wake an **SRS-ZR5** on the LAN — see §1.1 |
+| **Wake Sony speakers on user activity** | When line-out is the active/preferred output and **mouse or keyboard activity** is detected, call Sony **ScalarWebAPI** (`system.setPowerStatus`) to wake an **SRS-ZR5** on the LAN — see §1.1 |
 | **No GUI, launchd-friendly, JSON config** | Deliberate simplification vs eqMac |
 | **No EQ, booster, or per-app mixer in v1** | Out of scope unless explicitly added later |
 
@@ -60,23 +60,23 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
 | Rust + best-practice tooling | `rustfmt`, `clippy` (deny warnings in CI), optional `cargo-deny` / `cargo-audit` |
 | **Unit tests per component** | Every module has `#[cfg(test)]` coverage; CI runs `cargo test` on macOS; CoreAudio behind traits for mocks |
-| **Sony SRS-ZR5 wake on volume-key activity** | Map Mac **line-out** UID to ScalarWebAPI endpoint; native Rust HTTP client; see §1.1 |
+| **Sony SRS-ZR5 wake on user input** | Map Mac **line-out** UID to ScalarWebAPI endpoint; wake on mouse/keyboard activity via native Rust HTTP client; see §1.1 |
 
-### 1.1 Sony SRS-ZR5 wake-on-audio-activity (planned)
+### 1.1 Sony SRS-ZR5 wake-on-user-activity (planned)
 
 #### Problem
 
-A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or similar Songpal speaker) analog input. The speaker often sits in **standby** to save power. When the user presses a **volume key** or switches output to that jack, audio is routed but nothing is audible until someone wakes the speaker manually (remote, Songpal app, etc.).
+A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or similar Songpal speaker) analog input. The speaker often sits in **standby** to save power. When the user returns to the Mac — moves the mouse, clicks, scrolls, or types — audio may be routed to line-out but nothing is audible until someone wakes the speaker manually (remote, Songpal app, etc.).
 
 #### Desired behaviour
 
 1. User configures rusty-jack with:
    - **`preferred_device_uid`** (or equivalent) = the Mac **Built-in Output / line-out** CoreAudio device that feeds the SRS-ZR5.
    - **`sony_speaker`** block = ScalarWebAPI endpoint + model hint for the ZR5 on the LAN.
-2. Daemon detects **keyboard activity relevant to audio** — initially **volume keys** (F10 / F11 / F12 / Touch Bar / media keys); optionally broader keyboard hooks later.
+2. Daemon monitors **user input activity** — **keyboard** (any key down) and/or **mouse** (move, click, scroll) via a macOS event tap.
 3. When **both** are true:
    - active or preferred output is the configured line-out UID (or policy has just switched to it), **and**
-   - a volume-key (or configured) event occurred,
+   - a configured input-activity event occurred (keyboard and/or mouse, per `triggers`),
 4. rusty-jack calls the speaker’s **local ScalarWebAPI** (Sony Songpal REST/JSON over HTTP) to **wake** the unit — implemented **natively in Rust**, not via python-songpal.
 
 #### Reference: Sony ScalarWebAPI (Rust-native client)
@@ -93,7 +93,7 @@ A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or 
 | Method discovery | POST `getMethodTypes` with `params: [""]` on each service URL (see python-songpal `Service.fetch_signatures`) |
 | **Wake (Phase 8 minimum)** | `system.setPowerStatus` with `params: [{"status":"active"}]` |
 | **Status (optional)** | `system.getPowerStatus` — skip wake if already active; log standby vs off |
-| WebSocket | Used by python-songpal for push notifications (`notifyPowerStatus`, etc.) — **optional later** in Rust; not required for wake-on-volume-key |
+| WebSocket | Used by python-songpal for push notifications (`notifyPowerStatus`, etc.) — **optional later** in Rust; not required for wake-on-user-activity |
 | SRS-ZR5 | Listed as officially supported by Sony’s Songpal / Home Assistant integration |
 | Power on | **`Quick Start-Up`** must be enabled on the speaker for network wake from standby; cold power-off may need **Wake-on-LAN** (future; MAC from `getSystemInformation`) |
 | Rust deps | `reqwest` (+ `serde_json`) for HTTP; mock with `wiremock` or httptest in unit tests |
@@ -132,6 +132,10 @@ src/sony/
   power.rs         # getPowerStatus / setPowerStatus
   discover.rs      # optional SSDP/UPnP endpoint discovery (Phase 8.1)
   traits.rs        # SpeakerWake trait
+src/activity/
+  mod.rs
+  macos.rs         # CGEventTap: keyboard + mouse activity (Phase 8)
+  traits.rs        # UserActivityMonitor trait + mock
 ```
 
 **Non-goal:** shipping or invoking python-songpal, pip, or a Python interpreter.
@@ -140,7 +144,7 @@ src/sony/
 
 ```mermaid
 flowchart LR
-    VolKeys[Volume key event] --> Gate{Preferred output\n== line-out UID?}
+    Input[Keyboard or mouse activity] --> Gate{Preferred output\n== line-out UID?}
     Policy[Policy switched to line-out] --> Gate
     Gate -->|yes| ScalarAPI[ScalarWebAPI setPowerStatus]
     Gate -->|no| Skip[No-op]
@@ -152,11 +156,12 @@ flowchart LR
 
 | Trigger | Source | Notes |
 |---------|--------|-------|
-| `volume_key` | `CGEventTap` / HID media-key usage pages, or volume-scalar change once Phase 7 virtual device exists | Primary; matches “user is trying to listen” |
-| `output_selected` | `kAudioHardwarePropertyDefaultOutputDevice` → configured UID | Wake when output switches to line-out even without a key press |
+| `keyboard` | `CGEventTap` — `kCGEventKeyDown` (and optionally `kCGEventFlagsChanged` for modifiers) | Primary; any key press counts as “user at desk”; **do not log keycodes** |
+| `mouse` | `CGEventTap` — `kCGEventMouseMoved`, button down/up, scroll wheel | Wake on pointer motion, click, or scroll |
+| `output_selected` | `kAudioHardwarePropertyDefaultOutputDevice` → configured UID | Wake when output switches to line-out even without input yet |
 | `debounce` | Timer in daemon | Avoid spamming the speaker API (e.g. 30–60 s cooldown while already awake) |
 
-**Permissions:** A global event tap requires **Accessibility** (same class of permission as other keyboard monitors). Document clearly; prefer volume-key-only tap over full keyboard logging.
+**Permissions:** A global event tap requires **Accessibility** (System Settings → Privacy & Security → Accessibility). Document clearly. The tap observes **event types only** for wake gating — not keystroke logging or screen recording.
 
 #### Configuration sketch (see `config.example.json`)
 
@@ -166,7 +171,7 @@ flowchart LR
   "model": "SRS-ZR5",
   "endpoint": "http://192.168.1.42:10000/sony",
   "mac_output_uid": "AppleHDAEngineOutput:…",
-  "triggers": ["volume_key", "output_selected"],
+  "triggers": ["keyboard", "mouse", "output_selected"],
   "wake_debounce_ms": 30000,
   "request_timeout_ms": 3000,
   "require_quick_start": true
@@ -345,6 +350,10 @@ rusty-jack/
 │   │   power.rs
 │   │   discover.rs
 │   │   traits.rs
+│   ├── activity/                  # Phase 8: keyboard + mouse activity monitor
+│   │   mod.rs
+│   │   macos.rs
+│   │   traits.rs
 │   ├── daemon.rs                  # main loop, poll, wake handling
 │   ├── launchd.rs                 # install/uninstall agent plist
 │   └── cli.rs                     # clap parsing (testable without main)
@@ -366,6 +375,7 @@ Each `src/*.rs` and `src/coreaudio/*.rs` module includes a `#[cfg(test)] mod tes
 | `tracing`, `tracing-subscriber` | Structured logs (JSON or pretty in foreground) |
 | `directories` | Default config path under `~/.config` |
 | `reqwest` | Phase 8: Sony ScalarWebAPI HTTP client (blocking or async) |
+| `core-graphics` | Phase 8: `CGEventTapCreate` for keyboard/mouse activity monitor |
 | `ctrlc` | Graceful shutdown in daemon mode |
 
 **Dev-dependencies (tests):**
@@ -473,7 +483,7 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
     "model": "SRS-ZR5",
     "endpoint": "http://192.168.1.42:10000/sony",
     "mac_output_uid": "PASTE-LINE-OUT-UID-FROM-rusty-jack-list",
-    "triggers": ["volume_key", "output_selected"],
+    "triggers": ["keyboard", "mouse", "output_selected"],
     "wake_debounce_ms": 30000,
     "request_timeout_ms": 3000,
     "require_quick_start": true
@@ -500,7 +510,7 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `sony_speaker.enabled` | Master switch for SRS-ZR5 / ScalarWebAPI wake logic |
 | `sony_speaker.endpoint` | ScalarWebAPI base URL (`http://host:port/sony`) |
 | `sony_speaker.mac_output_uid` | CoreAudio UID of Mac line-out wired to the speaker |
-| `sony_speaker.triggers` | `volume_key`, `output_selected` (see §1.1) |
+| `sony_speaker.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
 | `sony_speaker.wake_debounce_ms` | Minimum interval between wake commands |
 | `sony_speaker.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
 | `sony_speaker.require_quick_start` | If true, log a warning when wake fails (user must enable Quick Start-Up on the ZR5) |
@@ -961,25 +971,25 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
 **Definition of done (Phase 7):** User selects HDMI/DP monitor; **F10/F11/F12 change audible volume**; `rusty-jack list` shows virtual + physical devices; clean uninstall restores pre-install audio stack.
 
-### Phase 8 — Sony SRS-ZR5 wake on volume-key activity (1–2 weeks)
+### Phase 8 — Sony SRS-ZR5 wake on user input activity (1–2 weeks)
 
-Wake an **SRS-ZR5** when Mac **line-out** is the target output and the user shows audio intent (volume keys). **Native Rust ScalarWebAPI client** — no Python.
+Wake an **SRS-ZR5** when Mac **line-out** is the target output and the user shows **presence at the Mac** (mouse or keyboard activity). **Native Rust ScalarWebAPI client** — no Python.
 
 - [ ] Config block `sony_speaker` (§4.1) + validation
 - [ ] **`src/sony/scalar_api.rs`** — HTTP POST envelope, `getSupportedApiInfo`, per-service `call(method, params)`, error types
 - [ ] **`src/sony/power.rs`** — `getPowerStatus`, `setPowerStatus(status: active|off)`; skip wake if already active
 - [ ] **`SpeakerWake` trait** + `ScalarWebSpeakerWake` + **`MockSpeakerWake`** for tests
-- [ ] **Volume-key listener** — macOS event tap or HID media-key path; gate on `mac_output_uid` match
+- [ ] **`src/activity/macos.rs`** — `CGEventTap` for keyboard (`kCGEventKeyDown`) and mouse (move, click, scroll); `UserActivityMonitor` trait + mock
 - [ ] Hook into **daemon** policy loop: on `output_selected` when default switches to line-out
 - [ ] Debounce / status cache to limit LAN traffic
 - [ ] **`rusty-jack sony discover`** (Phase 8.1) — optional SSDP/UPnP endpoint discovery in Rust (reference: python-songpal discover)
-- [ ] **Tests:** wiremock/httptest fixtures for guide + system responses; wake only when UID + trigger match; debounce; no wake when HDMI is default
+- [ ] **Tests:** wiremock/httptest fixtures for guide + system responses; wake only when UID + trigger match; debounce; no wake when HDMI is default; mock activity events without real event tap
 
-**Definition of done (Phase 8):** Line-out configured as preferred; press volume key while ZR5 is in standby → Rust client POSTs `setPowerStatus` → speaker wakes; no Python installed; no wake when output is HDMI; Quick Start-Up documented.
+**Definition of done (Phase 8):** Line-out configured as preferred; move mouse or press a key while ZR5 is in standby → Rust client POSTs `setPowerStatus` → speaker wakes; no Python installed; no wake when output is HDMI; Accessibility permission documented; Quick Start-Up documented.
 
 **Future (Phase 8+):** WebSocket notifications (`notifyPowerStatus`); Wake-on-LAN from `getSystemInformation` MAC; input select on ZR5 if needed.
 
-**Total estimate:** ~9–12 days for Phases 0–6; **+2–4 weeks** for Phase 7; **+1–2 weeks** for Phase 8 (Rust ScalarWebAPI + keyboard hook).
+**Total estimate:** ~9–12 days for Phases 0–6; **+2–4 weeks** for Phase 7; **+1–2 weeks** for Phase 8 (Rust ScalarWebAPI + input activity monitor).
 
 **Definition of done (every phase):** feature code + unit tests for touched modules + green `cargo test`.
 
@@ -989,7 +999,7 @@ Wake an **SRS-ZR5** when Mac **line-out** is the target output and the user show
 
 | Feature | Complexity | Approach |
 |---------|------------|----------|
-| **Sony SRS-ZR5 wake on volume keys** | **Medium** | Phase 8 — native Rust ScalarWebAPI (`reqwest`); see §1.1 |
+| **Sony SRS-ZR5 wake on user input** | **Medium** | Phase 8 — native Rust ScalarWebAPI (`reqwest`) + `CGEventTap` activity monitor; see §1.1 |
 | EQ / “bass boost” | **Medium** | Extend passthrough pipeline (Phase 7) with DSP — eqMac uses `AVAudioEngine` for this |
 | Per-app routing | **High** | Prism-style virtual bus or Background Music fork |
 | Notarization / automated driver signing | **Medium** | Required for wide distribution of the virtual driver outside Homebrew |
@@ -1067,7 +1077,7 @@ Run on `macos-13` or `macos-14` (Linux runners skip macOS-only tests via `cfg`).
 | Scenario | Method |
 |----------|--------|
 | **Volume keys on HDMI/DP** | Phase 7: F10/F11/F12 change audible level with virtual driver installed |
-| **SRS-ZR5 wake on line-out** | Phase 8: line-out preferred + volume key → Rust `setPowerStatus`; Quick Start-Up enabled |
+| **SRS-ZR5 wake on line-out** | Phase 8: line-out preferred + keyboard/mouse activity → Rust `setPowerStatus`; Quick Start-Up enabled |
 | Built-in ↔ HDMI | `set`, `apply`, `daemon` |
 | Sleep/wake + dock | daemon poll after wake |
 | Uninstall | `uninstall`, `brew uninstall` — no orphan plist |
@@ -1091,9 +1101,9 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 | Cross-compile link errors on CI | Pin deployment target; install both rustup targets; compile both in CI |
 | Uninstall leaves audio on HDMI | Default `--restore-audio`; document `--no-restore-audio` for Brew |
 | macOS 12 API drift | Test on darwin 21.x hardware; avoid macOS 15-only Swift APIs |
-| **SRS-ZR5 stays asleep on line-out** | Phase 8: ScalarWebAPI wake when `mac_output_uid` active + volume-key trigger |
+| **SRS-ZR5 stays asleep on line-out** | Phase 8: ScalarWebAPI wake when `mac_output_uid` active + keyboard/mouse trigger |
 | Songpal wake fails (ZR5 asleep) | Enable **Quick Start-Up** on speaker; verify endpoint with `rusty-jack sony discover` or curl; debounce + log failures |
-| Volume-key tap denied | Document Accessibility permission; fallback to `output_selected` trigger only |
+| Input activity tap denied | Document Accessibility permission; fallback to `output_selected` trigger only |
 
 ---
 
@@ -1125,8 +1135,8 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 8. **Dual-target releases** — always ship `aarch64` + `x86_64` artifacts; optional universal via `lipo`.
 9. **Clean uninstall is first-class** — `uninstall` subcommand + Homebrew hook; state file enables audio restore.
 10. **Unit tests per component** — no module merges without colocated tests; CoreAudio behind `AudioHal` mock.
-11. **Sony SRS-ZR5 wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake via **native Rust HTTP client** (`system.setPowerStatus`); python-songpal is reference documentation only, not a runtime dependency.
+11. **Sony SRS-ZR5 wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake on **keyboard/mouse activity** via **native Rust HTTP client** (`system.setPowerStatus`); python-songpal is reference documentation only, not a runtime dependency.
 
 ---
 
-*Document version: 1.5 — Phase 8: native Rust ScalarWebAPI for SRS-ZR5 wake (no python-songpal).*
+*Document version: 1.6 — Phase 8: wake SRS-ZR5 on mouse/keyboard activity (not volume keys).*

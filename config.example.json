@@ -20,7 +20,7 @@
     "model": "SRS-ZR5",
     "endpoint": "http://192.168.1.42:10000/sony",
     "mac_output_uid": "PASTE-LINE-OUT-UID-FROM-rusty-jack-list",
-    "triggers": ["volume_key", "output_selected"],
+    "triggers": ["keyboard", "mouse", "output_selected"],
     "wake_debounce_ms": 30000,
     "request_timeout_ms": 3000,
     "require_quick_start": true
