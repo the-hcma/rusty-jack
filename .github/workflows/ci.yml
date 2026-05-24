@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: unit tests
+        run: cargo test --all-targets
+
+      - name: build release (host)
+        run: cargo build --release
+
+      - name: build release (aarch64)
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: build release (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin
+
+  test-linux:
+    name: Test (Linux compile-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: check non-macOS stub compiles
+        run: cargo test --all-targets

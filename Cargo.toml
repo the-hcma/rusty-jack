@@ -1,0 +1,49 @@
+[package]
+name = "rusty-jack"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "macOS CLI: hardware volume keys on HDMI/DisplayPort output (eqMac-style, no GUI)"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/thehcma/rusty-jack"
+keywords = ["macos", "hdmi", "coreaudio", "audio"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "rusty-jack"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+coreaudio-sys = "0.2.17"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rusty_jack_ci)'] }
+unsafe_code = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dev-dependencies]
+tempfile = "3"
+pretty_assertions = "1"
+assert_cmd = "2"
+predicates = "3"
