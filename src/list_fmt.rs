@@ -154,7 +154,36 @@ pub fn format_table_with_color(devices: &[OutputDevice], use_color: bool) -> Str
     lines.join("\n")
 }
 
-/// Print a human-readable table to stdout.
+/// Print the device table only (no virtual-default footer).
+pub fn print_device_table(list: &DeviceList) -> Result<()> {
+    let mut out = io::stdout().lock();
+    if list.devices.is_empty() {
+        writeln!(out, "No output devices found.")?;
+        return Ok(());
+    }
+
+    writeln!(
+        out,
+        "{}",
+        format_table_with_color(&list.devices, stdout_supports_color())
+    )?;
+    Ok(())
+}
+
+/// Print virtual system-default details when the default is a router omitted from the table.
+pub fn print_virtual_default_footer(list: &DeviceList) -> Result<()> {
+    let Some(info) = &list.system_default else {
+        return Ok(());
+    };
+
+    let mut out = io::stdout().lock();
+    writeln!(out)?;
+    writeln!(out, "{}", format_system_default_block(info))?;
+    writeln!(out, "  (`>` marks the physical output row above)")?;
+    Ok(())
+}
+
+/// Print a human-readable table to stdout (list command — table only).
 pub fn print_table(list: &DeviceList, hdmi_only: bool) -> Result<()> {
     let mut out = io::stdout().lock();
     if list.devices.is_empty() {
@@ -167,18 +196,8 @@ pub fn print_table(list: &DeviceList, hdmi_only: bool) -> Result<()> {
         return Ok(());
     }
 
-    writeln!(
-        out,
-        "{}",
-        format_table_with_color(&list.devices, stdout_supports_color())
-    )?;
-
-    if let Some(info) = &list.system_default {
-        writeln!(out, "{}", format_system_default_block(info))?;
-        writeln!(out, "  (`>` marks the physical output row above)")?;
-    }
-
-    Ok(())
+    drop(out);
+    print_device_table(list)
 }
 
 /// Format the virtual system-default footer block (shared with `status`).

@@ -7,7 +7,7 @@ use anyhow::Result;
 /// Show current default/active output and policy status.
 pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
     let list = hal.list_outputs()?;
-    let snapshot = build_status(&list);
+    let snapshot = build_status(list);
 
     if json {
         print_json(&snapshot)?;

@@ -64,15 +64,24 @@ cargo build --release
 ./target/release/rusty-jack list
 ./target/release/rusty-jack list --hdmi
 ./target/release/rusty-jack list --json
+./target/release/rusty-jack status
+./target/release/rusty-jack status --json
 ```
 
 ### `list` command
 
 | Command | Description |
 |---------|-------------|
-| `rusty-jack list` | All output devices (table; current default highlighted in green) |
+| `rusty-jack list` | All output devices (table with index, transport, UID) |
 | `rusty-jack list --hdmi` | HDMI, DisplayPort, Thunderbolt, USB dock outputs only |
-| `rusty-jack list --json` | JSON array (works with `--hdmi`) |
+| `rusty-jack list --json` | JSON device list (works with `--hdmi`) |
+
+### `status` command
+
+| Command | Description |
+|---------|-------------|
+| `rusty-jack status` | Routing snapshot: device table (active row highlighted), virtual default details, policy |
+| `rusty-jack status --json` | Same fields as JSON |
 
 ## Install via Homebrew (planned)
 
