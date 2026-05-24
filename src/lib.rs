@@ -4,6 +4,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod coreaudio;
+pub mod device_select;
 pub mod display;
 pub mod error;
 pub mod hal_plugin;

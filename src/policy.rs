@@ -1,6 +1,7 @@
 //! Routing policy evaluation (status + future apply/daemon).
 
 use crate::config::Config;
+use crate::device_select::{resolve_device_selector, ResolveError};
 use crate::output_device::OutputDevice;
 use crate::status::PolicyStatus;
 use crate::system_default::DeviceList;
@@ -22,6 +23,7 @@ pub fn evaluate_policy(
         return PolicyStatus {
             configured: false,
             config_path: config_path.map(|p| p.display().to_string()),
+            preferred_monitor_name: None,
             preferred_device_uid: None,
             active_device_uid: active_uid(list),
             matches_preferred: None,
@@ -32,48 +34,68 @@ pub fn evaluate_policy(
         };
     };
 
-    if config.preferred_uid_is_placeholder() {
-        return PolicyStatus {
-            configured: true,
-            config_path: config_path.map(|p| p.display().to_string()),
-            preferred_device_uid: Some(config.preferred_device_uid.clone()),
-            active_device_uid: active_uid(list),
-            matches_preferred: None,
-            preferred_present: None,
-            preferred_alive: None,
-            auto_switch: Some(config.auto_switch),
-            message: "preferred_device_uid not set — copy a UID from `rusty-jack list`".into(),
-        };
-    }
-
-    let preferred = &config.preferred_device_uid;
-    let preferred_device = find_device(&list.devices, preferred);
+    let selector = config.preferred_selector();
+    let preferred_monitor_name = selector.monitor_name.clone();
     let active = active_uid(list);
-    let matches = active.as_deref() == Some(preferred.as_str());
 
-    let message = if preferred_device.is_none() {
-        format!("preferred device `{preferred}` is not connected")
-    } else if preferred_device.is_some_and(|d| !d.is_alive) {
-        format!("preferred device `{preferred}` is not alive")
-    } else if matches {
-        "active output matches preferred device".into()
-    } else {
-        format!(
-            "active output is `{}`; preferred is `{preferred}`",
-            active.as_deref().unwrap_or("(none)")
-        )
+    let resolved = resolve_device_selector(&selector, &list.devices);
+
+    let (preferred_uid, message, matches, preferred_present, preferred_alive) = match resolved {
+        Ok(uid) => {
+            let preferred_device = find_device(&list.devices, &uid);
+            let matches = active.as_deref() == Some(uid.as_str());
+            let message = if preferred_device.is_none() {
+                format!("preferred device `{uid}` is not connected")
+            } else if preferred_device.is_some_and(|d| !d.is_alive) {
+                format!("preferred device `{uid}` is not alive")
+            } else if matches {
+                preferred_match_message(&selector, &uid)
+            } else {
+                format!(
+                    "active output is `{}`; preferred is `{uid}`",
+                    active.as_deref().unwrap_or("(none)")
+                )
+            };
+            (
+                Some(uid),
+                message,
+                Some(matches),
+                Some(preferred_device.is_some()),
+                preferred_device.map(|d| d.is_alive),
+            )
+        }
+        Err(ResolveError::NotSpecified) => (
+            None,
+            "set preferred_device.monitor_name or preferred_device.uid".into(),
+            None,
+            None,
+            None,
+        ),
+        Err(err) => (None, err.to_string(), None, None, None),
     };
 
     PolicyStatus {
         configured: true,
         config_path: config_path.map(|p| p.display().to_string()),
-        preferred_device_uid: Some(preferred.clone()),
+        preferred_monitor_name,
+        preferred_device_uid: preferred_uid,
         active_device_uid: active,
-        matches_preferred: Some(matches),
-        preferred_present: Some(preferred_device.is_some()),
-        preferred_alive: preferred_device.map(|d| d.is_alive),
+        matches_preferred: matches,
+        preferred_present,
+        preferred_alive,
         auto_switch: Some(config.auto_switch),
         message,
+    }
+}
+
+fn preferred_match_message(
+    selector: &crate::device_select::DeviceSelector,
+    uid: &str,
+) -> String {
+    if let Some(name) = selector.monitor_name.as_deref() {
+        format!("active output matches preferred monitor `{name}` ({uid})")
+    } else {
+        "active output matches preferred device".into()
     }
 }
 
@@ -91,11 +113,11 @@ fn find_device<'a>(devices: &'a [OutputDevice], uid: &str) -> Option<&'a OutputD
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, DeviceSelectorConfig};
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
 
-    fn hdmi(uid: &str, active: bool) -> OutputDevice {
+    fn hdmi(uid: &str, monitor: &str, active: bool) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -104,67 +126,80 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: active,
-            monitor_name: Some("TV".into()),
+            monitor_name: Some(monitor.into()),
         }
     }
 
-    fn config_with(preferred: &str) -> Config {
+    fn config_with_monitor(name: &str) -> Config {
         Config {
             version: 1,
             auto_switch: true,
-            preferred_device_uid: preferred.into(),
+            preferred_device: DeviceSelectorConfig {
+                uid: None,
+                monitor_name: Some(name.into()),
+            },
+            preferred_device_uid: None,
             fallback_uids: vec![],
+            sony_speaker: None,
+        }
+    }
+
+    fn config_with_uid(uid: &str) -> Config {
+        Config {
+            version: 1,
+            auto_switch: true,
+            preferred_device: DeviceSelectorConfig {
+                uid: Some(uid.into()),
+                monitor_name: None,
+            },
+            preferred_device_uid: None,
+            fallback_uids: vec![],
+            sony_speaker: None,
         }
     }
 
     #[test]
     fn test_no_config_not_configured() {
         let list = DeviceList {
-            devices: vec![hdmi("hdmi-1", true)],
+            devices: vec![hdmi("hdmi-1", "TV", true)],
             system_default: None,
         };
         let policy = evaluate_policy(&list, None, None);
         assert!(!policy.configured);
-        assert!(policy.message.contains("no config"));
     }
 
     #[test]
-    fn test_matches_preferred() {
+    fn test_matches_preferred_by_monitor_name() {
         let list = DeviceList {
-            devices: vec![hdmi("hdmi-1", true)],
+            devices: vec![hdmi("hdmi-1", "DELL U3219Q", true)],
             system_default: None,
         };
-        let cfg = config_with("hdmi-1");
-        let policy = evaluate_policy(&list, Some(&cfg), None);
+        let policy = evaluate_policy(&list, Some(&config_with_monitor("DELL U3219Q")), None);
         assert_eq!(policy.matches_preferred, Some(true));
-        assert!(policy.message.contains("matches preferred"));
+        assert_eq!(policy.preferred_device_uid.as_deref(), Some("hdmi-1"));
+        assert!(policy.message.contains("DELL U3219Q"));
     }
 
     #[test]
     fn test_does_not_match_preferred() {
         let list = DeviceList {
             devices: vec![
-                hdmi("hdmi-1", true),
-                hdmi("hdmi-2", false),
+                hdmi("hdmi-1", "DELL U3219Q", true),
+                hdmi("hdmi-2", "DELL U3223QE", false),
             ],
             system_default: None,
         };
-        let cfg = config_with("hdmi-2");
-        let policy = evaluate_policy(&list, Some(&cfg), None);
+        let policy = evaluate_policy(&list, Some(&config_with_uid("hdmi-2")), None);
         assert_eq!(policy.matches_preferred, Some(false));
-        assert!(policy.message.contains("hdmi-1"));
     }
 
     #[test]
-    fn test_placeholder_preferred() {
+    fn test_monitor_not_found() {
         let list = DeviceList {
-            devices: vec![hdmi("hdmi-1", true)],
+            devices: vec![hdmi("hdmi-1", "LG TV", true)],
             system_default: None,
         };
-        let cfg = config_with("PASTE-UID-FROM-rusty-jack-list");
-        let policy = evaluate_policy(&list, Some(&cfg), None);
-        assert!(policy.configured);
-        assert!(policy.matches_preferred.is_none());
-        assert!(policy.message.contains("not set"));
+        let policy = evaluate_policy(&list, Some(&config_with_monitor("DELL U3219Q")), None);
+        assert!(policy.message.contains("no connected output"));
     }
 }

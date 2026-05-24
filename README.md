@@ -88,6 +88,30 @@ cargo build --release
 
 Config is read from `--config`, `RUSTY_JACK_CONFIG`, or `~/.config/rusty-jack/config.json`.
 
+### Configuration
+
+Preferred output — by **monitor name** (when unique) or CoreAudio UID:
+
+```json
+"preferred_device": {
+  "monitor_name": "DELL U3219Q"
+}
+```
+
+Sony speaker wake (optional — omit on Macs without a networked ZR5). See [`config.example.sony.json`](./config.example.sony.json):
+
+```json
+"sony_speaker": {
+  "enabled": true,
+  "host": "sony.house.hcma",
+  "port": 10000,
+  "path": "sony",
+  "mac_output": { "monitor_name": "Built-in Output" }
+}
+```
+
+`host` accepts a hostname, FQDN, or IP address.
+
 ## Install via Homebrew (planned)
 
 Yes — a Rust macOS CLI is a natural fit for Homebrew. You ship a **native Mach-O binary**; users run:

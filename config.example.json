@@ -3,7 +3,9 @@
   "auto_switch": true,
   "poll_interval_ms": 3000,
   "switch_delay_ms": 500,
-  "preferred_device_uid": "PASTE-UID-FROM-rusty-jack-list",
+  "preferred_device": {
+    "monitor_name": "DELL U3219Q"
+  },
   "fallback_uids": [],
   "match": {
     "transport_types": ["hdmi", "displayport", "thunderbolt"],
@@ -15,16 +17,6 @@
     "uid_denylist": []
   },
   "also_set_system_output": true,
-  "sony_speaker": {
-    "enabled": false,
-    "model": "SRS-ZR5",
-    "endpoint": "http://192.168.1.42:10000/sony",
-    "mac_output_uid": "PASTE-LINE-OUT-UID-FROM-rusty-jack-list",
-    "triggers": ["keyboard", "mouse", "output_selected"],
-    "wake_debounce_ms": 30000,
-    "request_timeout_ms": 3000,
-    "require_quick_start": true
-  },
   "logging": {
     "level": "info",
     "file": "~/Library/Logs/rusty-jack.log"

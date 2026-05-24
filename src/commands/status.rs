@@ -60,7 +60,7 @@ mod tests {
             r#"{{
   "version": 1,
   "auto_switch": true,
-  "preferred_device_uid": "hdmi",
+  "preferred_device": {{ "uid": "hdmi" }},
   "fallback_uids": []
 }}"#
         )

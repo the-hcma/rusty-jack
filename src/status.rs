@@ -16,6 +16,8 @@ pub struct PolicyStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_monitor_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_device_uid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_device_uid: Option<String>,
@@ -73,6 +75,10 @@ fn format_policy_block(policy: &PolicyStatus) -> String {
         lines.push(format!("  config:     {path}"));
     }
 
+    if let Some(name) = &policy.preferred_monitor_name {
+        lines.push(format!("  monitor:    {name}"));
+    }
+
     if let Some(uid) = &policy.preferred_device_uid {
         lines.push(format!("  preferred:  {uid}"));
     }
@@ -124,7 +130,7 @@ pub fn print_json(snapshot: &StatusSnapshot) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, DeviceSelectorConfig};
     use crate::output_device::OutputDevice;
     use crate::system_default::{HalDriverInfo, SystemDefaultInfo};
     use crate::transport::TransportKind;
@@ -161,8 +167,13 @@ mod tests {
         let config = Config {
             version: 1,
             auto_switch: true,
-            preferred_device_uid: "hdmi-1".into(),
+            preferred_device: DeviceSelectorConfig {
+                uid: Some("hdmi-1".into()),
+                monitor_name: None,
+            },
+            preferred_device_uid: None,
             fallback_uids: vec![],
+            sony_speaker: None,
         };
         let snapshot = build_status(
             DeviceList {
@@ -209,6 +220,7 @@ mod tests {
         let block = format_policy_block(&PolicyStatus {
             configured: true,
             config_path: Some("/tmp/c.json".into()),
+            preferred_monitor_name: Some("DELL U3219Q".into()),
             preferred_device_uid: Some("hdmi-1".into()),
             active_device_uid: Some("hdmi-1".into()),
             matches_preferred: Some(true),

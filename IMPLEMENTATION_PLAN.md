@@ -163,14 +163,16 @@ flowchart LR
 
 **Permissions:** A global event tap requires **Accessibility** (System Settings → Privacy & Security → Accessibility). Document clearly. The tap observes **event types only** for wake gating — not keystroke logging or screen recording.
 
-#### Configuration sketch (see `config.example.json`)
+#### Configuration sketch (see `config.example.sony.json`)
 
 ```json
 "sony_speaker": {
   "enabled": true,
   "model": "SRS-ZR5",
-  "endpoint": "http://192.168.1.42:10000/sony",
-  "mac_output_uid": "AppleHDAEngineOutput:…",
+  "host": "sony.house.hcma",
+  "port": 10000,
+  "path": "sony",
+  "mac_output": { "monitor_name": "Built-in Output" },
   "triggers": ["keyboard", "mouse", "output_selected"],
   "wake_debounce_ms": 30000,
   "request_timeout_ms": 3000,
@@ -178,8 +180,9 @@ flowchart LR
 }
 ```
 
-- **`mac_output_uid`** — CoreAudio UID from `rusty-jack list` for the jack feeding the ZR5 (often `Built-in Output` / `AppleHDAEngineOutput:…`).
-- **`endpoint`** — ScalarWebAPI base URL (`http://host:port/sony`); set manually, via DHCP reservation, or `rusty-jack sony discover` (SSDP). Overridable via `RUSTY_JACK_SONY_ENDPOINT`.
+- **`host`** — hostname, FQDN, or IP address (e.g. `sony.house.hcma` or `192.168.1.42`); ScalarWebAPI URL is built as `http://{host}:{port}/{path}`.
+- **`mac_output`** — same shape as `preferred_device` (`monitor_name` and/or `uid`) for the Mac line-out feeding the ZR5.
+- Omit `sony_speaker` entirely when the feature is not used on this Mac.
 - **`request_timeout_ms`** — HTTP timeout for ScalarWebAPI calls.
 
 #### Non-goals for this feature
@@ -464,7 +467,9 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
   "auto_switch": true,
   "poll_interval_ms": 3000,
   "switch_delay_ms": 500,
-  "preferred_device_uid": "HDMI-XXXX-UID-FROM-LIST-COMMAND",
+  "preferred_device": {
+    "monitor_name": "DELL U3219Q"
+  },
   "fallback_uids": [
     "DisplayPort-Secondary-UID"
   ],
@@ -478,16 +483,6 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
     "uid_denylist": []
   },
   "also_set_system_output": true,
-  "sony_speaker": {
-    "enabled": false,
-    "model": "SRS-ZR5",
-    "endpoint": "http://192.168.1.42:10000/sony",
-    "mac_output_uid": "PASTE-LINE-OUT-UID-FROM-rusty-jack-list",
-    "triggers": ["keyboard", "mouse", "output_selected"],
-    "wake_debounce_ms": 30000,
-    "request_timeout_ms": 3000,
-    "require_quick_start": true
-  },
   "logging": {
     "level": "info",
     "file": "~/Library/Logs/rusty-jack.log"
@@ -499,7 +494,9 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 
 | Field | Description |
 |-------|-------------|
-| `preferred_device_uid` | Primary target; if connected and alive, switch to it when `auto_switch` is true |
+| `preferred_device.monitor_name` | Monitor product name from `rusty-jack list` / `status` (must match uniquely) |
+| `preferred_device.uid` | CoreAudio UID (alternative or disambiguation when monitor name is not unique) |
+| `preferred_device_uid` | **Legacy** — use `preferred_device.uid` instead |
 | `fallback_uids` | Ordered list tried when preferred is absent |
 | `match.transport_types` | Filter for `list --hdmi-only` and optional auto-discovery |
 | `match.uid_allowlist` | If non-empty, **only** these UIDs are candidates for auto-switch |
@@ -507,9 +504,11 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `poll_interval_ms` | Polling interval; `0` disables poll (listeners only — not recommended) |
 | `switch_delay_ms` | Debounce after device list change before applying (eqMac uses 500–1000 ms) |
 | `also_set_system_output` | Mirror alerts/sound effects device |
+| `sony_speaker` | Optional — omit on Macs without a networked Sony speaker |
 | `sony_speaker.enabled` | Master switch for SRS-ZR5 / ScalarWebAPI wake logic |
-| `sony_speaker.endpoint` | ScalarWebAPI base URL (`http://host:port/sony`) |
-| `sony_speaker.mac_output_uid` | CoreAudio UID of Mac line-out wired to the speaker |
+| `sony_speaker.host` | Hostname, FQDN, or IP (e.g. `sony.house.hcma`) |
+| `sony_speaker.port` / `path` | ScalarWebAPI URL pieces (default `10000` / `sony`) |
+| `sony_speaker.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
 | `sony_speaker.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
 | `sony_speaker.wake_debounce_ms` | Minimum interval between wake commands |
 | `sony_speaker.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
