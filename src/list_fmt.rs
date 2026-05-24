@@ -175,12 +175,14 @@ pub fn print_table(list: &DeviceList, hdmi_only: bool) -> Result<()> {
 
     if let Some(info) = &list.system_default {
         writeln!(out, "{}", format_system_default_block(info))?;
+        writeln!(out, "  (`>` marks the physical output row above)")?;
     }
 
     Ok(())
 }
 
-fn format_system_default_block(info: &SystemDefaultInfo) -> String {
+/// Format the virtual system-default footer block (shared with `status`).
+pub fn format_system_default_block(info: &SystemDefaultInfo) -> String {
     let mut lines = vec![String::new(), "System default (virtual)".to_string()];
 
     if let Some(router) = &info.router {
@@ -218,7 +220,6 @@ fn format_system_default_block(info: &SystemDefaultInfo) -> String {
         lines.push(format!("  routing to:   {uid}"));
     }
 
-    lines.push("  (`>` marks the physical output row above)".to_string());
     lines.join("\n")
 }
 

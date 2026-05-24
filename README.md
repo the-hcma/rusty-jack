@@ -35,7 +35,7 @@ For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Son
 
 ## Status
 
-**Phase 1 in progress:** device enumeration and `list` work on macOS (transport, monitor name, active device highlighting). Routing, config, daemon, and the **virtual driver + software volume** path are planned — see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
+**Phase 1 in progress:** device enumeration, `list`, and `status` work on macOS (transport, monitor name, active device highlighting). Routing, config, daemon, and the **virtual driver + software volume** path are planned — see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
 ### Build
 

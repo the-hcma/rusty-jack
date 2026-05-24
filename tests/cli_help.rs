@@ -23,3 +23,14 @@ fn test_list_subcommand_in_help() {
         .success()
         .stdout(predicate::str::contains("hdmi"));
 }
+
+#[test]
+fn test_status_subcommand_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("status")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("default"));
+}
