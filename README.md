@@ -7,7 +7,7 @@ macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, USB-C doc
 ## Quick start
 
 ```bash
-brew tap thehcma/tap
+brew tap the-hcma/tap
 brew install rusty-jack
 
 rusty-jack list
@@ -238,7 +238,7 @@ rustc --version
 ### 2. Clone and build
 
 ```bash
-git clone https://github.com/thehcma/rusty-jack.git
+git clone https://github.com/the-hcma/rusty-jack.git
 cd rusty-jack
 ```
 
@@ -311,14 +311,15 @@ Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 
 ## Packaging
 
-Rusty Jack is distributed through the personal Homebrew tap `thehcma/tap`:
+Rusty Jack is distributed through the Homebrew tap `the-hcma/tap`:
 
 ```bash
-brew tap thehcma/tap
+brew tap the-hcma/tap
 brew install rusty-jack
 ```
 
 The formula source lives at [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
+Release steps are in [docs/RELEASING.md](./docs/RELEASING.md).
 
 ---
 

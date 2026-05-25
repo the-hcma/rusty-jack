@@ -96,7 +96,7 @@ LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not syst
 Install the binary through Homebrew, then let Rusty Jack render and load the LaunchAgent:
 
 ```bash
-brew tap thehcma/tap
+brew tap the-hcma/tap
 brew install rusty-jack
 rusty-jack install
 ```

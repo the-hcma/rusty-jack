@@ -1,16 +1,16 @@
-# Homebrew formula for thehcma/homebrew-tap, e.g. Formula/rusty-jack.rb
+# Homebrew formula template for the-hcma/homebrew-tap, e.g. Formula/rusty-jack.rb
 #
-#   brew tap thehcma/tap
+#   brew tap the-hcma/tap
 #   brew install rusty-jack
 #
 class RustyJack < Formula
   desc "Route macOS audio to HDMI/dock outputs with launchd automation"
-  homepage "https://github.com/thehcma/rusty-jack"
+  homepage "https://github.com/the-hcma/rusty-jack"
   license "MIT"
-  head "https://github.com/thehcma/rusty-jack.git", branch: "main"
+  head "https://github.com/the-hcma/rusty-jack.git", branch: "main"
 
   # Stable tap releases use a versioned URL + sha256:
-  # url "https://github.com/thehcma/rusty-jack/archive/refs/tags/v0.1.0.tar.gz"
+  # url "https://github.com/the-hcma/rusty-jack/archive/refs/tags/v0.1.1.tar.gz"
   # sha256 "..."
 
   depends_on macos: :monterey
