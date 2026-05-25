@@ -110,6 +110,10 @@ impl AudioHal for CoreAudioHal {
         volume::ensure_output_volume(uid, percent)
     }
 
+    fn set_system_output_volume(&self, percent: u8) -> Result<(), RustyJackError> {
+        volume::set_system_output_volume_percent(percent)
+    }
+
     fn output_volume_percent(&self, uid: &str) -> Option<u8> {
         volume::read_effective_output_volume(uid)
     }

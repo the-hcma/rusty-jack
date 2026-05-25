@@ -5,6 +5,7 @@ use crate::coreaudio::AudioHal;
 use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
 use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource};
 use crate::system_default::DeviceList;
+use crate::volume_memory::{remember_active_non_preferred, remembered_volume};
 use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 use serde::Serialize;
@@ -52,6 +53,11 @@ pub fn switch_output(
         return Ok(no_change_result(target, "default output already on target"));
     }
 
+    if let Some(percent) = options.volume {
+        // Set the target before the route becomes audible, then verify again after switching.
+        let _ = hal.set_output_volume(&target.uid, percent)?;
+    }
+
     hal.set_default_output(&target.uid, options.also_set_system_output)?;
 
     let volume = if let Some(percent) = options.volume {
@@ -79,6 +85,9 @@ pub fn apply_policy(
     let list = hal.list_outputs()?;
     let target = select_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
+    let preferred_uid = preferred_uid(config, &list.devices);
+    remember_active_non_preferred(hal, &list.devices, preferred_uid.as_deref(), &target.uid)?;
+    let volume = volume_for_target(config, &target, &preferred_uid);
 
     let eqmac = ensure_eqmac_for_target(&list.devices, &target.uid)?;
     for line in format_ensure_messages(eqmac) {
@@ -90,12 +99,34 @@ pub fn apply_policy(
         &target,
         &SwitchOptions {
             also_set_system_output: config.also_set_system_output,
-            volume: config.volume,
+            volume,
         },
     )?;
     crate::sony::warn_on_output_selected(config, &list.devices, &target.uid);
 
     Ok((result, list))
+}
+
+#[must_use]
+pub fn preferred_uid(
+    config: &Config,
+    devices: &[crate::output_device::OutputDevice],
+) -> Option<String> {
+    crate::device_select::resolve_device_selector(&config.preferred_selector(), devices).ok()
+}
+
+#[must_use]
+pub fn volume_for_target(
+    config: &Config,
+    target: &RoutingTarget,
+    preferred_uid: &Option<String>,
+) -> Option<u8> {
+    if preferred_uid.as_deref() == Some(target.uid.as_str())
+        || matches!(target.source, RoutingTargetSource::Preferred)
+    {
+        return config.volume;
+    }
+    remembered_volume(&target.uid)
 }
 
 fn no_change_result(target: &RoutingTarget, reason: &str) -> ApplyResult {
@@ -271,10 +302,16 @@ mod tests {
         assert_eq!(hal.set_calls().len(), 1);
         assert_eq!(
             hal.volume_calls(),
-            vec![crate::coreaudio::mock::SetVolumeCall {
-                uid: "hdmi-1".into(),
-                percent: 42,
-            }]
+            vec![
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi-1".into(),
+                    percent: 42,
+                },
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi-1".into(),
+                    percent: 42,
+                }
+            ]
         );
     }
 

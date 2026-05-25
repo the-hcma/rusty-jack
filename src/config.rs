@@ -123,7 +123,7 @@ pub struct Config {
     pub fallback_uids: Vec<String>,
     #[serde(default = "default_also_set_system_output")]
     pub also_set_system_output: bool,
-    /// Output volume (0–100) to apply when switching to the preferred device. Omitted = leave volume unchanged.
+    /// Preferred output volume (0–100). Non-preferred outputs use per-device volume memory.
     #[serde(default)]
     pub volume: Option<u8>,
     #[serde(default)]

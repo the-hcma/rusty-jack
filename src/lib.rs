@@ -23,6 +23,7 @@ pub mod status;
 pub mod system_default;
 pub mod transport;
 pub mod version;
+pub mod volume_memory;
 pub mod volume_result;
 
 pub use error::RustyJackError;
@@ -40,7 +41,10 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             commands::install::run(hal.as_ref(), args.json)?;
         }
         cli::Commands::Pause(args) => commands::pause::run(args.json)?,
-        cli::Commands::Resume(args) => commands::resume::run(args.json)?,
+        cli::Commands::Resume(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::resume::run(hal.as_ref(), args.json, cli.config.as_deref())?;
+        }
         cli::Commands::Uninstall(args) => {
             commands::uninstall::run(args.json, args.remove_config, args.keep_config)?
         }

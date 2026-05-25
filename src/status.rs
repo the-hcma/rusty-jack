@@ -29,7 +29,7 @@ pub struct PolicyStatus {
     pub preferred_alive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_switch: Option<bool>,
-    /// Volume (0–100) from config, applied when switching to preferred.
+    /// Volume (0–100) from config, restored on route switches and daemon startup.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_volume: Option<u8>,
     pub message: String,
@@ -86,6 +86,9 @@ fn format_daemon_block(daemon: &DaemonStatus) -> String {
             pid,
         } => {
             rows.push(("state", "running".into()));
+            rows.push(("installed", "yes".into()));
+            rows.push(("running", "yes".into()));
+            rows.push(("paused", "no".into()));
             rows.push(("label", label.clone()));
             rows.push(("service", service.clone()));
             if let Some(pid) = pid {
@@ -97,14 +100,25 @@ fn format_daemon_block(daemon: &DaemonStatus) -> String {
             label,
             plist_path,
             service,
+            pause_reason,
         } => {
             rows.push(("state", "paused".into()));
+            rows.push(("installed", "yes".into()));
+            rows.push(("running", "no".into()));
+            rows.push(("paused", "yes".into()));
+            if let Some(reason) = pause_reason {
+                rows.push(("reason", reason.label().into()));
+                rows.push(("note", reason.message()));
+            }
             rows.push(("label", label.clone()));
             rows.push(("service", service.clone()));
             rows.push(("plist", plist_path.clone()));
         }
         DaemonStatus::NotInstalled { plist_path } => {
             rows.push(("state", "not installed".into()));
+            rows.push(("installed", "no".into()));
+            rows.push(("running", "no".into()));
+            rows.push(("paused", "no".into()));
             rows.push(("expected plist", plist_path.clone()));
         }
         DaemonStatus::Unknown {
@@ -113,6 +127,9 @@ fn format_daemon_block(daemon: &DaemonStatus) -> String {
             message,
         } => {
             rows.push(("state", "unknown".into()));
+            rows.push(("installed", "unknown".into()));
+            rows.push(("running", "unknown".into()));
+            rows.push(("paused", "unknown".into()));
             rows.push(("label", label.clone()));
             rows.push(("plist", plist_path.clone()));
             rows.push(("note", message.clone()));
@@ -359,6 +376,52 @@ mod tests {
         assert!(block.contains("matches"));
         assert!(block.contains("preferred"));
         assert!(block.contains("hdmi-1"));
+    }
+
+    #[test]
+    fn test_format_daemon_block_shows_status_flags() {
+        fn has_row(block: &str, label: &str, value: &str) -> bool {
+            block.lines().any(|line| {
+                line.trim_start()
+                    .split_once(':')
+                    .is_some_and(|(actual_label, actual_value)| {
+                        actual_label.trim() == label && actual_value.trim() == value
+                    })
+            })
+        }
+
+        let running = format_daemon_block(&DaemonStatus::Running {
+            label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+            plist_path: "/tmp/test.plist".into(),
+            service: "gui/501/com.example.rusty-jack".into(),
+            pid: Some(123),
+        });
+        assert!(has_row(&running, "installed", "yes"));
+        assert!(has_row(&running, "running", "yes"));
+        assert!(has_row(&running, "paused", "no"));
+
+        let paused = format_daemon_block(&DaemonStatus::Paused {
+            label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+            plist_path: "/tmp/test.plist".into(),
+            service: "gui/501/com.example.rusty-jack".into(),
+            pause_reason: Some(crate::launchd::DaemonPauseReason::picker_override(
+                "builtin".into(),
+                "Built-in Output".into(),
+                Some("hdmi-1".into()),
+            )),
+        });
+        assert!(has_row(&paused, "installed", "yes"));
+        assert!(has_row(&paused, "running", "no"));
+        assert!(has_row(&paused, "paused", "yes"));
+        assert!(has_row(&paused, "reason", "picker override"));
+        assert!(paused.contains("daemon is paused until `rusty-jack resume`"));
+
+        let not_installed = format_daemon_block(&DaemonStatus::NotInstalled {
+            plist_path: "/tmp/test.plist".into(),
+        });
+        assert!(has_row(&not_installed, "installed", "no"));
+        assert!(has_row(&not_installed, "running", "no"));
+        assert!(has_row(&not_installed, "paused", "no"));
     }
 
     #[test]

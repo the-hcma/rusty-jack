@@ -40,7 +40,7 @@ Requires valid config. Results:
 | `switched` | Default output changed; may include `volume` ensure result |
 | `no_change` | Already on target |
 
-**Volume:** If `volume` is set in config, applied only when a switch occurs (not on `no_change`).
+**Volume:** For this one-shot command, if `volume` is set in config, it is applied only when a switch occurs (not on `no_change`).
 
 **eqMac:** Started automatically when the target is HDMI-class and eqMac is installed but not running.
 
@@ -55,7 +55,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the current default differs. On startup, including after `upgrade`, it leaves the current output alone when it already matches policy. No-op polls do not trigger Sony wake calls. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured Sony output is already selected, it sends a wake command subject to `sony_speaker.wake_debounce_ms`.
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes eqMac-routed HDMI/DisplayPort, where the raw CoreAudio default may be the virtual eqMac device while the audible route is already correct. On startup, including after `upgrade`, it leaves the current output alone when it already matches policy. No-op polls do not trigger Sony wake calls. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured Sony output is already selected, it sends a wake command subject to `sony_speaker.wake_debounce_ms`.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -100,7 +100,7 @@ brew tap the-hcma/tap
 brew install rusty-jack
 ```
 
-Then let Rusty Jack create config, prompt for preferred/fallback outputs, and load the LaunchAgent:
+Then let Rusty Jack create config, prompt for preferred and optional fallback outputs, and load the LaunchAgent:
 
 ```bash
 rusty-jack install
@@ -113,7 +113,7 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when it is missing. In an interactive terminal it prompts for the preferred output and a fallback output; the fallback defaults to the Mac's built-in speakers when available. In `--json` mode it avoids prompts and uses deterministic defaults from the live device list. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
+`install` creates `~/.config/rusty-jack/config.json` when it is missing. In an interactive terminal it prompts for the preferred output and an optional explicit fallback output. If no explicit fallback is configured, the daemon still uses the Mac's built-in output automatically when available. In `--json` mode it avoids prompts and uses deterministic defaults from the live device list. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
 
 ### Pause, Resume, Uninstall
 
@@ -124,7 +124,7 @@ rusty-jack uninstall  # stop, disable, remove plist, offer config cleanup
 rusty-jack uninstall --remove-config  # also remove default config without prompting
 ```
 
-`disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the default config in interactive mode; `--keep-config` keeps it without prompting. Neither command deletes log files.
+`resume` applies the configured route and volume synchronously, then starts the daemon. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the default config in interactive mode; `--keep-config` keeps it without prompting. Neither command deletes log files.
 
 ### Update
 
@@ -181,6 +181,8 @@ Config is optional. When present:
 - `volume` applied only when you pick the **configured preferred** device and a switch happens
 - Sony power-state notes refresh while the interactive picker is open.
 
+When the daemon is running and you pick a device other than the configured preferred output, `picker` asks for confirmation, pauses auto-routing, and records the override reason. The confirmation defaults to yes and shows `Continue` on its own colored prompt line. You must run `rusty-jack resume` to re-enable the daemon. Non-interactive picker calls cannot confirm this pause; pause the daemon first or rerun picker interactively.
+
 **Interactive legend:**
 
 ```
@@ -214,10 +216,10 @@ Policy block fields (aligned columns):
 - `config volume`, `volume` (current effective %)
 - `note` (human-readable policy message)
 
-Daemon block states:
+Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, and PID when available. State values:
 
 - `running` — LaunchAgent plist exists and launchd reports the job loaded; PID is shown when available.
-- `paused` — plist exists but launchd does not currently have the job loaded.
+- `paused` — plist exists but launchd does not currently have the job loaded. If picker paused the daemon for a manual output override, `status` includes a `reason` and a note telling you to run `rusty-jack resume`.
 - `not_installed` — plist is not present under `~/Library/LaunchAgents`.
 
 Config is optional for `status`; without it, policy reports “not configured”.
@@ -254,7 +256,7 @@ Use **either** (or both; `preferred_device` wins when set):
 
 ### `fallback_uids`
 
-Array of UIDs tried in order when preferred is missing or not alive. If no configured fallback is available, the daemon uses the Mac's internal built-in speaker output when it is connected.
+Array of UIDs tried in order when preferred is missing or not alive. Leave it empty to use the Mac's internal built-in speaker output automatically when it is connected.
 
 ### Daemon fields
 
@@ -268,7 +270,7 @@ Array of UIDs tried in order when preferred is missing or not alive. If no confi
 
 ### `volume`
 
-Integer 0–100. Applied on switch to preferred device only (`apply` / `picker` when preferred matches). Uses retry + readback for eqMac compatibility.
+Integer 0–100. Created automatically from the preferred route's current effective volume when `install` can read it. This config value is authoritative for the configured preferred output. Other outputs use per-device remembered volume stored in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back. Scheduled no-op polls do not keep forcing volume, so manual volume changes are not fought every poll. Uses retry + readback for eqMac compatibility.
 
 ### `sony_speaker`
 
