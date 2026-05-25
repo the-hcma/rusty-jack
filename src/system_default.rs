@@ -109,7 +109,12 @@ mod tests {
     #[test]
     fn test_identify_eqmac_from_uid() {
         assert_eq!(
-            identify_router("EQMOutputCapture", "DELL U3219Q (eqMac)", Some("Bitgapp Ltd"), None),
+            identify_router(
+                "EQMOutputCapture",
+                "DELL U3219Q (eqMac)",
+                Some("Bitgapp Ltd"),
+                None
+            ),
             Some("eqMac".into())
         );
     }

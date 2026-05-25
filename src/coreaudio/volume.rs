@@ -63,7 +63,10 @@ pub fn output_volume_percent(device_id: AudioDeviceID) -> Option<u8> {
 }
 
 /// Set output volume for `device_id` (0–100). Returns an error when the property is not settable.
-pub fn set_output_volume_percent(device_id: AudioDeviceID, percent: u8) -> Result<(), RustyJackError> {
+pub fn set_output_volume_percent(
+    device_id: AudioDeviceID,
+    percent: u8,
+) -> Result<(), RustyJackError> {
     let address = volume_address();
     let scalar = percent_to_scalar(percent);
     let status = unsafe {

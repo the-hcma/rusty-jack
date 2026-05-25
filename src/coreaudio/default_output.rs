@@ -11,8 +11,8 @@ use crate::coreaudio::property::{all_device_ids, default_output_device_id, devic
 use crate::RustyJackError;
 use coreaudio_sys::{
     kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDefaultSystemOutputDevice,
-    kAudioObjectPropertyElementMaster, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectSystemObject, AudioDeviceID, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
+    kAudioObjectPropertyElementMaster, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+    AudioDeviceID, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
 };
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -118,7 +118,10 @@ mod hardware_tests {
         );
         assert!(builtin.is_default, "built-in should be HAL default");
         assert!(builtin.is_active, "built-in should be active");
-        assert!(list.system_default.is_none(), "no virtual footer when physical default");
+        assert!(
+            list.system_default.is_none(),
+            "no virtual footer when physical default"
+        );
 
         set_default_output(&original, true).unwrap();
     }
@@ -130,12 +133,18 @@ mod hardware_tests {
             return;
         };
         let ids = all_device_ids().unwrap();
-        let Some(other_id) = ids.into_iter().find(|id| device_uid(*id).ok().as_deref() != Some(original.as_str())) else {
+        let Some(other_id) = ids
+            .into_iter()
+            .find(|id| device_uid(*id).ok().as_deref() != Some(original.as_str()))
+        else {
             return;
         };
         let other_uid = device_uid(other_id).unwrap();
         set_default_output(&other_uid, false).unwrap();
-        assert_eq!(default_output_uid().unwrap().as_deref(), Some(other_uid.as_str()));
+        assert_eq!(
+            default_output_uid().unwrap().as_deref(),
+            Some(other_uid.as_str())
+        );
         set_default_output(&original, false).unwrap();
     }
 }

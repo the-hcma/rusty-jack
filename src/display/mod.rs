@@ -17,10 +17,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn test_parse_apple_hda_uid() {
         use super::macos::{parse_apple_engine_uid, uid_vendor_to_profiler_format};
-        let (v, p, s) = parse_apple_engine_uid(
-            "AppleHDAEngineOutputDP:0,1,0,1,0:0:{AC10-A120-30594A4C}",
-        )
-        .unwrap();
+        let (v, p, s) =
+            parse_apple_engine_uid("AppleHDAEngineOutputDP:0,1,0,1,0:0:{AC10-A120-30594A4C}")
+                .unwrap();
         assert_eq!(v, "ac10");
         assert_eq!(p, "a120");
         assert_eq!(s, "30594a4c");

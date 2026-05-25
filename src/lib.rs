@@ -7,6 +7,7 @@ pub mod config;
 pub mod coreaudio;
 pub mod device_select;
 pub mod display;
+pub mod eqmac;
 pub mod error;
 pub mod hal_plugin;
 pub mod launchd;
@@ -16,8 +17,8 @@ pub mod picker;
 pub mod policy;
 pub mod status;
 pub mod system_default;
-pub mod version;
 pub mod transport;
+pub mod version;
 pub mod volume_result;
 
 pub use error::RustyJackError;
@@ -47,12 +48,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
         }
         cli::Commands::Picker(args) => {
             let hal = coreaudio::platform_hal()?;
-            commands::picker::run(
-                hal.as_ref(),
-                args.json,
-                args.index,
-                cli.config.as_deref(),
-            )?;
+            commands::picker::run(hal.as_ref(), args.json, args.index, cli.config.as_deref())?;
         }
     }
 

@@ -94,12 +94,24 @@ fn monitor_label(device: &OutputDevice) -> &str {
 }
 
 fn active_marker(device: &OutputDevice) -> &str {
-    if device.is_active { ">" } else { "" }
+    if device.is_active {
+        ">"
+    } else {
+        ""
+    }
 }
 
 fn format_header(w: &TableWidths) -> String {
     render_cells(
-        ["IDX", "ACT", "ALIVE", "TRANSPORT", "DEVICE", "MONITOR", "UID"],
+        [
+            "IDX",
+            "ACT",
+            "ALIVE",
+            "TRANSPORT",
+            "DEVICE",
+            "MONITOR",
+            "UID",
+        ],
         w,
     )
 }
@@ -219,11 +231,7 @@ pub fn format_detail_rows(indent: &str, rows: &[(&str, &str)]) -> Vec<String> {
     if rows.is_empty() {
         return vec![];
     }
-    let width = rows
-        .iter()
-        .map(|(label, _)| label.len())
-        .max()
-        .unwrap_or(0);
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
     rows.iter()
         .map(|(label, value)| format!("{indent}{label:width$}: {value}", width = width))
         .collect()
@@ -277,7 +285,10 @@ pub fn format_system_default_block(info: &SystemDefaultInfo) -> String {
     }
 
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    format!("\n{}", format_labeled_section("System default (virtual)", "  ", &borrowed))
+    format!(
+        "\n{}",
+        format_labeled_section("System default (virtual)", "  ", &borrowed)
+    )
 }
 
 /// Print JSON to stdout.
@@ -338,10 +349,7 @@ mod tests {
                 } else {
                     line.len()
                 };
-                line.get(start..end)
-                    .unwrap_or("")
-                    .trim_end()
-                    .to_string()
+                line.get(start..end).unwrap_or("").trim_end().to_string()
             })
             .collect()
     }

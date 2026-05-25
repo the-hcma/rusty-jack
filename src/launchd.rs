@@ -2,7 +2,7 @@
 
 use crate::RustyJackError;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// launchd job label (matches `launchd/com.example.rusty-jack.plist.template`).
@@ -40,17 +40,9 @@ pub enum PauseResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ResumeResult {
-    Resumed {
-        label: String,
-        plist_path: String,
-    },
-    NotInstalled {
-        plist_path: String,
-    },
-    AlreadyRunning {
-        label: String,
-        plist_path: String,
-    },
+    Resumed { label: String, plist_path: String },
+    NotInstalled { plist_path: String },
+    AlreadyRunning { label: String, plist_path: String },
 }
 
 /// Path to the user LaunchAgent plist (`~/Library/LaunchAgents/<label>.plist`).
@@ -91,7 +83,7 @@ fn plist_path_or_err() -> Result<PathBuf, RustyJackError> {
     })
 }
 
-fn plist_path_display(path: &PathBuf) -> Result<String, RustyJackError> {
+fn plist_path_display(path: &Path) -> Result<String, RustyJackError> {
     path.to_str()
         .map(str::to_string)
         .ok_or_else(|| RustyJackError::Launchd("plist path is not valid UTF-8".into()))
@@ -114,7 +106,7 @@ fn run_launchctl(args: &[&str]) -> Result<i32, RustyJackError> {
     Ok(output.status.code().unwrap_or(-1))
 }
 
-fn stop_job_best_effort(domain: &str, plist_path: &PathBuf) {
+fn stop_job_best_effort(domain: &str, plist_path: &Path) {
     if let Ok(plist_arg) = plist_path_display(plist_path) {
         let _ = run_launchctl(&["bootout", domain, &plist_arg]);
     }
@@ -250,18 +242,12 @@ pub fn print_pause_result(result: &PauseResult) {
 /// Human-readable output for [`ResumeResult`].
 pub fn print_resume_result(result: &ResumeResult) {
     match result {
-        ResumeResult::Resumed {
-            label,
-            plist_path,
-        } => {
+        ResumeResult::Resumed { label, plist_path } => {
             println!("Resumed rusty-jack daemon ({label})");
             println!("  plist: {plist_path}");
             println!("  auto-routing active");
         }
-        ResumeResult::AlreadyRunning {
-            label,
-            plist_path,
-        } => {
+        ResumeResult::AlreadyRunning { label, plist_path } => {
             println!("Daemon already running ({label})");
             println!("  plist: {plist_path}");
         }

@@ -7,14 +7,14 @@ use crate::coreaudio::property::{
 use crate::coreaudio::resolve_active_uid;
 #[cfg(target_os = "macos")]
 use crate::coreaudio::system_default::build_system_default_info;
+use crate::coreaudio::traits::AudioHal;
 #[cfg(target_os = "macos")]
 use crate::coreaudio::volume;
-use crate::coreaudio::traits::AudioHal;
-use crate::volume_result::VolumeEnsureResult;
 use crate::display;
 use crate::output_device::OutputDevice;
 use crate::system_default::DeviceList;
 use crate::transport::TransportKind;
+use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 
 /// CoreAudio-backed [`AudioHal`].
@@ -84,8 +84,7 @@ impl AudioHal for CoreAudioHal {
         out.sort_by_key(|d| d.name.to_lowercase());
 
         #[cfg(target_os = "macos")]
-        let system_default =
-            build_system_default_info(&out, active_uid.as_deref());
+        let system_default = build_system_default_info(&out, active_uid.as_deref());
         #[cfg(not(target_os = "macos"))]
         let system_default = None;
 
@@ -103,7 +102,11 @@ impl AudioHal for CoreAudioHal {
         crate::coreaudio::default_output::default_output_uid()
     }
 
-    fn set_output_volume(&self, uid: &str, percent: u8) -> Result<VolumeEnsureResult, RustyJackError> {
+    fn set_output_volume(
+        &self,
+        uid: &str,
+        percent: u8,
+    ) -> Result<VolumeEnsureResult, RustyJackError> {
         volume::ensure_output_volume(uid, percent)
     }
 

@@ -1,10 +1,11 @@
 //! Apply routing policy once (set default output).
 
 use crate::config::Config;
-use crate::volume_result::VolumeEnsureResult;
 use crate::coreaudio::AudioHal;
+use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
 use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource};
 use crate::system_default::DeviceList;
+use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 use serde::Serialize;
 
@@ -78,6 +79,11 @@ pub fn apply_policy(
     let list = hal.list_outputs()?;
     let target = select_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
+
+    let eqmac = ensure_eqmac_for_target(&list.devices, &target.uid)?;
+    for line in format_ensure_messages(eqmac) {
+        eprintln!("{line}");
+    }
 
     let result = switch_output(
         hal,
@@ -257,10 +263,13 @@ mod tests {
         let (result, _list) = apply_policy(&hal, &config).unwrap();
         assert!(matches!(result, ApplyResult::Switched { .. }));
         assert_eq!(hal.set_calls().len(), 1);
-        assert_eq!(hal.volume_calls(), vec![crate::coreaudio::mock::SetVolumeCall {
-            uid: "hdmi-1".into(),
-            percent: 42,
-        }]);
+        assert_eq!(
+            hal.volume_calls(),
+            vec![crate::coreaudio::mock::SetVolumeCall {
+                uid: "hdmi-1".into(),
+                percent: 42,
+            }]
+        );
     }
 
     #[test]

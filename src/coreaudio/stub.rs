@@ -1,8 +1,8 @@
 //! Non-macOS stub (compile-check only).
 
 use crate::coreaudio::traits::AudioHal;
-use crate::volume_result::VolumeEnsureResult;
 use crate::system_default::DeviceList;
+use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 
 /// Placeholder HAL for non-macOS targets.

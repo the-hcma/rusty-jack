@@ -47,7 +47,10 @@ pub fn resolve_active_uid(
 
     if let Some(stripped) = default_name.strip_suffix(" (eqMac)") {
         let target = stripped.trim();
-        if let Some(d) = devices.iter().find(|d| matches_eqmac_route_target(d, target)) {
+        if let Some(d) = devices
+            .iter()
+            .find(|d| matches_eqmac_route_target(d, target))
+        {
             return Some(d.uid.clone());
         }
     }
@@ -68,7 +71,12 @@ mod tests {
     use super::*;
     use crate::transport::TransportKind;
 
-    fn device(uid: &str, name: &str, monitor: Option<&str>, transport: TransportKind) -> OutputDevice {
+    fn device(
+        uid: &str,
+        name: &str,
+        monitor: Option<&str>,
+        transport: TransportKind,
+    ) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -94,7 +102,12 @@ mod tests {
     fn test_eqmac_virtual_maps_to_monitor() {
         let devices = vec![
             device("hdmi", "HDMI", Some("DELL U3219Q"), TransportKind::Hdmi),
-            device("dp", "DisplayPort", Some("DELL U3223QE"), TransportKind::DisplayPort),
+            device(
+                "dp",
+                "DisplayPort",
+                Some("DELL U3223QE"),
+                TransportKind::DisplayPort,
+            ),
         ];
         assert_eq!(
             resolve_active_uid("EQMOutputCapture", "DELL U3219Q (eqMac)", &devices).as_deref(),
@@ -105,21 +118,12 @@ mod tests {
     #[test]
     fn test_eqmac_internal_speakers_maps_to_builtin() {
         let devices = vec![
-            device(
-                "builtin",
-                "Built-in Output",
-                None,
-                TransportKind::BuiltIn,
-            ),
+            device("builtin", "Built-in Output", None, TransportKind::BuiltIn),
             device("hdmi", "HDMI", Some("DELL U3219Q"), TransportKind::Hdmi),
         ];
         assert_eq!(
-            resolve_active_uid(
-                "EQMOutputCapture",
-                "Internal Speakers (eqMac)",
-                &devices,
-            )
-            .as_deref(),
+            resolve_active_uid("EQMOutputCapture", "Internal Speakers (eqMac)", &devices,)
+                .as_deref(),
             Some("builtin")
         );
     }
@@ -133,12 +137,7 @@ mod tests {
             TransportKind::BuiltIn,
         )];
         assert_eq!(
-            resolve_active_uid(
-                "EQMOutputCapture",
-                "Built-in Output (eqMac)",
-                &devices,
-            )
-            .as_deref(),
+            resolve_active_uid("EQMOutputCapture", "Built-in Output (eqMac)", &devices,).as_deref(),
             Some("builtin")
         );
     }

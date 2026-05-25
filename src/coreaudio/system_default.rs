@@ -6,9 +6,7 @@ use crate::coreaudio::property::{
 };
 use crate::hal_plugin::match_hal_driver;
 use crate::output_device::OutputDevice;
-use crate::system_default::{
-    identify_router, routed_to_label, SystemDefaultInfo,
-};
+use crate::system_default::{identify_router, routed_to_label, SystemDefaultInfo};
 use crate::transport::TransportKind;
 
 /// Describe the current system default when it is a virtual router not shown in `devices`.
@@ -31,12 +29,7 @@ pub fn build_system_default_info(
         manufacturer.as_deref(),
         plugin_bundle_id.as_deref(),
     );
-    let router = identify_router(
-        &uid,
-        &name,
-        manufacturer.as_deref(),
-        driver.as_ref(),
-    );
+    let router = identify_router(&uid, &name, manufacturer.as_deref(), driver.as_ref());
 
     let is_virtual = transport == TransportKind::Virtual
         || driver.is_some()

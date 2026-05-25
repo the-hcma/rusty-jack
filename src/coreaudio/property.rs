@@ -6,7 +6,7 @@
     clippy::ptr_as_ptr,
     clippy::borrow_as_ptr,
     clippy::ptr_cast_constness,
-    clippy::cast_possible_truncation,
+    clippy::cast_possible_truncation
 )]
 
 use crate::RustyJackError;
@@ -17,8 +17,8 @@ use coreaudio_sys::{
     kAudioDevicePropertyScopeOutput, kAudioDevicePropertyStreamConfiguration,
     kAudioDevicePropertyTransportType, kAudioHardwarePropertyDefaultOutputDevice,
     kAudioHardwarePropertyDevices, kAudioObjectPropertyElementMaster,
-    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioBufferList,
-    AudioDeviceID, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+    kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject, AudioBufferList, AudioDeviceID,
+    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
     AudioObjectPropertyAddress,
 };
 use std::ffi::c_void;
@@ -36,7 +36,11 @@ fn ok(status: i32) -> bool {
     status == 0
 }
 
-fn get_property_u32(device_id: AudioObjectID, selector: u32, scope: u32) -> Result<u32, RustyJackError> {
+fn get_property_u32(
+    device_id: AudioObjectID,
+    selector: u32,
+    scope: u32,
+) -> Result<u32, RustyJackError> {
     let address = property_address(selector, scope);
     let mut value: u32 = 0;
     let mut size = std::mem::size_of::<u32>() as u32;
@@ -99,16 +103,13 @@ fn try_get_property_u32(device_id: AudioObjectID, selector: u32, scope: u32) -> 
 
 /// All HAL device IDs.
 pub fn all_device_ids() -> Result<Vec<AudioDeviceID>, RustyJackError> {
-    let address = property_address(kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal);
+    let address = property_address(
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+    );
     let mut size = 0u32;
     let status = unsafe {
-        AudioObjectGetPropertyDataSize(
-            kAudioObjectSystemObject,
-            &address,
-            0,
-            null_mut(),
-            &mut size,
-        )
+        AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, null_mut(), &mut size)
     };
     if !ok(status) {
         return Err(RustyJackError::CoreAudio(format!(
@@ -162,7 +163,11 @@ fn system_property_device_id(selector: u32) -> Option<AudioDeviceID> {
 }
 
 pub fn device_uid(device_id: AudioDeviceID) -> Result<String, RustyJackError> {
-    get_property_cfstring(device_id, kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal)
+    get_property_cfstring(
+        device_id,
+        kAudioDevicePropertyDeviceUID,
+        kAudioObjectPropertyScopeGlobal,
+    )
 }
 
 pub fn device_name(device_id: AudioDeviceID) -> Result<String, RustyJackError> {
@@ -233,9 +238,8 @@ pub fn device_has_output_streams(device_id: AudioDeviceID) -> bool {
         kAudioDevicePropertyScopeOutput,
     );
     let mut size = 0u32;
-    let status = unsafe {
-        AudioObjectGetPropertyDataSize(device_id, &address, 0, null_mut(), &mut size)
-    };
+    let status =
+        unsafe { AudioObjectGetPropertyDataSize(device_id, &address, 0, null_mut(), &mut size) };
     if !ok(status) || size == 0 {
         return false;
     }
@@ -299,7 +303,11 @@ mod hardware_tests {
             ),
             (
                 "model_uid",
-                get_property_cfstring(id, kAudioDevicePropertyModelUID, kAudioObjectPropertyScopeGlobal),
+                get_property_cfstring(
+                    id,
+                    kAudioDevicePropertyModelUID,
+                    kAudioObjectPropertyScopeGlobal,
+                ),
             ),
             (
                 "transport",
@@ -309,7 +317,11 @@ mod hardware_tests {
             eprintln!("{label}: {res:?}");
         }
 
-        if let Ok(plugin_id) = get_property_u32(id, kAudioDevicePropertyPlugIn, kAudioObjectPropertyScopeGlobal) {
+        if let Ok(plugin_id) = get_property_u32(
+            id,
+            kAudioDevicePropertyPlugIn,
+            kAudioObjectPropertyScopeGlobal,
+        ) {
             eprintln!("plugin_id: {plugin_id}");
             if let Ok(bundle) = get_property_cfstring(
                 plugin_id,

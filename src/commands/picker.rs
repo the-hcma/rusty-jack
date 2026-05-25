@@ -23,7 +23,8 @@ pub fn run(
     let preferred_uid = preferred_uid_from_config(config.as_ref(), &list.devices);
 
     match pick_device_index(&list.devices, index, preferred_uid.as_deref())
-        .map_err(anyhow::Error::new)? {
+        .map_err(anyhow::Error::new)?
+    {
         PickSelection::Cancelled => {
             if json {
                 let value = serde_json::to_string_pretty(&PickerCancelled::new())?;
@@ -112,8 +113,8 @@ mod tests {
 
     #[test]
     fn test_run_picker_no_change_json() {
-        let hal = MockHal::new(vec![device("builtin", "Built-in Output", true)])
-            .with_default("builtin");
+        let hal =
+            MockHal::new(vec![device("builtin", "Built-in Output", true)]).with_default("builtin");
 
         run(&hal, true, Some(0), None).unwrap();
         assert!(hal.set_calls().is_empty());

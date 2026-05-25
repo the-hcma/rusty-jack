@@ -90,10 +90,7 @@ pub fn evaluate_policy(
     }
 }
 
-fn preferred_match_message(
-    selector: &crate::device_select::DeviceSelector,
-    uid: &str,
-) -> String {
+fn preferred_match_message(selector: &crate::device_select::DeviceSelector, uid: &str) -> String {
     if let Some(name) = selector.monitor_name.as_deref() {
         format!("active output matches preferred monitor `{name}` ({uid})")
     } else {
@@ -179,7 +176,8 @@ pub fn select_routing_target(
                 // fall through to fallbacks when preferred is unplugged
             }
         }
-        Err(err @ ResolveError::MonitorAmbiguous { .. }) | Err(err @ ResolveError::NotSpecified) => {
+        Err(err @ ResolveError::MonitorAmbiguous { .. })
+        | Err(err @ ResolveError::NotSpecified) => {
             return Err(SelectTargetError::Resolve(err));
         }
         Err(ResolveError::MonitorNotFound(_)) | Err(ResolveError::UidNotFound(_)) => {}
@@ -329,6 +327,9 @@ mod tests {
         let target =
             select_routing_target(&config_with_fallback("DELL U3219Q", "dp-1"), &devices).unwrap();
         assert_eq!(target.uid, "dp-1");
-        assert!(matches!(target.source, RoutingTargetSource::Fallback { index: 0 }));
+        assert!(matches!(
+            target.source,
+            RoutingTargetSource::Fallback { index: 0 }
+        ));
     }
 }

@@ -213,13 +213,8 @@ mod tests {
 
     #[test]
     fn test_global_config_flag() {
-        let cli = Cli::try_parse_from([
-            "rusty-jack",
-            "--config",
-            "/tmp/rusty-jack.json",
-            "status",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["rusty-jack", "--config", "/tmp/rusty-jack.json", "status"])
+            .unwrap();
         assert_eq!(
             cli.config.as_deref(),
             Some(std::path::Path::new("/tmp/rusty-jack.json"))

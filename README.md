@@ -179,6 +179,8 @@ Config is read from `--config`, `RUSTY_JACK_CONFIG`, or `~/.config/rusty-jack/co
 
 Requires a valid config file. Resolves `preferred_device.monitor_name` or `uid`, then sets the system default output (and system/alert output when `also_set_system_output` is true). When `volume` is set in config, applies it only on an actual switch.
 
+For **HDMI/DisplayPort** targets, rusty-jack **starts eqMac** if it is installed but not running (eqMac provides software volume until rusty-jack ships its own virtual driver). If eqMac is not installed, a warning is printed and volume keys may not work on external displays.
+
 ### `picker` command
 
 | Command | Description |

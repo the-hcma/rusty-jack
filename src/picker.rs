@@ -3,6 +3,7 @@
 use crate::apply::{switch_output, ApplyResult, SwitchOptions};
 use crate::config::Config;
 use crate::coreaudio::AudioHal;
+use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
 use crate::list_fmt::{self, ANSI_CYAN, ANSI_DIM, ANSI_GREEN, ANSI_RESET};
 use crate::output_device::OutputDevice;
 use crate::policy::{RoutingTarget, RoutingTargetSource};
@@ -24,14 +25,23 @@ pub struct PickerCancelled {
     status: &'static str,
 }
 
-impl PickerCancelled {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self { status: "cancelled" }
+impl Default for PickerCancelled {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-const PICKER_PROMPT: &str = "Select output device (↑↓, Enter, Esc to cancel)  (> active, * preferred, dim = not routable)";
+impl PickerCancelled {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            status: "cancelled",
+        }
+    }
+}
+
+const PICKER_PROMPT: &str =
+    "Select output device (↑↓, Enter, Esc to cancel)  (> active, * preferred, dim = not routable)";
 
 /// Resolve the configured preferred device UID against live outputs.
 #[must_use]
@@ -209,6 +219,11 @@ pub fn pick_and_switch(
     let device = devices
         .get(index)
         .ok_or_else(|| RustyJackError::Config(format!("device index {index} out of range")))?;
+
+    let eqmac = ensure_eqmac_for_target(devices, &device.uid)?;
+    for line in format_ensure_messages(eqmac) {
+        eprintln!("{line}");
+    }
 
     let target = RoutingTarget {
         uid: device.uid.clone(),
@@ -415,7 +430,14 @@ mod tests {
         ])
         .with_default("builtin");
 
-        pick_and_switch(&hal, &hal.list_outputs().unwrap().devices, 1, true, Some(42)).unwrap();
+        pick_and_switch(
+            &hal,
+            &hal.list_outputs().unwrap().devices,
+            1,
+            true,
+            Some(42),
+        )
+        .unwrap();
         assert_eq!(
             hal.volume_calls(),
             vec![crate::coreaudio::mock::SetVolumeCall {

@@ -68,11 +68,7 @@ fn default_sony_path() -> String {
 }
 
 fn default_sony_triggers() -> Vec<String> {
-    vec![
-        "keyboard".into(),
-        "mouse".into(),
-        "output_selected".into(),
-    ]
+    vec!["keyboard".into(), "mouse".into(), "output_selected".into()]
 }
 
 fn default_wake_debounce_ms() -> u64 {
@@ -134,7 +130,11 @@ impl Config {
     /// Effective preferred device selector (`preferred_device` wins over legacy UID).
     #[must_use]
     pub fn preferred_selector(&self) -> DeviceSelector {
-        if !self.preferred_device.uid.as_deref().is_none_or(is_placeholder_uid)
+        if !self
+            .preferred_device
+            .uid
+            .as_deref()
+            .is_none_or(is_placeholder_uid)
             || self
                 .preferred_device
                 .monitor_name
@@ -199,9 +199,8 @@ pub fn default_config_path() -> Option<PathBuf> {
 /// Returns an error when the file exists but cannot be read or parsed.
 pub fn load_config(path: &Path) -> Result<Config, RustyJackError> {
     let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
-    let config: Config = serde_json::from_str(&raw).map_err(|err| {
-        RustyJackError::Config(format!("{}: {err}", path.display()))
-    })?;
+    let config: Config = serde_json::from_str(&raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
     validate_config(&config)?;
     Ok(config)
 }
@@ -255,7 +254,11 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
                     "sony_speaker.enabled is true but host is not set".into(),
                 ));
             }
-            if sony.mac_output.uid.as_deref().is_none_or(is_placeholder_uid)
+            if sony
+                .mac_output
+                .uid
+                .as_deref()
+                .is_none_or(is_placeholder_uid)
                 && sony
                     .mac_output
                     .monitor_name
@@ -317,10 +320,7 @@ mod tests {
         .unwrap();
 
         let config = load_config(file.path()).unwrap();
-        assert_eq!(
-            config.preferred_selector().uid.as_deref(),
-            Some("hdmi-uid")
-        );
+        assert_eq!(config.preferred_selector().uid.as_deref(), Some("hdmi-uid"));
     }
 
     #[test]

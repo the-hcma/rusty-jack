@@ -6,11 +6,7 @@ use crate::output_device::filter_hdmi_devices;
 use anyhow::Result;
 
 /// List output devices, optionally filtered to HDMI-class transports.
-pub fn run(
-    hal: &dyn AudioHal,
-    hdmi_only: bool,
-    json: bool,
-) -> Result<()> {
+pub fn run(hal: &dyn AudioHal, hdmi_only: bool, json: bool) -> Result<()> {
     let mut list = hal.list_outputs()?;
 
     if hdmi_only {

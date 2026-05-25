@@ -1,9 +1,9 @@
 //! In-memory HAL for unit tests.
 
 use crate::coreaudio::traits::AudioHal;
-use crate::volume_result::VolumeEnsureResult;
 use crate::output_device::OutputDevice;
 use crate::system_default::DeviceList;
+use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 use std::sync::Mutex;
 
@@ -103,7 +103,11 @@ impl AudioHal for MockHal {
         Ok(self.state.lock().unwrap().default_uid.clone())
     }
 
-    fn set_output_volume(&self, uid: &str, percent: u8) -> Result<VolumeEnsureResult, RustyJackError> {
+    fn set_output_volume(
+        &self,
+        uid: &str,
+        percent: u8,
+    ) -> Result<VolumeEnsureResult, RustyJackError> {
         if !self.devices.iter().any(|d| d.uid == uid) {
             return Err(RustyJackError::CoreAudio(format!(
                 "no device with uid `{uid}`"

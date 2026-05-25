@@ -1,7 +1,7 @@
 //! Testable abstraction over CoreAudio.
 
-use crate::volume_result::VolumeEnsureResult;
 use crate::system_default::DeviceList;
+use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 
 /// Hardware abstraction for listing and selecting output devices.

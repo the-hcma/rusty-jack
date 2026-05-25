@@ -98,17 +98,11 @@ fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> Str
     }
 
     if let Some(matches) = policy.matches_preferred {
-        rows.push((
-            "matches",
-            if matches { "yes".into() } else { "no".into() },
-        ));
+        rows.push(("matches", if matches { "yes".into() } else { "no".into() }));
     }
 
     if let Some(auto) = policy.auto_switch {
-        rows.push((
-            "auto_switch",
-            if auto { "yes".into() } else { "no".into() },
-        ));
+        rows.push(("auto_switch", if auto { "yes".into() } else { "no".into() }));
     }
 
     if let Some(volume) = policy.config_volume {

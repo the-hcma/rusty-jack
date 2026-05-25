@@ -11,10 +11,7 @@ static DRIVERS: OnceLock<Vec<HalDriverInfo>> = OnceLock::new();
 fn hal_plugin_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![PathBuf::from("/Library/Audio/Plug-Ins/HAL")];
     if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(
-            PathBuf::from(home)
-                .join("Library/Audio/Plug-Ins/HAL"),
-        );
+        dirs.push(PathBuf::from(home).join("Library/Audio/Plug-Ins/HAL"));
     }
     dirs
 }
@@ -102,15 +99,21 @@ pub fn match_hal_driver(
         }
     }
 
-    if uid.contains("EQM") || name.contains("(eqMac)") || manufacturer.is_some_and(|m| m.contains("Bitgapp"))
+    if uid.contains("EQM")
+        || name.contains("(eqMac)")
+        || manufacturer.is_some_and(|m| m.contains("Bitgapp"))
     {
         return drivers
             .iter()
-            .find(|d| d.bundle_id == "com.bitgapp.eqmac.driver" || d.name.eq_ignore_ascii_case("eqMac"))
+            .find(|d| {
+                d.bundle_id == "com.bitgapp.eqmac.driver" || d.name.eq_ignore_ascii_case("eqMac")
+            })
             .cloned();
     }
 
-    if uid.to_ascii_lowercase().contains("blackhole") || name.to_ascii_lowercase().contains("blackhole") {
+    if uid.to_ascii_lowercase().contains("blackhole")
+        || name.to_ascii_lowercase().contains("blackhole")
+    {
         return drivers
             .iter()
             .find(|d| {
@@ -136,7 +139,12 @@ mod tests {
 
     #[test]
     fn test_match_eqmac_driver_by_uid() {
-        let driver = match_hal_driver("EQMOutputCapture", "DELL U3219Q (eqMac)", Some("Bitgapp Ltd"), None);
+        let driver = match_hal_driver(
+            "EQMOutputCapture",
+            "DELL U3219Q (eqMac)",
+            Some("Bitgapp Ltd"),
+            None,
+        );
         if installed_hal_drivers().is_empty() {
             return;
         }

@@ -7,7 +7,7 @@ use std::fmt;
 
 #[cfg(target_os = "macos")]
 use coreaudio_sys::{
-    kAudioDeviceTransportTypeAirPlay, kAudioDeviceTransportTypeAggregate,
+    kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAirPlay,
     kAudioDeviceTransportTypeAutoAggregate, kAudioDeviceTransportTypeBluetooth,
     kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeBuiltIn,
     kAudioDeviceTransportTypeDisplayPort, kAudioDeviceTransportTypeFireWire,
