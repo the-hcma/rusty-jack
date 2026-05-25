@@ -13,6 +13,9 @@ pub enum RustyJackError {
     #[error("launchd error: {0}")]
     Launchd(String),
 
+    #[error("speaker wake error: {0}")]
+    Speaker(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

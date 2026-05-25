@@ -137,6 +137,16 @@ pub fn pick_device_index(
     index: Option<usize>,
     preferred_uid: Option<&str>,
 ) -> Result<PickSelection, RustyJackError> {
+    pick_device_index_with_notes(devices, index, preferred_uid, &[])
+}
+
+/// Pick a device index with optional per-device notes shown in the interactive menu.
+pub fn pick_device_index_with_notes(
+    devices: &[OutputDevice],
+    index: Option<usize>,
+    preferred_uid: Option<&str>,
+    notes: &[(String, String)],
+) -> Result<PickSelection, RustyJackError> {
     if devices.is_empty() {
         return Err(RustyJackError::Config(
             "no output devices available to pick".into(),
@@ -165,7 +175,10 @@ pub fn pick_device_index(
     loop {
         let labels: Vec<String> = devices
             .iter()
-            .map(|device| format_picker_label_with_options(device, preferred_uid, use_color))
+            .map(|device| {
+                let label = format_picker_label_with_options(device, preferred_uid, use_color);
+                append_picker_note(label, note_for_uid(notes, &device.uid))
+            })
             .collect();
         let default = default_picker_index(devices);
 
@@ -193,6 +206,22 @@ pub fn pick_device_index(
             }
         }
     }
+}
+
+fn note_for_uid<'a>(notes: &'a [(String, String)], uid: &str) -> Option<&'a str> {
+    notes
+        .iter()
+        .find(|(note_uid, _)| note_uid == uid)
+        .map(|(_, note)| note.as_str())
+}
+
+fn append_picker_note(mut label: String, note: Option<&str>) -> String {
+    let Some(note) = note.filter(|value| !value.trim().is_empty()) else {
+        return label;
+    };
+    label.push_str(" — ");
+    label.push_str(note);
+    label
 }
 
 /// When the picked device is the configured preferred device, return config volume.
@@ -394,6 +423,15 @@ mod tests {
     #[test]
     fn test_pick_device_index_empty_list() {
         assert!(pick_device_index(&[], None, None).is_err());
+    }
+
+    #[test]
+    fn test_append_picker_note() {
+        let label = append_picker_note(
+            "   External Headphones — built-in".into(),
+            Some("Sony: standby"),
+        );
+        assert_eq!(label, "   External Headphones — built-in — Sony: standby");
     }
 
     #[test]

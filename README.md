@@ -74,9 +74,9 @@ Rusty Jack **does not replace eqMac yet** — it **routes** to the right monitor
 |-------------|----------|
 | Installed + running | No action |
 | Installed, not running | `open -a eqMac`, brief startup wait |
-| Not installed | Warning on stderr; volume keys on HDMI may not work |
+| Not installed | Warning on stderr with https://eqmac.app; HDMI volume buttons will not work |
 
-Detection: `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.driver`, process via `pgrep -x eqMac`.
+Detection: `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.driver`, process via `pgrep -x eqMac`. If a stale driver remains but the app cannot be launched, Rusty Jack treats eqMac as not installed and still switches routes.
 
 ### Config `volume`
 
@@ -146,7 +146,7 @@ Default path: `~/.config/rusty-jack/config.json`. Copy from [`config.example.jso
 | `also_set_system_output` | Also set system/alert output (default `true`) |
 | `volume` | 0–100; apply on switch to preferred only |
 | `auto_switch` | For future daemon (ignored by CLI today) |
-| `sony_speaker` | Phase 8 — wake SRS-ZR5 on activity (config validates; not wired to daemon yet) |
+| `sony_speaker` | Wake SRS-ZR5 on `apply` / `picker` output selection using discovered ScalarWebAPI endpoint; daemon activity triggers are planned |
 
 Example:
 
@@ -162,7 +162,7 @@ Example:
 
 `config.example.json` may include extra keys (`poll_interval_ms`, `match`, `exclude`, …) reserved for future daemon behavior; they are **ignored** by the current loader.
 
-Sony ZR5 example: [`config.example.sony.json`](./config.example.sony.json).
+Sony ZR5 example: [`config.example.sony.json`](./config.example.sony.json). Other Sony Songpal / ScalarWebAPI speakers may also work; Rusty Jack only uses discovery plus `system.setPowerStatus`. If you confirm another model, please consider contributing device info to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal) using the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/).
 
 ---
 

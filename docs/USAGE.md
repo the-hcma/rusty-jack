@@ -184,9 +184,11 @@ Array of UIDs tried in order when preferred is missing or not alive.
 
 Integer 0–100. Applied on switch to preferred device only (`apply` / `picker` when preferred matches). Uses retry + readback for eqMac compatibility.
 
-### `sony_speaker` (validated, Phase 8)
+### `sony_speaker`
 
-Optional block for waking a Sony SRS-ZR5 over ScalarWebAPI. Parsed and validated but **not invoked** by the CLI yet. See `config.example.sony.json`.
+Optional block for waking a Sony SRS-ZR5 or similar Songpal / ScalarWebAPI speaker. When enabled and `triggers` includes `output_selected`, `apply` and `picker` discover the speaker's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `sony_speaker.mac_output`. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. Keyboard/mouse activity triggers are still daemon work. See `config.example.sony.json`.
+
+Other Sony speakers may also work if they expose the same ScalarWebAPI. If you verify another model, please consider contributing a device info file to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal); the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) provides the `songpal dump-devinfo` helper.
 
 ---
 

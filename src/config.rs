@@ -92,7 +92,11 @@ impl SonySpeakerConfig {
             return None;
         }
         let path = self.path.trim().trim_start_matches('/');
-        Some(format!("http://{host}:{}:{path}", self.port))
+        if path.is_empty() {
+            Some(format!("http://{host}:{}", self.port))
+        } else {
+            Some(format!("http://{host}:{}/{path}", self.port))
+        }
     }
 }
 
@@ -339,7 +343,7 @@ mod tests {
         };
         assert_eq!(
             sony.endpoint_url().as_deref(),
-            Some("http://sony.house.hcma:10000:sony")
+            Some("http://sony.house.hcma:10000/sony")
         );
     }
 

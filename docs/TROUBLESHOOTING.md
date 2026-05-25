@@ -61,10 +61,11 @@ rusty-jack picker --index 2 --json
 ## eqMac warning: not installed
 
 ```
-warning: eqMac is not installed — volume keys on HDMI/DisplayPort may not work.
+warning: eqMac is not installed; volume buttons cannot control HDMI/DisplayPort output.
+  Download eqMac from https://eqmac.app to enable software volume control.
 ```
 
-Install eqMac, or accept fixed full-level HDMI until Phase 7. Routing to HDMI still works; only **software volume** is missing.
+Download eqMac from https://eqmac.app, or accept fixed full-level HDMI until Phase 7. Routing to HDMI still works; only **software volume** is missing.
 
 ---
 

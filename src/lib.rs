@@ -15,6 +15,7 @@ pub mod list_fmt;
 pub mod output_device;
 pub mod picker;
 pub mod policy;
+pub mod sony;
 pub mod status;
 pub mod system_default;
 pub mod transport;

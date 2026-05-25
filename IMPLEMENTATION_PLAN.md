@@ -81,7 +81,7 @@ A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or 
 
 #### Reference: Sony ScalarWebAPI (Rust-native client)
 
-[python-songpal](https://github.com/rytilahti/python-songpal) is a **protocol reference only** — we do **not** depend on Python, pip, or the `songpal` CLI at runtime. rusty-jack speaks the same HTTP JSON API directly.
+[python-songpal](https://github.com/rytilahti/python-songpal) is a **protocol reference only** — we do **not** depend on Python, pip, or the `songpal` CLI at runtime. rusty-jack speaks the same HTTP JSON API directly. If another Sony Songpal / ScalarWebAPI speaker works, users should consider contributing a device info file upstream; the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) includes the `songpal dump-devinfo` helper.
 
 | Topic | Detail |
 |-------|--------|

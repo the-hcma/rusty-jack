@@ -90,7 +90,8 @@ pub fn ensure_eqmac_for_target(
 ///
 /// # Errors
 ///
-/// Returns an error when eqMac is installed but `open` fails to launch the app.
+/// Returns an error when eqMac is installed but `open` fails to launch the app
+/// for reasons other than the app being unavailable.
 pub fn ensure_eqmac_running() -> Result<EqMacEnsureResult, RustyJackError> {
     if eqmac_install_state() == EqMacInstallState::NotInstalled {
         return Ok(EqMacEnsureResult {
@@ -104,28 +105,48 @@ pub fn ensure_eqmac_running() -> Result<EqMacEnsureResult, RustyJackError> {
         });
     }
 
-    launch_eqmac_app()?;
-    thread::sleep(EQMAC_STARTUP_WAIT);
-
-    Ok(EqMacEnsureResult {
-        action: EqMacEnsureAction::Launched,
-    })
+    match launch_eqmac_app()? {
+        EqMacLaunchAction::Launched => {
+            thread::sleep(EQMAC_STARTUP_WAIT);
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::Launched,
+            })
+        }
+        EqMacLaunchAction::NotInstalled => Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotInstalled,
+        }),
+    }
 }
 
-fn launch_eqmac_app() -> Result<(), RustyJackError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EqMacLaunchAction {
+    Launched,
+    NotInstalled,
+}
+
+fn launch_eqmac_app() -> Result<EqMacLaunchAction, RustyJackError> {
     let output = std::process::Command::new("open")
         .args(["-a", EQMAC_APP_NAME])
         .output()
         .map_err(RustyJackError::Io)?;
 
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(RustyJackError::Launchd(format!(
-            "failed to launch eqMac: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )))
+    classify_eqmac_launch(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
+    if success {
+        return Ok(EqMacLaunchAction::Launched);
     }
+    if stderr.contains("Unable to find application named") {
+        return Ok(EqMacLaunchAction::NotInstalled);
+    }
+
+    Err(RustyJackError::Launchd(format!(
+        "failed to launch eqMac: {stderr}"
+    )))
 }
 
 /// Human-readable lines for stderr after ensuring eqMac.
@@ -137,10 +158,9 @@ pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
             vec!["Started eqMac (software volume for HDMI/DisplayPort).".into()]
         }
         EqMacEnsureAction::NotInstalled => vec![
-            "warning: eqMac is not installed — volume keys on HDMI/DisplayPort may not work."
+            "warning: eqMac is not installed; volume buttons cannot control HDMI/DisplayPort output."
                 .into(),
-            "  Install eqMac from https://eqmac.app or wait for rusty-jack's own virtual driver."
-                .into(),
+            "  Download eqMac from https://eqmac.app to enable software volume control.".into(),
         ],
     }
 }
@@ -183,5 +203,28 @@ mod tests {
         });
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("Started eqMac"));
+    }
+
+    #[test]
+    fn test_format_ensure_not_installed_message_has_url() {
+        let lines = format_ensure_messages(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotInstalled,
+        });
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("volume buttons cannot control HDMI/DisplayPort"));
+        assert!(lines[1].contains("https://eqmac.app"));
+    }
+
+    #[test]
+    fn test_missing_eqmac_app_is_not_fatal() {
+        let result =
+            classify_eqmac_launch(false, "Unable to find application named 'eqMac'\n").unwrap();
+        assert_eq!(result, EqMacLaunchAction::NotInstalled);
+    }
+
+    #[test]
+    fn test_other_eqmac_launch_failure_stays_fatal() {
+        let err = classify_eqmac_launch(false, "permission denied").unwrap_err();
+        assert!(matches!(err, RustyJackError::Launchd(_)));
     }
 }

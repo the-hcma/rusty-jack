@@ -93,6 +93,7 @@ pub fn apply_policy(
             volume: config.volume,
         },
     )?;
+    crate::sony::warn_on_output_selected(config, &list.devices, &target.uid);
 
     Ok((result, list))
 }

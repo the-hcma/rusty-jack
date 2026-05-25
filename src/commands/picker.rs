@@ -4,8 +4,8 @@ use crate::apply::print_text;
 use crate::config::{load_config_optional, resolve_config_path, Config};
 use crate::coreaudio::AudioHal;
 use crate::picker::{
-    pick_and_switch, pick_device_index, preferred_uid_from_config, volume_for_preferred_pick,
-    PickSelection, PickerCancelled,
+    pick_and_switch, pick_device_index_with_notes, preferred_uid_from_config,
+    volume_for_preferred_pick, PickSelection, PickerCancelled,
 };
 use anyhow::Result;
 use std::path::Path;
@@ -21,9 +21,22 @@ pub fn run(
     let config = load_picker_config(config_path)?;
 
     let preferred_uid = preferred_uid_from_config(config.as_ref(), &list.devices);
+    let picker_notes = if index.is_none() && !json {
+        config
+            .as_ref()
+            .map(|config| crate::sony::picker_power_notes(config, &list.devices))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
-    match pick_device_index(&list.devices, index, preferred_uid.as_deref())
-        .map_err(anyhow::Error::new)?
+    match pick_device_index_with_notes(
+        &list.devices,
+        index,
+        preferred_uid.as_deref(),
+        &picker_notes,
+    )
+    .map_err(anyhow::Error::new)?
     {
         PickSelection::Cancelled => {
             if json {
@@ -50,6 +63,9 @@ pub fn run(
                 volume,
             )
             .map_err(anyhow::Error::new)?;
+            if let Some(config) = config.as_ref() {
+                crate::sony::warn_on_output_selected(config, &list.devices, &device.uid);
+            }
 
             if json {
                 let value = serde_json::to_string_pretty(&result)?;

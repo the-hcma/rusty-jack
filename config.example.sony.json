@@ -8,7 +8,6 @@
     "enabled": true,
     "model": "SRS-ZR5",
     "host": "sony.house.hcma",
-    "port": 10000,
     "path": "sony",
     "mac_output": {
       "monitor_name": "Built-in Output"
