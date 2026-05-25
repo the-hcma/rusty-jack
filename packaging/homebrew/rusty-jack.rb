@@ -4,7 +4,7 @@
 #   brew install rusty-jack
 #
 class RustyJack < Formula
-  desc "Route macOS audio to HDMI/dock outputs with launchd automation"
+  desc "Route HDMI audio for volume keys and wake Sony-like speakers"
   homepage "https://github.com/the-hcma/rusty-jack"
   license "MIT"
   head "https://github.com/the-hcma/rusty-jack.git", branch: "main"

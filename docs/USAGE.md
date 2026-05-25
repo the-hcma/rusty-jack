@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and Sony ScalarWebAPI wake support. Native HDMI/DP volume without eqMac remains future driver work.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration for HDMI/DisplayPort keyboard volume-key control, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and Sony-like ScalarWebAPI speaker wake support. Native HDMI/DP volume without eqMac remains future driver work.
 
 ## Global options
 
@@ -93,11 +93,16 @@ LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not syst
 
 ### Install
 
-Install the binary through Homebrew, then let Rusty Jack render and load the LaunchAgent:
+Install the binary through Homebrew:
 
 ```bash
 brew tap the-hcma/tap
 brew install rusty-jack
+```
+
+Then let Rusty Jack create config, prompt for preferred/fallback outputs, and load the LaunchAgent:
+
+```bash
 rusty-jack install
 ```
 
