@@ -4,7 +4,10 @@ use crate::activity::ActivityMonitor;
 use crate::apply::{preferred_uid, switch_output, volume_for_target, ApplyResult, SwitchOptions};
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
-use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
+use crate::eqmac::{
+    ensure_eqmac_for_target, format_ensure_messages, EqMacEnsureAction, EqMacEnsureResult,
+};
+use crate::output_device::OutputDevice;
 use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
 use crate::system_default::DeviceList;
 use crate::volume_memory::remember_active_non_preferred;
@@ -72,6 +75,18 @@ pub fn daemon_tick(
     config: &Config,
     reason: DaemonTickReason,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
+    daemon_tick_with_eqmac(hal, config, reason, &ensure_eqmac_for_target)
+}
+
+type EqMacEnsureFn<'a> =
+    dyn Fn(&[OutputDevice], &str) -> Result<EqMacEnsureResult, RustyJackError> + 'a;
+
+fn daemon_tick_with_eqmac(
+    hal: &dyn AudioHal,
+    config: &Config,
+    reason: DaemonTickReason,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
+) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     let list = hal.list_outputs()?;
     if !config.auto_switch {
         return Ok((DaemonTickResult::AutoSwitchDisabled, list));
@@ -88,11 +103,18 @@ pub fn daemon_tick(
             if let Some(fallback) =
                 sony_activity_fallback_target(config, &list.devices, &target.uid)
             {
-                let result =
-                    switch_daemon_target(hal, config, &list, &fallback, preferred_uid.as_deref())?;
+                let result = switch_daemon_target(
+                    hal,
+                    config,
+                    &list,
+                    &fallback,
+                    preferred_uid.as_deref(),
+                    ensure_eqmac,
+                )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
         }
+        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, ensure_eqmac)?;
         ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
@@ -108,12 +130,20 @@ pub fn daemon_tick(
     };
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
+        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, ensure_eqmac)?;
         ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
 
-    let result = switch_daemon_target(hal, config, &list, &target, preferred_uid.as_deref())?;
+    let result = switch_daemon_target(
+        hal,
+        config,
+        &list,
+        &target,
+        preferred_uid.as_deref(),
+        ensure_eqmac,
+    )?;
 
     Ok((DaemonTickResult::Switched(result), list))
 }
@@ -157,8 +187,9 @@ fn switch_daemon_target(
     list: &DeviceList,
     target: &RoutingTarget,
     preferred_uid: Option<&str>,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
 ) -> Result<ApplyResult, RustyJackError> {
-    let eqmac = ensure_eqmac_for_target(&list.devices, &target.uid)?;
+    let eqmac = ensure_eqmac(&list.devices, &target.uid)?;
     for line in format_ensure_messages(eqmac) {
         eprintln!("{line}");
     }
@@ -181,6 +212,24 @@ fn switch_daemon_target(
     }
 
     Ok(result)
+}
+
+fn ensure_eqmac_for_daemon_target(
+    devices: &[OutputDevice],
+    target_uid: &str,
+    reason: DaemonTickReason,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
+) -> Result<(), RustyJackError> {
+    let eqmac = ensure_eqmac(devices, target_uid)?;
+    let should_log = matches!(eqmac.action, EqMacEnsureAction::Launched)
+        || (reason == DaemonTickReason::Startup
+            && matches!(eqmac.action, EqMacEnsureAction::NotInstalled));
+    if should_log {
+        for line in format_ensure_messages(eqmac) {
+            eprintln!("{line}");
+        }
+    }
+    Ok(())
 }
 
 fn sony_checked_target_or_fallback(
@@ -387,6 +436,23 @@ mod tests {
         }
     }
 
+    fn no_op_eqmac(
+        _devices: &[OutputDevice],
+        _target_uid: &str,
+    ) -> Result<EqMacEnsureResult, RustyJackError> {
+        Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotNeeded,
+        })
+    }
+
+    fn daemon_tick_no_eqmac(
+        hal: &dyn AudioHal,
+        config: &Config,
+        reason: DaemonTickReason,
+    ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
+        daemon_tick_with_eqmac(hal, config, reason, &no_op_eqmac)
+    }
+
     #[test]
     fn test_daemon_tick_switches_when_needed() {
         let hal = MockHal::new(vec![
@@ -396,7 +462,8 @@ mod tests {
         .with_default("builtin");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
@@ -407,7 +474,8 @@ mod tests {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -422,7 +490,7 @@ mod tests {
         .with_default("hdmi-1");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Startup).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Startup).unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -435,10 +503,37 @@ mod tests {
         let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_no_change_checks_eqmac_health_for_hdmi_target() {
+        let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
+        let calls = std::sync::Mutex::new(Vec::<String>::new());
+        let ensure_eqmac = |devices: &[OutputDevice], target_uid: &str| {
+            assert!(devices.iter().any(|device| device.uid == target_uid));
+            calls.lock().unwrap().push(target_uid.to_string());
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            })
+        };
+
+        let (result, _list) = daemon_tick_with_eqmac(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Scheduled,
+            &ensure_eqmac,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert_eq!(calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert!(hal.set_calls().is_empty());
+        assert!(hal.volume_calls().is_empty());
     }
 
     #[test]
@@ -447,7 +542,8 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.volume = Some(25);
 
-        let (result, _list) = daemon_tick(&hal, &config, DaemonTickReason::Startup).unwrap();
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -466,7 +562,8 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.volume = Some(25);
 
-        let (result, _list) = daemon_tick(&hal, &config, DaemonTickReason::Scheduled).unwrap();
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Scheduled).unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.volume_calls().is_empty());
@@ -479,7 +576,8 @@ mod tests {
         let mut config = test_config("missing-hdmi");
         config.volume = Some(25);
 
-        let (result, _list) = daemon_tick(&hal, &config, DaemonTickReason::Startup).unwrap();
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -496,7 +594,8 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.volume = Some(25);
 
-        let (result, _list) = daemon_tick(&hal, &config, DaemonTickReason::Startup).unwrap();
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(
@@ -524,7 +623,8 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.auto_switch = false;
 
-        let (result, _list) = daemon_tick(&hal, &config, DaemonTickReason::Scheduled).unwrap();
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Scheduled).unwrap();
 
         assert_eq!(result, DaemonTickResult::AutoSwitchDisabled);
         assert!(hal.set_calls().is_empty());
@@ -536,7 +636,8 @@ mod tests {
             .with_default("disconnected-hdmi");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(
