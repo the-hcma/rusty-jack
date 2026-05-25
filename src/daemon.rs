@@ -78,6 +78,17 @@ pub fn daemon_tick(
 
     let target = select_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
+    let current = hal.default_output_uid()?;
+    if preserve_current_output_on_startup(reason, current.as_deref(), &target.uid) {
+        let result = ApplyResult::NoChange {
+            uid: target.uid,
+            device_name: target.name,
+            monitor_name: target.monitor_name,
+            reason: "default output already on target".into(),
+        };
+        return Ok((DaemonTickResult::NoChange(result), list));
+    }
+
     let target = if matches!(
         reason,
         DaemonTickReason::Startup | DaemonTickReason::Scheduled
@@ -86,7 +97,6 @@ pub fn daemon_tick(
     } else {
         target
     };
-    let current = hal.default_output_uid()?;
 
     if current.as_deref() == Some(target.uid.as_str()) {
         if reason == DaemonTickReason::UserActivity {
@@ -109,6 +119,14 @@ pub fn daemon_tick(
     let result = switch_daemon_target(hal, config, &list, &target)?;
 
     Ok((DaemonTickResult::Switched(result), list))
+}
+
+fn preserve_current_output_on_startup(
+    reason: DaemonTickReason,
+    current_uid: Option<&str>,
+    target_uid: &str,
+) -> bool {
+    reason == DaemonTickReason::Startup && current_uid == Some(target_uid)
 }
 
 fn switch_daemon_target(
@@ -198,7 +216,6 @@ pub fn run_forever(
     run_tick_logged(hal, &config, DaemonTickReason::Startup);
 
     loop {
-        run_tick_logged(hal, &config, DaemonTickReason::Scheduled);
         let poll_interval = Duration::from_millis(config.poll_interval_ms);
         let activity_interval = Duration::from_millis(config.activity_poll_interval_ms);
         let started = Instant::now();
@@ -226,6 +243,7 @@ pub fn run_forever(
         }
 
         config = load_config(config_path)?;
+        run_tick_logged(hal, &config, DaemonTickReason::Scheduled);
     }
 }
 
@@ -366,6 +384,40 @@ mod tests {
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_startup_preserves_current_preferred_output() {
+        let hal = MockHal::new(vec![
+            hdmi_device("hdmi-1", "DELL U3219Q"),
+            builtin_speakers("BuiltInSpeakerDevice"),
+        ])
+        .with_default("hdmi-1");
+
+        let (result, _list) =
+            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Startup).unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert!(hal.set_calls().is_empty());
+    }
+
+    #[test]
+    fn test_preserve_current_output_only_on_startup_match() {
+        assert!(preserve_current_output_on_startup(
+            DaemonTickReason::Startup,
+            Some("hdmi-1"),
+            "hdmi-1"
+        ));
+        assert!(!preserve_current_output_on_startup(
+            DaemonTickReason::Scheduled,
+            Some("hdmi-1"),
+            "hdmi-1"
+        ));
+        assert!(!preserve_current_output_on_startup(
+            DaemonTickReason::Startup,
+            Some("builtin"),
+            "hdmi-1"
+        ));
     }
 
     #[test]

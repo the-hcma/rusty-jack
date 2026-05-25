@@ -55,7 +55,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the current default differs. No-op polls do not trigger Sony wake calls. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured Sony output is already selected, it sends a wake command subject to `sony_speaker.wake_debounce_ms`.
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the current default differs. On startup, including after `upgrade`, it leaves the current output alone when it already matches policy. No-op polls do not trigger Sony wake calls. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured Sony output is already selected, it sends a wake command subject to `sony_speaker.wake_debounce_ms`.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
