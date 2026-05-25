@@ -38,6 +38,12 @@ impl AudioHal for StubHal {
         ))
     }
 
+    fn set_system_output_volume(&self, _percent: u8) -> Result<(), RustyJackError> {
+        Err(RustyJackError::CoreAudio(
+            "rusty-jack requires macOS (CoreAudio is not available on this platform)".into(),
+        ))
+    }
+
     fn output_volume_percent(&self, _uid: &str) -> Option<u8> {
         None
     }

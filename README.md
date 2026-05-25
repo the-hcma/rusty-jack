@@ -19,11 +19,11 @@ brew tap the-hcma/tap
 brew install rusty-jack
 ```
 
-Then choose the preferred output, choose a fallback, and start the per-user daemon:
+Then choose the preferred output, optionally choose an explicit fallback, and start the per-user daemon:
 
 ```bash
 rusty-jack list
-rusty-jack install   # pick preferred + fallback outputs; starts the daemon
+rusty-jack install   # pick preferred + optional fallback outputs; starts the daemon
 rusty-jack status
 ```
 
@@ -82,7 +82,7 @@ Detection: `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.drive
 
 ### Config `volume`
 
-When set (0–100), rusty-jack applies it **only on an actual device switch** (`apply` or `picker` when picking the configured preferred device). Setting uses device scalar + system volume, with **retries** so eqMac cannot silently reset the level right after a route change.
+When set (0–100), rusty-jack uses it for the configured preferred output. Other outputs keep their own remembered volume in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back.
 
 ### Planned native driver
 
@@ -123,8 +123,8 @@ Global flag: `--config PATH` (overrides `RUSTY_JACK_CONFIG` and `~/.config/rusty
 | `install` | Install and start the per-user LaunchAgent |
 | `list` | Table of output devices (`--hdmi`, `--json`) |
 | `pause` | Stop launchd agent; keep plist |
-| `picker` | Interactive menu or `--index N` to switch |
-| `resume` | Re-enable launchd agent |
+| `picker` | Interactive menu or `--index N` to switch; pauses a running daemon after confirmation when you pick a non-preferred output |
+| `resume` | Re-enable launchd agent; synchronously routes and restores configured `volume` first |
 | `status` | Devices + virtual default block + policy + volume + daemon state |
 | `uninstall` | Uninstall launchd agent (alias for `disable`) |
 | `upgrade` | Refresh LaunchAgent to current binary and restart it |
@@ -147,9 +147,9 @@ Default path: `~/.config/rusty-jack/config.json`. Copy from [`config.example.jso
 | `preferred_device.monitor_name` | Match display product name from `list` (unique) |
 | `preferred_device.uid` | Or match CoreAudio UID directly |
 | `preferred_device_uid` | Legacy; use `preferred_device.uid` |
-| `fallback_uids` | Try in order if preferred is unplugged |
+| `fallback_uids` | Try in order if preferred is unplugged; empty means use the built-in output automatically when available |
 | `also_set_system_output` | Also set system/alert output (default `true`) |
-| `volume` | 0–100; apply on switch to preferred only |
+| `volume` | 0–100; restore on route switches and daemon startup/resume |
 | `auto_switch` | Master enable for the daemon loop |
 | `poll_interval_ms` | Daemon route check interval (default `3000`) |
 | `switch_delay_ms` | Delay after daemon switch before wake hooks (default `500`) |
@@ -216,7 +216,7 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and a fallback output (defaulting the fallback to the Mac's built-in speakers when available). It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
+`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
 
 Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `disable` for daemon-only removal that always keeps config and logs.
 

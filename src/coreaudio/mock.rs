@@ -26,6 +26,7 @@ struct MockState {
     default_uid: Option<String>,
     set_calls: Vec<SetDefaultCall>,
     volume_calls: Vec<SetVolumeCall>,
+    system_volume_calls: Vec<u8>,
     output_volume: Option<u8>,
 }
 
@@ -63,6 +64,10 @@ impl MockHal {
 
     pub fn volume_calls(&self) -> Vec<SetVolumeCall> {
         self.state.lock().unwrap().volume_calls.clone()
+    }
+
+    pub fn system_volume_calls(&self) -> Vec<u8> {
+        self.state.lock().unwrap().system_volume_calls.clone()
     }
 
     fn device_list(&self) -> DeviceList {
@@ -125,6 +130,13 @@ impl AudioHal for MockHal {
             verified: true,
             attempts: 1,
         })
+    }
+
+    fn set_system_output_volume(&self, percent: u8) -> Result<(), RustyJackError> {
+        let mut state = self.state.lock().unwrap();
+        state.system_volume_calls.push(percent);
+        state.output_volume = Some(percent);
+        Ok(())
     }
 
     fn output_volume_percent(&self, _uid: &str) -> Option<u8> {

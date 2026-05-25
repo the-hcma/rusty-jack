@@ -19,6 +19,9 @@ pub trait AudioHal: Send + Sync {
         percent: u8,
     ) -> Result<VolumeEnsureResult, RustyJackError>;
 
+    /// Set macOS system output volume (0–100) without writing a specific device scalar.
+    fn set_system_output_volume(&self, percent: u8) -> Result<(), RustyJackError>;
+
     /// UID of the current default output device.
     fn default_output_uid(&self) -> Result<Option<String>, RustyJackError>;
 
