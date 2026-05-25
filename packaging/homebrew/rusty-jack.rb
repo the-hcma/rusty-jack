@@ -24,15 +24,14 @@ class RustyJack < Formula
 
   def caveats
     <<~EOS
-      To create a starter config:
-        mkdir -p ~/.config/rusty-jack
-        cp #{opt_pkgshare}/config.example.json ~/.config/rusty-jack/config.json
-
-      To install the per-user LaunchAgent after configuring:
+      To create config and install the per-user LaunchAgent:
         rusty-jack install
 
       Before uninstalling the formula, stop and remove the LaunchAgent:
-        rusty-jack uninstall --yes --purge --no-restore-audio
+        rusty-jack uninstall --keep-config
+
+      To remove the default config too:
+        rusty-jack uninstall --remove-config
     EOS
   end
 

@@ -116,6 +116,14 @@ pub struct UninstallArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
     pub json: bool,
+
+    /// Remove the default config file without prompting
+    #[arg(long, conflicts_with = "keep_config")]
+    pub remove_config: bool,
+
+    /// Keep the default config file without prompting
+    #[arg(long, conflicts_with = "remove_config")]
+    pub keep_config: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -262,6 +270,26 @@ mod tests {
             Commands::Uninstall(args) => assert!(args.json),
             _ => panic!("expected uninstall"),
         }
+    }
+
+    #[test]
+    fn test_uninstall_config_flags() {
+        let cli = Cli::try_parse_from(["rusty-jack", "uninstall", "--remove-config"]).unwrap();
+        match cli.command {
+            Commands::Uninstall(args) => {
+                assert!(args.remove_config);
+                assert!(!args.keep_config);
+            }
+            _ => panic!("expected uninstall"),
+        }
+
+        assert!(Cli::try_parse_from([
+            "rusty-jack",
+            "uninstall",
+            "--remove-config",
+            "--keep-config",
+        ])
+        .is_err());
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod list_fmt;
 pub mod output_device;
 pub mod picker;
 pub mod policy;
+pub mod setup;
 pub mod sony;
 pub mod status;
 pub mod system_default;
@@ -34,10 +35,15 @@ pub use error::RustyJackError;
 pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
     match cli.command {
         cli::Commands::Disable(args) => commands::disable::run(args.json)?,
-        cli::Commands::Install(args) => commands::install::run(args.json)?,
+        cli::Commands::Install(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::install::run(hal.as_ref(), args.json)?;
+        }
         cli::Commands::Pause(args) => commands::pause::run(args.json)?,
         cli::Commands::Resume(args) => commands::resume::run(args.json)?,
-        cli::Commands::Uninstall(args) => commands::disable::run(args.json)?,
+        cli::Commands::Uninstall(args) => {
+            commands::uninstall::run(args.json, args.remove_config, args.keep_config)?
+        }
         cli::Commands::Upgrade(args) => commands::upgrade::run(args.json)?,
         cli::Commands::Daemon => {
             let hal = coreaudio::platform_hal()?;

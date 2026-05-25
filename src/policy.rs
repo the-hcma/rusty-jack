@@ -115,6 +115,7 @@ fn find_device<'a>(devices: &'a [OutputDevice], uid: &str) -> Option<&'a OutputD
 pub enum RoutingTargetSource {
     Preferred,
     Fallback { index: usize },
+    BuiltInFallback,
     Picker,
 }
 
@@ -183,13 +184,23 @@ pub fn select_routing_target(
         Err(ResolveError::MonitorNotFound(_)) | Err(ResolveError::UidNotFound(_)) => {}
     }
 
+    if let Some(target) = select_fallback_target(config, devices) {
+        return Ok(target);
+    }
+
+    Err(SelectTargetError::NoCandidateAvailable)
+}
+
+/// Pick the configured fallback, or the Mac's internal built-in output when none is configured.
+#[must_use]
+pub fn select_fallback_target(config: &Config, devices: &[OutputDevice]) -> Option<RoutingTarget> {
     for (index, fallback_uid) in config.fallback_uids.iter().enumerate() {
         if crate::config::is_placeholder_uid(fallback_uid) {
             continue;
         }
         if let Some(device) = alive_device(devices, fallback_uid) {
             if device.is_alive {
-                return Ok(to_routing_target(
+                return Some(to_routing_target(
                     device,
                     RoutingTargetSource::Fallback { index },
                 ));
@@ -197,7 +208,10 @@ pub fn select_routing_target(
         }
     }
 
-    Err(SelectTargetError::NoCandidateAvailable)
+    devices
+        .iter()
+        .find(|device| device.is_internal_builtin_output())
+        .map(|device| to_routing_target(device, RoutingTargetSource::BuiltInFallback))
 }
 
 #[cfg(test)]
@@ -342,6 +356,22 @@ mod tests {
         assert!(matches!(
             target.source,
             RoutingTargetSource::Fallback { index: 0 }
+        ));
+    }
+
+    #[test]
+    fn test_select_routing_target_uses_builtin_when_no_fallback_configured() {
+        let mut builtin = hdmi("BuiltInSpeakerDevice", "Built-in", false);
+        builtin.name = "Mac mini Speakers".into();
+        builtin.monitor_name = None;
+        builtin.transport = TransportKind::BuiltIn;
+        let devices = vec![builtin];
+
+        let target = select_routing_target(&config_with_monitor("DELL U3219Q"), &devices).unwrap();
+        assert_eq!(target.uid, "BuiltInSpeakerDevice");
+        assert!(matches!(
+            target.source,
+            RoutingTargetSource::BuiltInFallback
         ));
     }
 }

@@ -5,7 +5,7 @@ use crate::apply::{switch_output, ApplyResult, SwitchOptions};
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
 use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
-use crate::policy::select_routing_target;
+use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
 use crate::system_default::DeviceList;
 use crate::RustyJackError;
 use std::path::Path;
@@ -78,11 +78,24 @@ pub fn daemon_tick(
 
     let target = select_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
+    let target = if matches!(
+        reason,
+        DaemonTickReason::Startup | DaemonTickReason::Scheduled
+    ) {
+        sony_checked_target_or_fallback(config, &list.devices, target)
+    } else {
+        target
+    };
     let current = hal.default_output_uid()?;
 
     if current.as_deref() == Some(target.uid.as_str()) {
         if reason == DaemonTickReason::UserActivity {
-            crate::sony::warn_on_activity(config, &list.devices, &target.uid);
+            if let Some(fallback) =
+                sony_activity_fallback_target(config, &list.devices, &target.uid)
+            {
+                let result = switch_daemon_target(hal, config, &list, &fallback)?;
+                return Ok((DaemonTickResult::Switched(result), list));
+            }
         }
         let result = ApplyResult::NoChange {
             uid: target.uid,
@@ -93,6 +106,17 @@ pub fn daemon_tick(
         return Ok((DaemonTickResult::NoChange(result), list));
     }
 
+    let result = switch_daemon_target(hal, config, &list, &target)?;
+
+    Ok((DaemonTickResult::Switched(result), list))
+}
+
+fn switch_daemon_target(
+    hal: &dyn AudioHal,
+    config: &Config,
+    list: &DeviceList,
+    target: &RoutingTarget,
+) -> Result<ApplyResult, RustyJackError> {
     let eqmac = ensure_eqmac_for_target(&list.devices, &target.uid)?;
     for line in format_ensure_messages(eqmac) {
         eprintln!("{line}");
@@ -100,7 +124,7 @@ pub fn daemon_tick(
 
     let result = switch_output(
         hal,
-        &target,
+        target,
         &SwitchOptions {
             also_set_system_output: config.also_set_system_output,
             volume: config.volume,
@@ -109,10 +133,57 @@ pub fn daemon_tick(
 
     if matches!(result, ApplyResult::Switched { .. }) {
         sleep_switch_delay(config);
-        crate::sony::warn_on_output_selected(config, &list.devices, &target.uid);
     }
 
-    Ok((DaemonTickResult::Switched(result), list))
+    Ok(result)
+}
+
+fn sony_checked_target_or_fallback(
+    config: &Config,
+    devices: &[crate::output_device::OutputDevice],
+    target: RoutingTarget,
+) -> RoutingTarget {
+    match crate::sony::wake_on_output_selected(config, devices, &target.uid) {
+        Ok(Some(result)) => eprintln!("{}", crate::sony::format_wake_message(&result)),
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("warning: {err}");
+            if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
+                eprintln!(
+                    "warning: using fallback output {} ({}) because the selected Sony speaker is unreachable",
+                    fallback.name, fallback.uid
+                );
+                return fallback;
+            }
+        }
+    }
+    target
+}
+
+fn sony_activity_fallback_target(
+    config: &Config,
+    devices: &[crate::output_device::OutputDevice],
+    target_uid: &str,
+) -> Option<RoutingTarget> {
+    match crate::sony::wake_on_activity(config, devices, target_uid) {
+        Ok(Some(result)) => {
+            eprintln!("{}", crate::sony::format_wake_message(&result));
+            None
+        }
+        Ok(None) => None,
+        Err(err) => {
+            eprintln!("warning: {err}");
+            fallback_excluding(config, devices, target_uid)
+        }
+    }
+}
+
+fn fallback_excluding(
+    config: &Config,
+    devices: &[crate::output_device::OutputDevice],
+    excluded_uid: &str,
+) -> Option<RoutingTarget> {
+    select_fallback_target(config, devices).filter(|target| target.uid != excluded_uid)
 }
 
 /// Run the daemon forever, reloading config before each scheduled poll.
@@ -124,10 +195,10 @@ pub fn run_forever(
     let mut config = load_config(config_path)?;
     let mut state = DaemonState::new();
     seed_activity_state(activity, &mut state, &config);
-    run_tick_logged(hal, &config, DaemonTickReason::Startup, Some(&mut state));
+    run_tick_logged(hal, &config, DaemonTickReason::Startup);
 
     loop {
-        run_tick_logged(hal, &config, DaemonTickReason::Scheduled, Some(&mut state));
+        run_tick_logged(hal, &config, DaemonTickReason::Scheduled);
         let poll_interval = Duration::from_millis(config.poll_interval_ms);
         let activity_interval = Duration::from_millis(config.activity_poll_interval_ms);
         let started = Instant::now();
@@ -146,7 +217,7 @@ pub fn run_forever(
                         }
                         let cooldown = sony_wake_cooldown(&config);
                         if state.allow_sony_wake(Instant::now(), cooldown) {
-                            run_tick_logged(hal, &config, DaemonTickReason::UserActivity, None);
+                            run_tick_logged(hal, &config, DaemonTickReason::UserActivity);
                         }
                     }
                 }
@@ -158,49 +229,16 @@ pub fn run_forever(
     }
 }
 
-fn run_tick_logged(
-    hal: &dyn AudioHal,
-    config: &Config,
-    reason: DaemonTickReason,
-    state: Option<&mut DaemonState>,
-) {
+fn run_tick_logged(hal: &dyn AudioHal, config: &Config, reason: DaemonTickReason) {
     match daemon_tick(hal, config, reason) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
         }
-        Ok((DaemonTickResult::NoChange(result), list)) => {
-            maybe_wake_selected_sony(config, reason, state, &result, &list);
-        }
+        Ok((DaemonTickResult::NoChange(_), _)) => {}
         Ok((DaemonTickResult::AutoSwitchDisabled, _)) => {}
         Err(err) => {
             eprintln!("warning: daemon tick failed: {err}");
         }
-    }
-}
-
-fn maybe_wake_selected_sony(
-    config: &Config,
-    reason: DaemonTickReason,
-    state: Option<&mut DaemonState>,
-    result: &ApplyResult,
-    list: &DeviceList,
-) {
-    if !matches!(
-        reason,
-        DaemonTickReason::Startup | DaemonTickReason::Scheduled
-    ) {
-        return;
-    }
-    let Some(state) = state else {
-        return;
-    };
-    let ApplyResult::NoChange { uid, .. } = result else {
-        return;
-    };
-
-    let cooldown = sony_wake_cooldown(config);
-    if state.allow_sony_wake(Instant::now(), cooldown) {
-        crate::sony::warn_on_output_selected(config, &list.devices, uid);
     }
 }
 
@@ -271,6 +309,19 @@ mod tests {
         }
     }
 
+    fn builtin_speakers(uid: &str) -> OutputDevice {
+        OutputDevice {
+            id: 2,
+            uid: uid.into(),
+            name: "Mac mini Speakers".into(),
+            transport: TransportKind::BuiltIn,
+            is_alive: true,
+            is_default: false,
+            is_active: false,
+            monitor_name: None,
+        }
+    }
+
     fn test_config(uid: &str) -> Config {
         Config {
             version: 1,
@@ -331,6 +382,21 @@ mod tests {
 
         assert_eq!(result, DaemonTickResult::AutoSwitchDisabled);
         assert!(hal.set_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_tick_switches_to_builtin_fallback_when_preferred_missing() {
+        let hal = MockHal::new(vec![builtin_speakers("BuiltInSpeakerDevice")])
+            .with_default("disconnected-hdmi");
+
+        let (result, _list) =
+            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+
+        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert_eq!(
+            hal.default_output_uid().unwrap().as_deref(),
+            Some("BuiltInSpeakerDevice")
+        );
     }
 
     #[test]

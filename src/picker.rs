@@ -47,7 +47,7 @@ impl PickerCancelled {
 }
 
 const PICKER_PROMPT: &str =
-    "Select output device (↑↓, Enter, Esc to cancel)  (> active, * preferred, dim = not routable)";
+    "Select output device (↑↓, Enter, p preferred, Esc to cancel)  (> active, * preferred, dim = not routable)";
 const PICKER_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Resolve the configured preferred device UID against live outputs.
@@ -138,6 +138,13 @@ fn default_picker_index(devices: &[OutputDevice]) -> usize {
         .unwrap_or(0)
 }
 
+fn preferred_picker_index(devices: &[OutputDevice], preferred_uid: Option<&str>) -> Option<usize> {
+    let preferred_uid = preferred_uid?;
+    devices
+        .iter()
+        .position(|device| device.uid.as_str() == preferred_uid)
+}
+
 /// Pick a device index interactively, or use `index` when provided.
 pub fn pick_device_index(
     devices: &[OutputDevice],
@@ -225,6 +232,34 @@ fn run_interactive_picker(
                 Event::Key(key) => match key.code {
                     KeyCode::Esc => return Ok(PickSelection::Cancelled),
                     KeyCode::Char('q') => return Ok(PickSelection::Cancelled),
+                    KeyCode::Char('p' | 'P') => {
+                        if let Some(index) = preferred_picker_index(devices, preferred_uid) {
+                            selected = index;
+                            let device = &devices[selected];
+                            if device.is_selectable() {
+                                return Ok(PickSelection::Selected(selected));
+                            }
+                            let reason = device
+                                .non_selectable_reason()
+                                .unwrap_or("not a routable output");
+                            message = Some(format!(
+                                "Cannot switch to preferred device {} — {reason}.",
+                                device.friendly_label()
+                            ));
+                        } else {
+                            message =
+                                Some("No preferred device is configured and available.".into());
+                        }
+                        render_interactive_picker(
+                            &mut out,
+                            devices,
+                            preferred_uid,
+                            &notes,
+                            selected,
+                            message.as_deref(),
+                            use_color,
+                        )?;
+                    }
                     KeyCode::Up => {
                         selected = selected.saturating_sub(1);
                         message = None;
@@ -317,22 +352,27 @@ fn render_interactive_picker(
 ) -> Result<(), RustyJackError> {
     execute!(out, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))
         .map_err(picker_io_error)?;
-    writeln!(out, "{PICKER_PROMPT}").map_err(picker_io_error)?;
-    writeln!(out).map_err(picker_io_error)?;
+    write_picker_line(out, PICKER_PROMPT)?;
+    write_picker_line(out, "")?;
 
     for (index, device) in devices.iter().enumerate() {
         let label = format_picker_label_with_options(device, preferred_uid, use_color);
         let label = append_picker_note(label, note_for_uid(notes, &device.uid));
         let cursor = if index == selected { "> " } else { "  " };
-        writeln!(out, "{cursor}{label}").map_err(picker_io_error)?;
+        write_picker_line(out, &format!("{cursor}{label}"))?;
     }
 
     if let Some(message) = message {
-        writeln!(out).map_err(picker_io_error)?;
-        writeln!(out, "{message}").map_err(picker_io_error)?;
+        write_picker_line(out, "")?;
+        write_picker_line(out, message)?;
     }
 
     out.flush().map_err(picker_io_error)
+}
+
+fn write_picker_line(out: &mut impl Write, line: &str) -> Result<(), RustyJackError> {
+    // Raw mode disables the terminal's LF -> CRLF translation.
+    write!(out, "{line}\r\n").map_err(picker_io_error)
 }
 
 struct PickerTerminalGuard;
@@ -579,12 +619,36 @@ mod tests {
     }
 
     #[test]
+    fn test_preferred_picker_index_matches_uid() {
+        let devices = vec![
+            device("Built-in Output", None, true),
+            OutputDevice {
+                uid: "preferred".into(),
+                name: "HDMI".into(),
+                monitor_name: Some("TV".into()),
+                ..device("HDMI", Some("TV"), false)
+            },
+        ];
+
+        assert_eq!(preferred_picker_index(&devices, Some("preferred")), Some(1));
+        assert_eq!(preferred_picker_index(&devices, Some("missing")), None);
+        assert_eq!(preferred_picker_index(&devices, None), None);
+    }
+
+    #[test]
     fn test_append_picker_note() {
         let label = append_picker_note(
             "   External Headphones — built-in".into(),
             Some("Sony: standby"),
         );
         assert_eq!(label, "   External Headphones — built-in — Sony: standby");
+    }
+
+    #[test]
+    fn test_write_picker_line_uses_crlf_for_raw_mode() {
+        let mut output = Vec::new();
+        write_picker_line(&mut output, "row").unwrap();
+        assert_eq!(output, b"row\r\n");
     }
 
     #[test]

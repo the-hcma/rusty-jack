@@ -9,4 +9,5 @@ pub mod pause;
 pub mod picker;
 pub mod resume;
 pub mod status;
+pub mod uninstall;
 pub mod upgrade;

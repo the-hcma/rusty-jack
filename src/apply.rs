@@ -141,6 +141,7 @@ pub fn print_text(result: &ApplyResult, list: &DeviceList) {
             let via = match source {
                 RoutingTargetSource::Preferred => "preferred device".to_string(),
                 RoutingTargetSource::Fallback { index } => format!("fallback #{index}"),
+                RoutingTargetSource::BuiltInFallback => "built-in fallback".to_string(),
                 RoutingTargetSource::Picker => "picker".to_string(),
             };
             println!("Switched default output to {to} ({via})");

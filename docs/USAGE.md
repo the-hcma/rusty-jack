@@ -108,17 +108,18 @@ make install
 rusty-jack install
 ```
 
-`install` writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
+`install` creates `~/.config/rusty-jack/config.json` when it is missing. In an interactive terminal it prompts for the preferred output and a fallback output; the fallback defaults to the Mac's built-in speakers when available. In `--json` mode it avoids prompts and uses deterministic defaults from the live device list. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
 
 ### Pause, Resume, Uninstall
 
 ```bash
 rusty-jack pause      # stop auto-routing; keep plist installed
 rusty-jack resume     # re-enable and start the plist
-rusty-jack uninstall  # stop, disable, and remove the plist
+rusty-jack uninstall  # stop, disable, remove plist, offer config cleanup
+rusty-jack uninstall --remove-config  # also remove default config without prompting
 ```
 
-`disable` remains available and has the same daemon uninstall behavior as `uninstall`. Neither command deletes `~/.config/rusty-jack/config.json` or log files.
+`disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the default config in interactive mode; `--keep-config` keeps it without prompting. Neither command deletes log files.
 
 ### Update
 
@@ -130,7 +131,7 @@ git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable and restarts the daemon. If the daemon was not installed yet, `upgrade` installs it.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable, reports the before/after version and commit, and restarts the daemon. If the daemon was not installed yet, `upgrade` installs it.
 
 ---
 
@@ -179,7 +180,7 @@ Config is optional. When present:
 **Interactive legend:**
 
 ```
-Select output device (↑↓, Enter, Esc)  (> active, * preferred, dim = not routable)
+Select output device (↑↓, Enter, p preferred, Esc)  (> active, * preferred, dim = not routable)
 ```
 
 | Visual | Meaning |
@@ -189,7 +190,7 @@ Select output device (↑↓, Enter, Esc)  (> active, * preferred, dim = not rou
 | dim | Not selectable (e.g. ZoomAudioDevice) |
 | `>*` | Active and preferred |
 
-Press **Esc** to cancel without switching.
+Press **p** to switch directly to the configured preferred device. Press **Esc** to cancel without switching.
 
 ---
 
@@ -249,7 +250,7 @@ Use **either** (or both; `preferred_device` wins when set):
 
 ### `fallback_uids`
 
-Array of UIDs tried in order when preferred is missing or not alive.
+Array of UIDs tried in order when preferred is missing or not alive. If no configured fallback is available, the daemon uses the Mac's internal built-in speaker output when it is connected.
 
 ### Daemon fields
 

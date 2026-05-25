@@ -1,6 +1,6 @@
 //! launchd LaunchAgent management (macOS).
 
-use crate::RustyJackError;
+use crate::{version, RustyJackError};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,13 +30,37 @@ pub enum UpgradeResult {
         label: String,
         plist_path: String,
         binary_path: String,
+        binary_version: BinaryVersion,
+        previous_binary_path: Option<String>,
+        previous_binary_version: Option<BinaryVersion>,
         was_loaded: bool,
     },
     Installed {
         label: String,
         plist_path: String,
         binary_path: String,
+        binary_version: BinaryVersion,
     },
+}
+
+/// Version metadata reported by a rusty-jack binary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BinaryVersion {
+    version: String,
+    commit: String,
+}
+
+impl BinaryVersion {
+    fn current() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").into(),
+            commit: version::GIT_COMMIT.into(),
+        }
+    }
+
+    fn display(&self) -> String {
+        format!("{} (commit {})", self.version, self.commit)
+    }
 }
 
 /// Result of `rusty-jack disable` (uninstall LaunchAgent).
@@ -215,6 +239,9 @@ struct LoadDaemonResult {
     label: String,
     plist_path: String,
     binary_path: String,
+    binary_version: BinaryVersion,
+    previous_binary_path: Option<String>,
+    previous_binary_version: Option<BinaryVersion>,
     was_loaded: bool,
     had_plist: bool,
 }
@@ -227,6 +254,16 @@ fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJa
     let domain = gui_domain()?;
     let was_loaded = is_job_loaded(&domain, LAUNCH_AGENT_LABEL)?;
     let had_plist = plist_path.exists();
+    let previous_binary_path = if had_plist {
+        std::fs::read_to_string(&plist_path)
+            .ok()
+            .and_then(|plist| launch_agent_binary_path_from_plist(&plist))
+    } else {
+        None
+    };
+    let previous_binary_version = previous_binary_path
+        .as_deref()
+        .and_then(binary_version_from_path);
     let plist = render_launch_agent_plist(&binary_path, &home_display);
     let plist_unchanged = had_plist
         && std::fs::read_to_string(&plist_path)
@@ -274,6 +311,9 @@ fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJa
         label: LAUNCH_AGENT_LABEL.into(),
         plist_path: plist_display,
         binary_path,
+        binary_version: BinaryVersion::current(),
+        previous_binary_path,
+        previous_binary_version,
         was_loaded,
         had_plist,
     })
@@ -281,6 +321,45 @@ fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJa
 
 fn should_fast_restart(fast_restart: bool, was_loaded: bool, plist_unchanged: bool) -> bool {
     fast_restart && was_loaded && plist_unchanged
+}
+
+fn binary_version_from_path(path: &str) -> Option<BinaryVersion> {
+    let output = Command::new(path).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_binary_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_binary_version_output(output: &str) -> Option<BinaryVersion> {
+    let output = output.trim();
+    let output = output.strip_prefix("rusty-jack ").unwrap_or(output);
+    let (version, commit) = output.split_once(" (commit ")?;
+    let commit = commit.strip_suffix(')')?;
+    if version.is_empty() || commit.is_empty() {
+        return None;
+    }
+    Some(BinaryVersion {
+        version: version.into(),
+        commit: commit.into(),
+    })
+}
+
+fn launch_agent_binary_path_from_plist(plist: &str) -> Option<String> {
+    let (_, after_key) = plist.split_once("<key>ProgramArguments</key>")?;
+    let (_, after_array) = after_key.split_once("<array>")?;
+    let (_, after_string) = after_array.split_once("<string>")?;
+    let (value, _) = after_string.split_once("</string>")?;
+    Some(unescape_xml(value))
+}
+
+fn unescape_xml(value: &str) -> String {
+    value
+        .replace("&apos;", "'")
+        .replace("&quot;", "\"")
+        .replace("&gt;", ">")
+        .replace("&lt;", "<")
+        .replace("&amp;", "&")
 }
 
 /// Install or reinstall the LaunchAgent for the current user.
@@ -302,6 +381,9 @@ pub fn upgrade_daemon() -> Result<UpgradeResult, RustyJackError> {
             label: result.label,
             plist_path: result.plist_path,
             binary_path: result.binary_path,
+            binary_version: result.binary_version,
+            previous_binary_path: result.previous_binary_path,
+            previous_binary_version: result.previous_binary_version,
             was_loaded: result.was_loaded,
         })
     } else {
@@ -309,6 +391,7 @@ pub fn upgrade_daemon() -> Result<UpgradeResult, RustyJackError> {
             label: result.label,
             plist_path: result.plist_path,
             binary_path: result.binary_path,
+            binary_version: result.binary_version,
         })
     }
 }
@@ -458,11 +541,22 @@ pub fn print_upgrade_result(result: &UpgradeResult) {
             label,
             plist_path,
             binary_path,
+            binary_version,
+            previous_binary_path,
+            previous_binary_version,
             was_loaded,
         } => {
             println!("Upgraded rusty-jack daemon LaunchAgent ({label})");
-            println!("  binary:      {binary_path}");
-            println!("  plist:       {plist_path}");
+            println!(
+                "  before:     {}",
+                version_display(previous_binary_version.as_ref())
+            );
+            if let Some(path) = previous_binary_path {
+                println!("  old binary: {path}");
+            }
+            println!("  after:      {}", binary_version.display());
+            println!("  binary:     {binary_path}");
+            println!("  plist:      {plist_path}");
             println!("  was running: {}", if *was_loaded { "yes" } else { "no" });
             println!("  auto-routing active");
         }
@@ -470,12 +564,21 @@ pub fn print_upgrade_result(result: &UpgradeResult) {
             label,
             plist_path,
             binary_path,
+            binary_version,
         } => {
             println!("Daemon was not installed; installed it now ({label})");
+            println!("  before: not installed");
+            println!("  after:  {}", binary_version.display());
             println!("  binary: {binary_path}");
             println!("  plist:  {plist_path}");
         }
     }
+}
+
+fn version_display(version: Option<&BinaryVersion>) -> String {
+    version
+        .map(BinaryVersion::display)
+        .unwrap_or_else(|| "unknown".into())
 }
 
 /// Human-readable output for [`DisableResult`].
@@ -580,6 +683,26 @@ mod tests {
     }
 
     #[test]
+    fn test_launch_agent_binary_path_from_plist() {
+        let plist = render_launch_agent_plist("/tmp/rusty&jack", "/Users/example");
+        assert_eq!(
+            launch_agent_binary_path_from_plist(&plist).as_deref(),
+            Some("/tmp/rusty&jack")
+        );
+    }
+
+    #[test]
+    fn test_parse_binary_version_output() {
+        assert_eq!(
+            parse_binary_version_output("rusty-jack 0.1.0 (commit abc1234)\n"),
+            Some(BinaryVersion {
+                version: "0.1.0".into(),
+                commit: "abc1234".into(),
+            })
+        );
+    }
+
+    #[test]
     fn test_parse_launchctl_pid() {
         let output = r#"
 	state = running
@@ -614,6 +737,15 @@ mod tests {
             label: LAUNCH_AGENT_LABEL.into(),
             plist_path: "/tmp/test.plist".into(),
             binary_path: "/tmp/rusty-jack".into(),
+            binary_version: BinaryVersion {
+                version: "0.1.0".into(),
+                commit: "new1234".into(),
+            },
+            previous_binary_path: Some("/tmp/old-rusty-jack".into()),
+            previous_binary_version: Some(BinaryVersion {
+                version: "0.1.0".into(),
+                commit: "old1234".into(),
+            }),
             was_loaded: true,
         })
         .unwrap();

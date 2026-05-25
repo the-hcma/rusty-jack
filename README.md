@@ -9,13 +9,10 @@ macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, USB-C doc
 ```bash
 brew tap thehcma/tap
 brew install rusty-jack
-mkdir -p ~/.config/rusty-jack
-cp "$(brew --prefix rusty-jack)/share/rusty-jack/config.example.json" ~/.config/rusty-jack/config.json
-# Edit preferred_device.monitor_name to match `rusty-jack list`
 
 rusty-jack list
+rusty-jack install   # pick preferred + fallback outputs; starts the daemon
 rusty-jack status
-rusty-jack apply
 ```
 
 For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — rusty-jack will start it automatically when needed and warn with the download URL when it is missing. See [Volume on external displays](#volume-on-external-displays).
@@ -207,9 +204,9 @@ make install
 rusty-jack install
 ```
 
-`install` renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
+`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and a fallback output (defaulting the fallback to the Mac's built-in speakers when available). It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
 
-Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` (or `disable`) to stop it and remove the plist. Uninstall leaves your config and logs in place.
+Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `disable` for daemon-only removal that always keeps config and logs.
 
 ### Update the daemon
 

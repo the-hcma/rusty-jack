@@ -42,6 +42,12 @@ impl OutputDevice {
         self.transport.is_hdmi_class() && !Self::is_excluded_by_name(&self.name)
     }
 
+    /// True for the Mac's internal speaker-style built-in output.
+    #[must_use]
+    pub fn is_internal_builtin_output(&self) -> bool {
+        is_internal_builtin_output(self)
+    }
+
     /// Human-readable label (monitor name when available).
     #[must_use]
     pub fn friendly_label(&self) -> String {
@@ -86,6 +92,17 @@ pub fn non_selectable_reason(
 fn is_app_virtual_output(uid: &str, name: &str) -> bool {
     let uid_lower = uid.to_ascii_lowercase();
     name.contains("ZoomAudio") || uid_lower.contains("zoom.us")
+}
+
+/// Prefer speaker-style built-in outputs over line-out/headphone built-ins for fallback.
+#[must_use]
+pub fn is_internal_builtin_output(device: &OutputDevice) -> bool {
+    if device.transport != TransportKind::BuiltIn || !device.is_alive || !device.is_selectable() {
+        return false;
+    }
+    let uid = device.uid.to_ascii_lowercase();
+    let name = device.name.to_ascii_lowercase();
+    uid.contains("speaker") || name.contains("speaker") || name.contains("internal")
 }
 
 /// Filter listed devices for `list --hdmi`.
@@ -164,6 +181,24 @@ mod tests {
     fn test_hdmi_device_is_selectable() {
         let hdmi = sample("hdmi-1", "HDMI", TransportKind::Hdmi, false);
         assert!(hdmi.is_selectable());
+    }
+
+    #[test]
+    fn test_internal_builtin_output_detects_speakers() {
+        let speakers = sample(
+            "BuiltInSpeakerDevice",
+            "Mac mini Speakers",
+            TransportKind::BuiltIn,
+            false,
+        );
+        let headphones = sample(
+            "BuiltInHeadphoneOutputDevice",
+            "External Headphones",
+            TransportKind::BuiltIn,
+            false,
+        );
+        assert!(speakers.is_internal_builtin_output());
+        assert!(!headphones.is_internal_builtin_output());
     }
 
     #[test]
