@@ -180,7 +180,7 @@ flowchart LR
 "sony_speaker": {
   "enabled": true,
   "model": "SRS-ZR5",
-  "host": "sony.house.hcma",
+  "host": "sony-speaker.local",
   "port": 10000,
   "path": "sony",
   "mac_output": { "monitor_name": "Built-in Output" },
@@ -191,7 +191,7 @@ flowchart LR
 }
 ```
 
-- **`host`** — hostname, FQDN, or IP address (e.g. `sony.house.hcma` or `192.168.1.42`); ScalarWebAPI URL is built as `http://{host}:{port}/{path}`.
+- **`host`** — hostname, FQDN, or IP address (e.g. `sony-speaker.local` or `192.168.1.42`); ScalarWebAPI URL is built as `http://{host}:{port}/{path}`.
 - **`mac_output`** — same shape as `preferred_device` (`monitor_name` and/or `uid`) for the Mac line-out feeding the ZR5.
 - Omit `sony_speaker` entirely when the feature is not used on this Mac.
 - **`request_timeout_ms`** — HTTP timeout for ScalarWebAPI calls.
@@ -508,7 +508,7 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `also_set_system_output` | Mirror alerts/sound effects device |
 | `sony_speaker` | Optional — omit on Macs without a networked Sony speaker |
 | `sony_speaker.enabled` | Master switch for SRS-ZR5 / ScalarWebAPI wake logic |
-| `sony_speaker.host` | Hostname, FQDN, or IP (e.g. `sony.house.hcma`) |
+| `sony_speaker.host` | Hostname, FQDN, or IP (e.g. `sony-speaker.local`) |
 | `sony_speaker.port` / `path` | ScalarWebAPI URL pieces (default `10000` / `sony`) |
 | `sony_speaker.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
 | `sony_speaker.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |

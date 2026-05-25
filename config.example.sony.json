@@ -11,7 +11,7 @@
   "sony_speaker": {
     "enabled": true,
     "model": "SRS-ZR5",
-    "host": "sony.house.hcma",
+    "host": "sony-speaker.local",
     "path": "sony",
     "mac_output": {
       "monitor_name": "Built-in Output"

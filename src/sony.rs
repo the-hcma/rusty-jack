@@ -697,7 +697,7 @@ mod tests {
             sony_speaker: Some(SonySpeakerConfig {
                 enabled: true,
                 model: "SRS-ZR5".into(),
-                host: Some("sony.house.hcma".into()),
+                host: Some("sony-speaker.local".into()),
                 port: 10_000,
                 path: "sony".into(),
                 mac_output: DeviceSelectorConfig {
@@ -719,7 +719,7 @@ mod tests {
         let endpoint = configured_endpoint(sony).unwrap();
         assert_eq!(
             endpoint.service_endpoint(SYSTEM_SERVICE),
-            "http://sony.house.hcma:10000/sony/system"
+            "http://sony-speaker.local:10000/sony/system"
         );
         assert_eq!(endpoint.service_path(SYSTEM_SERVICE), "/sony/system");
     }

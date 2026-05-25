@@ -36,7 +36,7 @@ pub struct SonySpeakerConfig {
     pub enabled: bool,
     #[serde(default = "default_sony_model")]
     pub model: String,
-    /// Hostname, FQDN, or IP address (e.g. `sony.house.hcma` or `192.168.1.42`).
+    /// Hostname, FQDN, or IP address (e.g. `sony-speaker.local` or `192.168.1.42`).
     #[serde(default)]
     pub host: Option<String>,
     #[serde(default = "default_sony_port")]
@@ -376,7 +376,7 @@ mod tests {
         let sony = SonySpeakerConfig {
             enabled: true,
             model: "SRS-ZR5".into(),
-            host: Some("sony.house.hcma".into()),
+            host: Some("sony-speaker.local".into()),
             port: 10_000,
             path: "sony".into(),
             mac_output: DeviceSelectorConfig::default(),
@@ -387,7 +387,7 @@ mod tests {
         };
         assert_eq!(
             sony.endpoint_url().as_deref(),
-            Some("http://sony.house.hcma:10000/sony")
+            Some("http://sony-speaker.local:10000/sony")
         );
     }
 
