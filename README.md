@@ -1,8 +1,35 @@
 # Rusty Jack
 
-macOS CLI daemon that makes **hardware volume keys work** when system audio goes to an **HDMI, DisplayPort, or USB-C dock** monitor — the same core problem [eqMac](https://github.com/bitgapp/eqMac) solves, without the menu bar app or EQ.
+macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, or USB-C dock** output and keeps **volume keys working** on external displays — the same core problem [eqMac](https://github.com/bitgapp/eqMac) solves, as a **headless, launchd-friendly** tool with JSON config. No menu bar, no EQ.
 
 > *Your HDMI output, on deck — and the volume keys actually work.*
+
+## Quick start
+
+```bash
+# Prerequisites: macOS 12+, Xcode CLT, Rust 1.85+
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+git clone https://github.com/thehcma/rusty-jack.git
+cd rusty-jack
+make release
+
+mkdir -p ~/.config/rusty-jack
+cp config.example.json ~/.config/rusty-jack/config.json
+# Edit preferred_device.monitor_name to match `rusty-jack list`
+
+./target/release/rusty-jack list
+./target/release/rusty-jack status
+./target/release/rusty-jack apply
+```
+
+For **HDMI/DP volume**, install [eqMac](https://eqmac.app) — rusty-jack will start it automatically when needed (until a built-in virtual driver ships). See [Volume on external displays](#volume-on-external-displays).
+
+Full command reference: [docs/USAGE.md](./docs/USAGE.md). Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
+
+---
 
 ## The problem
 
@@ -10,263 +37,263 @@ When macOS plays through an external display (DisplayPort / HDMI / many docks), 
 
 Built-in speakers and most Bluetooth headsets expose **software-controllable volume** in CoreAudio. External displays typically **do not**.
 
-## What eqMac does (and what we’re building)
+## What Rusty Jack does today
 
-eqMac installs a **virtual audio device** as the system default. Volume keys adjust software gain on that virtual path; eqMac **re-renders** the audio to your real HDMI/DP output at the level you chose.
+| Feature | Status |
+|---------|--------|
+| List output devices (transport, monitor name, active `>`) | **Done** — `list`, `list --hdmi` |
+| Policy + routing status | **Done** — `status` |
+| Switch to preferred/fallback from config | **Done** — `apply` |
+| Interactive / scripted device pick | **Done** — `picker`, `picker --index N` |
+| Config volume on switch (with retries) | **Done** — `volume` in config |
+| eqMac auto-start for HDMI routes | **Done** — see below |
+| launchd pause / resume / disable | **Done** — `pause`, `resume`, `disable` |
+| Background auto-switch daemon | **Planned** — `daemon` subcommand exists but not implemented |
+| Own virtual HAL driver (replace eqMac) | **Planned** — [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) Phase 7 |
 
-**Rusty Jack** aims for the same outcome — **keyboard volume control on HDMI/DP** — as a **headless, launchd-friendly CLI** with JSON config. No EQ, no per-app mixer, no menu bar.
+Switching the default output to a **physical HDMI device alone does not fix volume keys**. Until Phase 7, use **eqMac** (or similar) as the software volume layer.
 
-| Piece | Role |
-|-------|------|
-| **Virtual driver (planned)** | System default output that volume keys can control |
-| **Passthrough + software volume (planned)** | Apply gain, send, to chosen physical monitor/dock |
-| **Routing + daemon (in progress)** | Pick and keep the right HDMI/DP device connected |
+---
 
-Switching the default output to a physical HDMI device alone **does not** fix volume keys. That requires the virtual-device pipeline (see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) §0 and Phase 7).
+## Volume on external displays
 
-### Sony SRS-ZR5 wake (planned — Phase 8)
+### Why HDMI volume is hard
 
-For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Songpal protocol), the speaker is often in standby. **Planned:** when line-out is the preferred/active output and **mouse or keyboard activity** is detected, rusty-jack will POST to the speaker’s local REST API (`system.setPowerStatus`) using a **native Rust client** — no Python or [python-songpal](https://github.com/rytilahti/python-songpal) at runtime (that project is protocol reference only). Configure `sony_speaker` in `config.example.json` — see [IMPLEMENTATION_PLAN.md §1.1](./IMPLEMENTATION_PLAN.md).
+Physical HDMI/DP endpoints often have **no settable CoreAudio volume scalar**. macOS sends a fixed digital stream; keyboard volume has nothing to drive.
+
+### Interim solution: eqMac
+
+eqMac provides:
+
+1. A **virtual HAL device** as the system default (what volume keys target).
+2. An **app** that captures audio, applies software gain, and renders to the physical monitor.
+
+Rusty Jack **does not replace eqMac yet** — it **routes** to the right monitor and **starts eqMac** when you switch to an HDMI-class device:
+
+| eqMac state | Behavior |
+|-------------|----------|
+| Installed + running | No action |
+| Installed, not running | `open -a eqMac`, brief startup wait |
+| Not installed | Warning on stderr; volume keys on HDMI may not work |
+
+Detection: `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.driver`, process via `pgrep -x eqMac`.
+
+### Config `volume`
+
+When set (0–100), rusty-jack applies it **only on an actual device switch** (`apply` or `picker` when picking the configured preferred device). Setting uses device scalar + system volume, with **retries** so eqMac cannot silently reset the level right after a route change.
+
+### Future: native driver
+
+[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) **Phase 7** — Rusty Jack virtual AudioServerPlugIn + daemon passthrough, no eqMac dependency.
+
+---
 
 ## Platform
 
 - **macOS 12 Monterey** or later (Intel and Apple Silicon)
-- **macOS only** — not built for or tested on Linux
-- Release builds cross-compile **`aarch64-apple-darwin`** and **`x86_64-apple-darwin`** (see `scripts/build-universal.sh`)
-- **GitHub Actions CI** runs on **`macos-14`** runners (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+- **macOS only** — CoreAudio; not built for Linux
+- **Rust 1.85+** (`rust-version` in `Cargo.toml`)
+- CI: **`macos-14`** — rustfmt, clippy, tests, release builds ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
 
-## Status
+---
 
-**Phase 1:** device enumeration, `list`, and `status` on macOS (transport, monitor name, active device highlighting, policy match). Routing write path, daemon, and the **virtual driver + software volume** path are planned — see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
+## Build (local)
 
-### Build (local — debug & release)
-
-Requires **macOS 12 Monterey or later**, **Apple Silicon or Intel**, and **[Rust](https://rustup.rs/) 1.85+** (see `rust-version` in `Cargo.toml`). CoreAudio is macOS-only; build on a Mac, not Linux.
-
-#### 1. One-time setup on a new Mac
+Requires a Mac. See [Build (local — debug & release)](#build-local--debug--release) below or [docs/USAGE.md § Build](./docs/USAGE.md#build).
 
 ```bash
-# Xcode command-line tools (compiler + SDK) — skip if already installed
-xcode-select --install
-
-# Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-
-rustc --version    # should be ≥ 1.85
+make release          # → target/release/rusty-jack
+./target/release/rusty-jack --help   # version + git commit
+make test
 ```
 
-#### 2. Get the source
+---
+
+## Commands (summary)
+
+Global flag: `--config PATH` (overrides `RUSTY_JACK_CONFIG` and `~/.config/rusty-jack/config.json`).
+
+| Command | Purpose |
+|---------|---------|
+| `list` | Table of output devices (`--hdmi`, `--json`) |
+| `status` | Devices + virtual default block + policy + volume |
+| `apply` | Switch to preferred/fallback from config |
+| `picker` | Interactive menu or `--index N` to switch |
+| `pause` | Stop launchd agent; keep plist |
+| `resume` | Re-enable launchd agent |
+| `disable` | Uninstall launchd agent (remove plist) |
+| `daemon` | *Not implemented* — reserved for background loop |
+
+All subcommands support `--json` where applicable. Subcommands are alphabetical in `--help`.
+
+Details, JSON shapes, and picker legend: **[docs/USAGE.md](./docs/USAGE.md)**.
+
+---
+
+## Configuration
+
+Default path: `~/.config/rusty-jack/config.json`. Copy from [`config.example.json`](./config.example.json).
+
+### Implemented fields
+
+| Field | Description |
+|-------|-------------|
+| `version` | Must be `1` |
+| `preferred_device.monitor_name` | Match display product name from `list` (unique) |
+| `preferred_device.uid` | Or match CoreAudio UID directly |
+| `preferred_device_uid` | Legacy; use `preferred_device.uid` |
+| `fallback_uids` | Try in order if preferred is unplugged |
+| `also_set_system_output` | Also set system/alert output (default `true`) |
+| `volume` | 0–100; apply on switch to preferred only |
+| `auto_switch` | For future daemon (ignored by CLI today) |
+| `sony_speaker` | Phase 8 — wake SRS-ZR5 on activity (config validates; not wired to daemon yet) |
+
+Example:
+
+```json
+{
+  "version": 1,
+  "preferred_device": { "monitor_name": "DELL U3219Q" },
+  "fallback_uids": [],
+  "also_set_system_output": true,
+  "volume": 13
+}
+```
+
+`config.example.json` may include extra keys (`poll_interval_ms`, `match`, `exclude`, …) reserved for future daemon behavior; they are **ignored** by the current loader.
+
+Sony ZR5 example: [`config.example.sony.json`](./config.example.sony.json).
+
+---
+
+## Picker and device list
+
+### Active vs preferred vs dim
+
+| Marker | Meaning |
+|--------|---------|
+| `>` (green) | Currently active physical route |
+| `*` (cyan) | Config preferred device |
+| dim | Not routable (e.g. Zoom virtual, aggregates) |
+
+**ZoomAudioDevice** and similar app virtual devices are shown but **cannot be selected** — they are not speaker outputs.
+
+### eqMac in `list` / `status`
+
+When eqMac is the HAL default, the physical monitor appears with `>` on its row; a **System default (virtual)** footer describes the eqMac router and routed-to monitor.
+
+---
+
+## launchd (daemon control)
+
+LaunchAgent label: `com.example.rusty-jack`  
+Plist template: [`launchd/com.example.rusty-jack.plist.template`](./launchd/com.example.rusty-jack.plist.template)
+
+| Command | Effect |
+|---------|--------|
+| `pause` | `bootout` + `disable`; plist **kept** |
+| `resume` | `enable` + `bootstrap` |
+| `disable` | Stop, disable, **delete plist** |
+
+The background `daemon` loop is not implemented yet; install the plist only when that lands.
+
+---
+
+## Build (local — debug & release)
+
+Requires **macOS 12+**, **Apple Silicon or Intel**, and **[Rust](https://rustup.rs/) 1.85+**.
+
+### 1. One-time setup
+
+```bash
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustc --version
+```
+
+### 2. Clone and build
 
 ```bash
 git clone https://github.com/thehcma/rusty-jack.git
 cd rusty-jack
 ```
 
-#### 3. Debug vs release
-
-| Build | Command | Binary path | When to use |
-|-------|---------|-------------|-------------|
-| **Debug** | `make build` or `cargo build` | `target/debug/rusty-jack` | Fast compile while developing; larger binary, no LTO |
-| **Release** | `make release` or `cargo build --release` | `target/release/rusty-jack` | What you should run day-to-day; optimized, stripped |
-
-Debug builds compile faster and include debug symbols (useful with `lldb`). Release builds are smaller, faster at runtime, and match what CI produces.
+| Build | Command | Output |
+|-------|---------|--------|
+| Debug | `make build` | `target/debug/rusty-jack` |
+| Release | `make release` | `target/release/rusty-jack` |
 
 ```bash
-# Debug — quick iteration
-make build
-./target/debug/rusty-jack --help
-./target/debug/rusty-jack list
-
-# Release — verify like a “real” install
 make release
-./target/release/rusty-jack --help
-./target/release/rusty-jack status
+./target/release/rusty-jack --help   # e.g. rusty-jack 0.1.0 (commit 7855685)
 ```
 
-`--help` prints the version **and embedded git commit** (from `build.rs`), e.g. `rusty-jack 0.1.0 (commit abc1234)` — useful to confirm which revision is on the machine.
-
-#### 4. Run without installing to PATH
+### 3. Install to PATH (optional)
 
 ```bash
-# Either binary works; substitute debug/release as needed
-./target/release/rusty-jack list
-./target/release/rusty-jack list --hdmi
-./target/release/rusty-jack status
-./target/release/rusty-jack picker          # interactive; needs a TTY
-./target/release/rusty-jack picker --index 0
-./target/release/rusty-jack apply           # needs ~/.config/rusty-jack/config.json
+make install    # ~/.cargo/bin/rusty-jack
 ```
 
-Copy `config.example.json` to `~/.config/rusty-jack/config.json` and edit `preferred_device` before testing `apply` / policy in `status`.
-
-#### 5. Optional: install to `~/.cargo/bin`
+### 4. Universal binary
 
 ```bash
-make install          # builds release, then cargo install --path .
-rusty-jack --help     # on PATH if ~/.cargo/bin is in your shell profile
+make universal   # target/release/rusty-jack-universal
 ```
 
-#### 6. Universal binary (Apple Silicon + Intel in one file)
-
-For distributing a single Mach-O to mixed Macs:
+### 5. Verify on another Mac
 
 ```bash
-make universal        # runs scripts/build-universal.sh → target/release/rusty-jack-universal
-```
-
-#### 7. Verify on another Mac (checklist)
-
-```bash
-make test             # unit + integration tests (needs macOS)
-make clippy           # optional lint pass
-
-# Smoke test after build
+make test
 ./target/release/rusty-jack list
 ./target/release/rusty-jack status
-./target/release/rusty-jack picker --index 0 --json   # non-interactive switch test
+./target/release/rusty-jack apply
+./target/release/rusty-jack picker --index 0 --json
 ```
 
-If you use eqMac or Zoom virtual devices: `list` / `status` show them; **ZoomAudioDevice** appears dimmed in `picker` and cannot be selected (app virtual driver, not a speaker).
+Confirm `--help` commit matches `git rev-parse --short HEAD`.
 
-#### Makefile targets
+### Makefile targets
 
-```bash
-make build          # debug → target/debug/rusty-jack
-make release        # release → target/release/rusty-jack
-make test           # cargo test --all-targets
-make fmt            # cargo fmt
-make clippy         # cargo clippy --all-targets
-make universal      # fat binary (aarch64 + x86_64)
-make install        # release + cargo install --path .
-make clean          # cargo clean
-```
+`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `clean` — see [Makefile](Makefile).
 
-Or use `cargo` directly (same results):
+---
 
-```bash
-cargo build                    # debug
-cargo build --release          # release
-cargo test
-cargo run -- list              # debug via cargo run
-cargo run --release -- status  # release via cargo run
-```
+## Troubleshooting
 
-### `list` command
+See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 
-| Command | Description |
-|---------|-------------|
-| `rusty-jack list` | All output devices (table with index, transport, UID) |
-| `rusty-jack list --hdmi` | HDMI, DisplayPort, Thunderbolt, USB dock outputs only |
-| `rusty-jack list --json` | JSON device list (works with `--hdmi`) |
+- Volume keys dead on HDMI without eqMac
+- eqMac installed but volume still wrong
+- Zoom / virtual devices in the picker
+- Policy “no change” / wrong monitor
 
-### `status` command
+---
 
-| Command | Description |
-|---------|-------------|
-| `rusty-jack status` | Routing snapshot: device table (active row highlighted), virtual default details, policy match, **current volume** |
-| `rusty-jack status --json` | Same fields as JSON |
-| `rusty-jack status --config /path/to/config.json` | Evaluate policy against a specific config file |
+## Roadmap
 
-Config is read from `--config`, `RUSTY_JACK_CONFIG`, or `~/.config/rusty-jack/config.json`.
+| Phase | Work |
+|-------|------|
+| **Now** | Routing CLI, eqMac integration, volume retries |
+| **Next** | `daemon` + launchd auto-switch |
+| **Phase 7** | Own virtual driver + software volume |
+| **Phase 8** | Sony SRS-ZR5 wake on keyboard/mouse activity |
 
-### `apply` command
+Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 
-| Command | Description |
-|---------|-------------|
-| `rusty-jack apply` | Set default output to preferred device (or fallback) from config |
-| `rusty-jack apply --json` | Same result as JSON (`switched` or `no_change`) |
-
-Requires a valid config file. Resolves `preferred_device.monitor_name` or `uid`, then sets the system default output (and system/alert output when `also_set_system_output` is true). When `volume` is set in config, applies it only on an actual switch.
-
-For **HDMI/DisplayPort** targets, rusty-jack **starts eqMac** if it is installed but not running (eqMac provides software volume until rusty-jack ships its own virtual driver). If eqMac is not installed, a warning is printed and volume keys may not work on external displays.
-
-### `picker` command
-
-| Command | Description |
-|---------|-------------|
-| `rusty-jack picker` | Interactive menu to choose an output device and switch to it |
-| `rusty-jack picker --index N` | Switch to device index `N` (same IDX as `list`) without a menu |
-| `rusty-jack picker --json` | Same result as JSON (`switched` or `no_change`) |
-
-Does not require config. When config is present, uses `also_set_system_output` from it; otherwise defaults to `true`. If you pick the **configured preferred device** and a switch occurs, config `volume` is applied with retries (helps when eqMac resets level). Other picks leave volume unchanged. In the menu: `>` active, `*` config preferred, **dim** = not routable (e.g. Zoom virtual). Press **Esc** to cancel.
-
-### Daemon control
-
-| Command | Description |
-|---------|-------------|
-| `rusty-jack pause` | Stop auto-routing; keeps the LaunchAgent plist installed |
-| `rusty-jack resume` | Re-enable and start a paused daemon |
-| `rusty-jack disable` | Uninstall: stop, disable, and **remove** the LaunchAgent plist |
-
-Add `--json` to any of these for machine-readable output.
-
-- **pause** — `launchctl bootout` + `disable`; plist stays at `~/Library/LaunchAgents/com.example.rusty-jack.plist`. Use when you want to temporarily stop auto-routing.
-- **resume** — `launchctl enable` + `bootstrap` to start the daemon again after pause.
-- **disable** — full cleanup/uninstall from launchd (plist removed). Use when removing rusty-jack entirely.
-
-### Configuration
-
-Preferred output — by **monitor name** (when unique) or CoreAudio UID:
-
-```json
-"preferred_device": {
-  "monitor_name": "DELL U3219Q"
-}
-```
-
-Sony speaker wake (optional — omit on Macs without a networked ZR5). See [`config.example.sony.json`](./config.example.sony.json):
-
-```json
-"sony_speaker": {
-  "enabled": true,
-  "host": "sony.house.hcma",
-  "port": 10000,
-  "path": "sony",
-  "mac_output": { "monitor_name": "Built-in Output" }
-}
-```
-
-`host` accepts a hostname, FQDN, or IP address.
+---
 
 ## Install via Homebrew (planned)
 
-Yes — a Rust macOS CLI is a natural fit for Homebrew. You ship a **native Mach-O binary**; users run:
-
 ```bash
-brew install rusty-jack   # from your tap, or homebrew-core if accepted
-rusty-jack agent install
+brew install rusty-jack   # from your tap
+rusty-jack agent install  # when agent install ships
 ```
 
-### How distribution usually works
+Formula sketch: [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
 
-| Stage | What you do |
-|-------|-------------|
-| **1. Your tap** | Publish `homebrew-tap` with a formula that builds from source or installs release bottles |
-| **2. Releases** | GitHub Actions builds `rusty-jack` for `aarch64-apple-darwin` and `x86_64-apple-darwin`, uploads tarballs |
-| **3. Formula** | `brew install` downloads the bottle or runs `cargo install --locked --root $(brew --prefix)` |
-| **4. Optional core** | Submit to [homebrew-core](https://docs.brew.sh/Adding-Software-to-Homebrew) once stable (macOS-only formulae are OK with `depends_on :macos`) |
-
-Example formula sketch lives in [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
-
-### Homebrew vs direct download
-
-- **Homebrew** — Users get updates with `brew upgrade`, binary on `PATH`, no Rust toolchain required.
-- **Notarization** — Recommended for *drag-and-drop* `.app` or standalone `.pkg`; important once the **virtual audio driver** ships (Phase 7).
-- **launchd** — Still per-user: `rusty-jack agent install` writes `~/Library/LaunchAgents/...` (no root for the agent itself; driver install will require admin).
-
-## Config (planned)
-
-`~/.config/rusty-jack/config.json` — preferred physical output UID, auto-switch policy, volume behavior — see `config.example.json`.
-
-## Uninstall (planned)
-
-```bash
-rusty-jack uninstall              # stop agent, remove plist, restore prior output (if saved)
-rusty-jack uninstall --purge -y   # also remove config, state, logs, virtual driver
-brew uninstall rusty-jack         # runs the same cleanup via formula hook
-```
+---
 
 ## License
 
-MIT (update as you prefer)
+MIT
