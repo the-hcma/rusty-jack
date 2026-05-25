@@ -161,7 +161,7 @@ Hardware-specific tests are `#[ignore]`; eqMac HAL test skips when driver not in
 2. `rusty-jack list --hdmi` — show monitor names.
 3. Note macOS version, eqMac version, and whether eqMac app is running.
 
-File issues: [github.com/thehcma/rusty-jack](https://github.com/thehcma/rusty-jack/issues).
+File issues: [github.com/the-hcma/rusty-jack](https://github.com/the-hcma/rusty-jack/issues).
 
 ---
 

@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and Sony ScalarWebAPI wake support. Native HDMI/DP volume without eqMac remains future driver work.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration for HDMI/DisplayPort keyboard volume-key control, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and Sony-like ScalarWebAPI speaker wake support. Native HDMI/DP volume without eqMac remains future driver work.
 
 ## Global options
 
@@ -87,17 +87,22 @@ rusty-jack upgrade [--json]
 | `pause` | Kept | Stopped + disabled |
 | `resume` | Kept | Enabled + started |
 | `uninstall` | **Removed** | Stopped + disabled |
-| `upgrade` | Rewritten for current binary | Restarted |
+| `upgrade` | Rewritten for current binary | Paused, then resumed if it was running |
 
 LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not system-wide. Each macOS account that wants auto-routing can install its own `~/Library/LaunchAgents/com.example.rusty-jack.plist`; the jobs do not conflict across users.
 
 ### Install
 
-Install the binary through Homebrew, then let Rusty Jack render and load the LaunchAgent:
+Install the binary through Homebrew:
 
 ```bash
-brew tap thehcma/tap
+brew tap the-hcma/tap
 brew install rusty-jack
+```
+
+Then let Rusty Jack create config, prompt for preferred/fallback outputs, and load the LaunchAgent:
+
+```bash
 rusty-jack install
 ```
 
@@ -123,15 +128,14 @@ rusty-jack uninstall --remove-config  # also remove default config without promp
 
 ### Update
 
-Replace the binary first, then refresh and restart the LaunchAgent:
+Replace the binary first, then refresh the LaunchAgent:
 
 ```bash
-rusty-jack pause
 git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable, reports the before/after version and commit, and restarts the daemon. If the daemon was not installed yet, `upgrade` installs it.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable, reports the before/after version and commit, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it.
 
 ---
 

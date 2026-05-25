@@ -1,12 +1,12 @@
 [package]
 name = "rusty-jack"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.85"
-description = "macOS CLI: hardware volume keys on HDMI/DisplayPort output (eqMac-style, no GUI)"
+description = "macOS audio router for HDMI volume keys and Sony-like speaker wake"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/thehcma/rusty-jack"
+repository = "https://github.com/the-hcma/rusty-jack"
 keywords = ["macos", "hdmi", "coreaudio", "audio"]
 categories = ["command-line-utilities"]
 

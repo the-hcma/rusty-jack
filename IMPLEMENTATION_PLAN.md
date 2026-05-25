@@ -679,7 +679,7 @@ Homebrew distribution is not shipped yet. Current local install uses `make insta
 
 ### Recommended path
 
-1. **Personal tap** (`brew tap you/rusty-jack`) with `packaging/homebrew/rusty-jack.rb`.
+1. **Tap** (`brew tap the-hcma/tap`) with `packaging/homebrew/rusty-jack.rb`.
 2. **GitHub Releases** — CI builds release binaries; formula uses `url` + `sha256` or official bottles.
 3. **Source formula** (early days) — `depends_on "rust" => :build` + `cargo install` (template in repo).
 4. **homebrew-core** (later) — optional; macOS-only tools use `depends_on :macos`.

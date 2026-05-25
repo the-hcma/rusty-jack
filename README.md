@@ -1,21 +1,32 @@
 # Rusty Jack
 
-macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, USB-C dock, or line-out** output using JSON policy, an interactive picker, and a launchd-friendly daemon. For fixed-volume HDMI/DisplayPort outputs, Rusty Jack currently uses [eqMac](https://eqmac.app) as the software volume layer when it is installed.
+[![CI](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml)
+[![Release](https://github.com/the-hcma/rusty-jack/actions/workflows/release.yml/badge.svg)](https://github.com/the-hcma/rusty-jack/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/the-hcma/rusty-jack?sort=semver)](https://github.com/the-hcma/rusty-jack/releases)
+[![Homebrew tap](https://img.shields.io/badge/homebrew-the--hcma%2Ftap-blue?logo=homebrew)](https://github.com/the-hcma/homebrew-tap)
+
+macOS CLI that keeps audio on your chosen **HDMI, DisplayPort, USB-C dock, or line-out** output, helps keyboard volume keys work with fixed-volume HDMI/DisplayPort devices through an eqMac-style software volume layer, and wakes Sony-like Songpal / ScalarWebAPI speakers when their Mac output is selected.
 
 > *Your preferred output, on deck — without a menu bar app.*
 
 ## Quick start
 
-```bash
-brew tap thehcma/tap
-brew install rusty-jack
+Install Rusty Jack with Homebrew:
 
+```bash
+brew tap the-hcma/tap
+brew install rusty-jack
+```
+
+Then choose the preferred output, choose a fallback, and start the per-user daemon:
+
+```bash
 rusty-jack list
 rusty-jack install   # pick preferred + fallback outputs; starts the daemon
 rusty-jack status
 ```
 
-For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — rusty-jack will start it automatically when needed and warn with the download URL when it is missing. See [Volume on external displays](#volume-on-external-displays).
+For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — Rusty Jack routes audio to the right external device, starts eqMac automatically when needed, and warns with the download URL when it is missing. For **Sony-like speakers**, configure `sony_speaker` so Rusty Jack can wake the speaker when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#sony_speaker).
 
 Full command reference: [docs/USAGE.md](./docs/USAGE.md). Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
@@ -41,7 +52,7 @@ Built-in speakers and most Bluetooth headsets expose **software-controllable vol
 | Pause, resume, or uninstall the per-user LaunchAgent | `pause`, `resume`, `disable` |
 | Wake Sony Songpal / ScalarWebAPI speakers on output selection or idle-to-active daemon triggers | `sony_speaker` |
 
-Switching the default output to a **physical HDMI device alone does not fix volume keys**. Until Rusty Jack has its own virtual HAL driver, use **eqMac** as the software volume layer.
+Switching the default output to a **physical HDMI device alone does not fix volume keys**. Rusty Jack solves the routing and daemon automation side; until it has its own virtual HAL driver, use **eqMac** as the software volume layer that the keyboard volume keys can control.
 
 ---
 
@@ -238,7 +249,7 @@ rustc --version
 ### 2. Clone and build
 
 ```bash
-git clone https://github.com/thehcma/rusty-jack.git
+git clone https://github.com/the-hcma/rusty-jack.git
 cd rusty-jack
 ```
 
@@ -311,14 +322,15 @@ Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 
 ## Packaging
 
-Rusty Jack is distributed through the personal Homebrew tap `thehcma/tap`:
+Rusty Jack is distributed through the Homebrew tap `the-hcma/tap`:
 
 ```bash
-brew tap thehcma/tap
+brew tap the-hcma/tap
 brew install rusty-jack
 ```
 
 The formula source lives at [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
+Release steps are in [docs/RELEASING.md](./docs/RELEASING.md).
 
 ---
 
