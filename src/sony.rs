@@ -11,6 +11,8 @@ use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::Message;
 
 const OUTPUT_SELECTED_TRIGGER: &str = "output_selected";
+const KEYBOARD_TRIGGER: &str = "keyboard";
+const MOUSE_TRIGGER: &str = "mouse";
 const SYSTEM_SERVICE: &str = "system";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = "urn:schemas-sony-com:service:ScalarWebAPI:1";
@@ -88,6 +90,41 @@ pub fn warn_on_output_selected(config: &Config, devices: &[OutputDevice], select
     }
 }
 
+/// Try waking the configured Sony speaker when user input resumes on its Mac output.
+pub fn wake_on_activity(
+    config: &Config,
+    devices: &[OutputDevice],
+    active_uid: &str,
+) -> Result<Option<SonyWakeResult>, RustyJackError> {
+    let Some(sony) = config.sony_speaker.as_ref() else {
+        return Ok(None);
+    };
+    if !sony.enabled || !activity_trigger_enabled(sony) {
+        return Ok(None);
+    }
+
+    let selector = sony.mac_output.clone().into();
+    let sony_output_uid = resolve_device_selector(&selector, devices)
+        .map_err(|err| RustyJackError::Config(format!("sony_speaker.mac_output: {err}")))?;
+    if sony_output_uid != active_uid {
+        return Ok(None);
+    }
+
+    let previous_status = current_power_status(sony).ok();
+    let mut result = send_wake_command(sony)?;
+    result.previous_status = previous_status;
+    Ok(Some(result))
+}
+
+/// Log activity-triggered Sony wake failures as warnings so daemon routing still succeeds.
+pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &str) {
+    match wake_on_activity(config, devices, active_uid) {
+        Ok(Some(result)) => eprintln!("{}", format_wake_message(&result)),
+        Ok(None) => {}
+        Err(err) => eprintln!("warning: {err}"),
+    }
+}
+
 #[must_use]
 pub fn format_wake_message(result: &SonyWakeResult) -> String {
     if result
@@ -137,6 +174,10 @@ fn trigger_enabled(sony: &SonySpeakerConfig, trigger: &str) -> bool {
     sony.triggers
         .iter()
         .any(|value| value.eq_ignore_ascii_case(trigger))
+}
+
+fn activity_trigger_enabled(sony: &SonySpeakerConfig) -> bool {
+    trigger_enabled(sony, KEYBOARD_TRIGGER) || trigger_enabled(sony, MOUSE_TRIGGER)
 }
 
 fn current_power_status(sony: &SonySpeakerConfig) -> Result<String, RustyJackError> {
@@ -629,6 +670,10 @@ mod tests {
         Config {
             version: 1,
             auto_switch: true,
+            poll_interval_ms: 3_000,
+            switch_delay_ms: 500,
+            activity_idle_threshold_ms: 60_000,
+            activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
                 uid: Some(uid.into()),
                 monitor_name: None,

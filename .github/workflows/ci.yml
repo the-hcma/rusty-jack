@@ -37,10 +37,25 @@ jobs:
         run: cargo test --all-targets
 
       - name: build release (host)
-        run: cargo build --release
+        run: cargo build --release --jobs "$(sysctl -n hw.logicalcpu)"
 
-      - name: build release (aarch64)
-        run: cargo build --release --target aarch64-apple-darwin
+  build-release:
+    name: Build release (${{ matrix.target }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: build release (x86_64)
-        run: cargo build --release --target x86_64-apple-darwin
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build release
+        run: cargo build --release --target ${{ matrix.target }} --jobs "$(sysctl -n hw.logicalcpu)"

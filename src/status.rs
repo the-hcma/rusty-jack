@@ -1,6 +1,7 @@
 //! Build and format `rusty-jack status` output.
 
 use crate::config::Config;
+use crate::launchd::DaemonStatus;
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
 use crate::system_default::DeviceList;
@@ -44,6 +45,8 @@ pub struct StatusSnapshot {
     /// Current effective output volume (0–100) for the active route.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_percent: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon: Option<DaemonStatus>,
 }
 
 /// Build a status snapshot from a device list and optional config.
@@ -53,6 +56,7 @@ pub fn build_status(
     config: Option<&Config>,
     config_path: Option<&Path>,
     volume_percent: Option<u8>,
+    daemon: Option<DaemonStatus>,
 ) -> StatusSnapshot {
     let policy = evaluate_policy(
         &DeviceList {
@@ -68,7 +72,55 @@ pub fn build_status(
         system_default: list.system_default,
         policy,
         volume_percent,
+        daemon,
     }
+}
+
+fn format_daemon_block(daemon: &DaemonStatus) -> String {
+    let mut rows: Vec<(&str, String)> = vec![];
+    match daemon {
+        DaemonStatus::Running {
+            label,
+            plist_path,
+            service,
+            pid,
+        } => {
+            rows.push(("state", "running".into()));
+            rows.push(("label", label.clone()));
+            rows.push(("service", service.clone()));
+            if let Some(pid) = pid {
+                rows.push(("pid", pid.to_string()));
+            }
+            rows.push(("plist", plist_path.clone()));
+        }
+        DaemonStatus::Paused {
+            label,
+            plist_path,
+            service,
+        } => {
+            rows.push(("state", "paused".into()));
+            rows.push(("label", label.clone()));
+            rows.push(("service", service.clone()));
+            rows.push(("plist", plist_path.clone()));
+        }
+        DaemonStatus::NotInstalled { plist_path } => {
+            rows.push(("state", "not installed".into()));
+            rows.push(("expected plist", plist_path.clone()));
+        }
+        DaemonStatus::Unknown {
+            label,
+            plist_path,
+            message,
+        } => {
+            rows.push(("state", "unknown".into()));
+            rows.push(("label", label.clone()));
+            rows.push(("plist", plist_path.clone()));
+            rows.push(("note", message.clone()));
+        }
+    }
+
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    format_labeled_section("Daemon", "  ", &borrowed)
 }
 
 fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> String {
@@ -135,6 +187,10 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
         "{}",
         format_policy_block(&snapshot.policy, snapshot.volume_percent)
     )?;
+    if let Some(daemon) = &snapshot.daemon {
+        writeln!(out)?;
+        writeln!(out, "{}", format_daemon_block(daemon))?;
+    }
     Ok(())
 }
 
@@ -176,6 +232,7 @@ mod tests {
             None,
             None,
             Some(42),
+            None,
         );
         assert!(!snapshot.policy.configured);
         assert_eq!(snapshot.volume_percent, Some(42));
@@ -187,6 +244,10 @@ mod tests {
         let config = Config {
             version: 1,
             auto_switch: true,
+            poll_interval_ms: 3_000,
+            switch_delay_ms: 500,
+            activity_idle_threshold_ms: 60_000,
+            activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
                 uid: Some("hdmi-1".into()),
                 monitor_name: None,
@@ -207,6 +268,7 @@ mod tests {
             Some(&config),
             Some(Path::new("/tmp/config.json")),
             Some(13),
+            None,
         );
         assert!(snapshot.policy.configured);
         assert_eq!(snapshot.policy.matches_preferred, Some(true));
@@ -236,6 +298,7 @@ mod tests {
                     routed_to_label: Some("HDMI (DELL U3219Q)".into()),
                 }),
             },
+            None,
             None,
             None,
             None,
@@ -308,6 +371,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"active_device_uid\""));
@@ -324,8 +388,16 @@ mod tests {
             None,
             None,
             Some(13),
+            Some(DaemonStatus::Running {
+                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                plist_path: "/tmp/test.plist".into(),
+                service: "gui/501/com.example.rusty-jack".into(),
+                pid: Some(123),
+            }),
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"volume_percent\":13"));
+        assert!(json.contains("\"daemon\""));
+        assert!(json.contains("\"state\":\"running\""));
     }
 }

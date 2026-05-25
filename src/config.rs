@@ -106,6 +106,14 @@ pub struct Config {
     pub version: u32,
     #[serde(default = "default_auto_switch")]
     pub auto_switch: bool,
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    #[serde(default = "default_switch_delay_ms")]
+    pub switch_delay_ms: u64,
+    #[serde(default = "default_activity_idle_threshold_ms")]
+    pub activity_idle_threshold_ms: u64,
+    #[serde(default = "default_activity_poll_interval_ms")]
+    pub activity_poll_interval_ms: u64,
     #[serde(default)]
     pub preferred_device: DeviceSelectorConfig,
     /// Legacy field; use `preferred_device.uid` instead.
@@ -128,6 +136,22 @@ fn default_also_set_system_output() -> bool {
 
 fn default_auto_switch() -> bool {
     true
+}
+
+fn default_poll_interval_ms() -> u64 {
+    3_000
+}
+
+fn default_switch_delay_ms() -> u64 {
+    500
+}
+
+fn default_activity_idle_threshold_ms() -> u64 {
+    60_000
+}
+
+fn default_activity_poll_interval_ms() -> u64 {
+    1_000
 }
 
 impl Config {
@@ -276,6 +300,22 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
         }
     }
 
+    if config.poll_interval_ms == 0 {
+        return Err(RustyJackError::Config(
+            "poll_interval_ms must be greater than 0 until event listeners are implemented".into(),
+        ));
+    }
+    if config.activity_poll_interval_ms == 0 {
+        return Err(RustyJackError::Config(
+            "activity_poll_interval_ms must be greater than 0".into(),
+        ));
+    }
+    if config.activity_idle_threshold_ms == 0 {
+        return Err(RustyJackError::Config(
+            "activity_idle_threshold_ms must be greater than 0".into(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -309,6 +349,10 @@ mod tests {
             config.preferred_selector().monitor_name.as_deref(),
             Some("DELL U3219Q")
         );
+        assert_eq!(config.poll_interval_ms, 3_000);
+        assert_eq!(config.switch_delay_ms, 500);
+        assert_eq!(config.activity_idle_threshold_ms, 60_000);
+        assert_eq!(config.activity_poll_interval_ms, 1_000);
     }
 
     #[test]
@@ -406,6 +450,51 @@ mod tests {
         .unwrap();
         let config = load_config(file.path()).unwrap();
         assert_eq!(config.volume, Some(13));
+    }
+
+    #[test]
+    fn test_rejects_zero_poll_interval() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "poll_interval_ms": 0,
+  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+}}"#
+        )
+        .unwrap();
+        assert!(load_config(file.path()).is_err());
+    }
+
+    #[test]
+    fn test_rejects_zero_activity_interval() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "activity_poll_interval_ms": 0,
+  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+}}"#
+        )
+        .unwrap();
+        assert!(load_config(file.path()).is_err());
+    }
+
+    #[test]
+    fn test_rejects_zero_activity_threshold() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "activity_idle_threshold_ms": 0,
+  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+}}"#
+        )
+        .unwrap();
+        assert!(load_config(file.path()).is_err());
     }
 
     #[test]

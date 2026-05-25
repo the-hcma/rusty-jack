@@ -1,8 +1,8 @@
 # Rusty Jack
 
-macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, or USB-C dock** output and keeps **volume keys working** on external displays — the same core problem [eqMac](https://github.com/bitgapp/eqMac) solves, as a **headless, launchd-friendly** tool with JSON config. No menu bar, no EQ.
+macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, USB-C dock, or line-out** output using JSON policy, an interactive picker, and a launchd-friendly daemon. For fixed-volume HDMI/DisplayPort outputs, Rusty Jack currently uses [eqMac](https://eqmac.app) as the software volume layer when it is installed.
 
-> *Your HDMI output, on deck — and the volume keys actually work.*
+> *Your preferred output, on deck — without a menu bar app.*
 
 ## Quick start
 
@@ -25,7 +25,7 @@ cp config.example.json ~/.config/rusty-jack/config.json
 ./target/release/rusty-jack apply
 ```
 
-For **HDMI/DP volume**, install [eqMac](https://eqmac.app) — rusty-jack will start it automatically when needed (until a built-in virtual driver ships). See [Volume on external displays](#volume-on-external-displays).
+For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — rusty-jack will start it automatically when needed and warn with the download URL when it is missing. See [Volume on external displays](#volume-on-external-displays).
 
 Full command reference: [docs/USAGE.md](./docs/USAGE.md). Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
@@ -37,21 +37,21 @@ When macOS plays through an external display (DisplayPort / HDMI / many docks), 
 
 Built-in speakers and most Bluetooth headsets expose **software-controllable volume** in CoreAudio. External displays typically **do not**.
 
-## What Rusty Jack does today
+## Current Capabilities
 
-| Feature | Status |
-|---------|--------|
-| List output devices (transport, monitor name, active `>`) | **Done** — `list`, `list --hdmi` |
-| Policy + routing status | **Done** — `status` |
-| Switch to preferred/fallback from config | **Done** — `apply` |
-| Interactive / scripted device pick | **Done** — `picker`, `picker --index N` |
-| Config volume on switch (with retries) | **Done** — `volume` in config |
-| eqMac auto-start for HDMI routes | **Done** — see below |
-| launchd pause / resume / disable | **Done** — `pause`, `resume`, `disable` |
-| Background auto-switch daemon | **Planned** — `daemon` subcommand exists but not implemented |
-| Own virtual HAL driver (replace eqMac) | **Planned** — [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) Phase 7 |
+| Capability | Command / config |
+|------------|------------------|
+| List output devices with transport, monitor name, active route, and routability | `list`, `list --hdmi` |
+| Show current route, policy match, system virtual default, and volume | `status` |
+| Switch once to preferred device or fallback from config | `apply` |
+| Pick interactively or by device index | `picker`, `picker --index N` |
+| Apply configured volume after a real switch | `volume` |
+| Start eqMac for HDMI-class routes when available; warn when missing | automatic during `apply` / `picker` / `daemon` |
+| Run a background auto-switch supervisor | `daemon` |
+| Pause, resume, or uninstall the per-user LaunchAgent | `pause`, `resume`, `disable` |
+| Wake Sony Songpal / ScalarWebAPI speakers on output selection or idle-to-active daemon triggers | `sony_speaker` |
 
-Switching the default output to a **physical HDMI device alone does not fix volume keys**. Until Phase 7, use **eqMac** (or similar) as the software volume layer.
+Switching the default output to a **physical HDMI device alone does not fix volume keys**. Until Rusty Jack has its own virtual HAL driver, use **eqMac** as the software volume layer.
 
 ---
 
@@ -82,9 +82,9 @@ Detection: `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.drive
 
 When set (0–100), rusty-jack applies it **only on an actual device switch** (`apply` or `picker` when picking the configured preferred device). Setting uses device scalar + system volume, with **retries** so eqMac cannot silently reset the level right after a route change.
 
-### Future: native driver
+### Planned native driver
 
-[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) **Phase 7** — Rusty Jack virtual AudioServerPlugIn + daemon passthrough, no eqMac dependency.
+[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) tracks the future Rusty Jack virtual AudioServerPlugIn + daemon passthrough work. That is the path to removing the eqMac dependency for HDMI/DP volume keys.
 
 ---
 
@@ -115,14 +115,17 @@ Global flag: `--config PATH` (overrides `RUSTY_JACK_CONFIG` and `~/.config/rusty
 
 | Command | Purpose |
 |---------|---------|
-| `list` | Table of output devices (`--hdmi`, `--json`) |
-| `status` | Devices + virtual default block + policy + volume |
 | `apply` | Switch to preferred/fallback from config |
-| `picker` | Interactive menu or `--index N` to switch |
-| `pause` | Stop launchd agent; keep plist |
-| `resume` | Re-enable launchd agent |
+| `daemon` | Long-running policy loop for launchd |
 | `disable` | Uninstall launchd agent (remove plist) |
-| `daemon` | *Not implemented* — reserved for background loop |
+| `install` | Install and start the per-user LaunchAgent |
+| `list` | Table of output devices (`--hdmi`, `--json`) |
+| `pause` | Stop launchd agent; keep plist |
+| `picker` | Interactive menu or `--index N` to switch |
+| `resume` | Re-enable launchd agent |
+| `status` | Devices + virtual default block + policy + volume + daemon state |
+| `uninstall` | Uninstall launchd agent (alias for `disable`) |
+| `upgrade` | Refresh LaunchAgent to current binary and restart it |
 
 All subcommands support `--json` where applicable. Subcommands are alphabetical in `--help`.
 
@@ -145,10 +148,14 @@ Default path: `~/.config/rusty-jack/config.json`. Copy from [`config.example.jso
 | `fallback_uids` | Try in order if preferred is unplugged |
 | `also_set_system_output` | Also set system/alert output (default `true`) |
 | `volume` | 0–100; apply on switch to preferred only |
-| `auto_switch` | For future daemon (ignored by CLI today) |
-| `sony_speaker` | Wake SRS-ZR5 on `apply` / `picker` output selection using discovered ScalarWebAPI endpoint; daemon activity triggers are planned |
+| `auto_switch` | Master enable for the daemon loop |
+| `poll_interval_ms` | Daemon route check interval (default `3000`) |
+| `switch_delay_ms` | Delay after daemon switch before wake hooks (default `500`) |
+| `activity_idle_threshold_ms` | Idle time that counts as away before an idle-to-active trigger (default `60000`) |
+| `activity_poll_interval_ms` | Daemon idle-state sampling interval (default `1000`) |
+| `sony_speaker` | Wake SRS-ZR5 on `apply`, `picker`, daemon output switches, and daemon idle-to-active triggers using discovered ScalarWebAPI endpoint |
 
-Example:
+Minimal example:
 
 ```json
 {
@@ -160,9 +167,9 @@ Example:
 }
 ```
 
-`config.example.json` may include extra keys (`poll_interval_ms`, `match`, `exclude`, …) reserved for future daemon behavior; they are **ignored** by the current loader.
+`match`, `exclude`, and `logging` in `config.example.json` are reserved for future behavior and currently ignored by the loader.
 
-Sony ZR5 example: [`config.example.sony.json`](./config.example.sony.json). Other Sony Songpal / ScalarWebAPI speakers may also work; Rusty Jack only uses discovery plus `system.setPowerStatus`. If you confirm another model, please consider contributing device info to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal) using the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/).
+Sony ZR5 example: [`config.example.sony.json`](./config.example.sony.json). Other Sony Songpal / ScalarWebAPI speakers may also work; Rusty Jack discovers the advertised ScalarWebAPI endpoint and uses `system.getPowerStatus` / `system.setPowerStatus`. If you confirm another model, please consider contributing device info to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal) using the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/).
 
 ---
 
@@ -191,11 +198,38 @@ Plist template: [`launchd/com.example.rusty-jack.plist.template`](./launchd/com.
 
 | Command | Effect |
 |---------|--------|
+| `disable` | Stop, disable, **delete plist** |
+| `install` | Write plist for the current binary, enable, and start |
 | `pause` | `bootout` + `disable`; plist **kept** |
 | `resume` | `enable` + `bootstrap` |
-| `disable` | Stop, disable, **delete plist** |
+| `uninstall` | Same daemon uninstall behavior as `disable` |
+| `upgrade` | Rewrite plist for the current binary path and restart |
 
-The background `daemon` loop is not implemented yet; install the plist only when that lands.
+`daemon` runs in the current user session and reloads config before each scheduled poll. The LaunchAgent is per-user: each macOS login account that wants auto-routing installs its own plist under `~/Library/LaunchAgents`, with its own config and logs. Two users can install it at the same time because each job lives in a separate `gui/<uid>` launchd domain.
+
+### Install the LaunchAgent
+
+```bash
+make install
+rusty-jack install
+```
+
+`install` renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
+
+Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` (or `disable`) to stop it and remove the plist. Uninstall leaves your config and logs in place.
+
+### Update the daemon
+
+When a new Rusty Jack version is available, stop the running job before replacing the binary, then start it again:
+
+```bash
+rusty-jack pause
+git pull
+make install
+rusty-jack upgrade
+```
+
+`upgrade` does not download or build Rusty Jack. It refreshes the LaunchAgent to whichever `rusty-jack` binary is running the command, then restarts the daemon.
 
 ---
 
@@ -272,28 +306,26 @@ See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 
 ## Roadmap
 
-| Phase | Work |
-|-------|------|
-| **Now** | Routing CLI, eqMac integration, volume retries |
-| **Next** | `daemon` + launchd auto-switch |
-| **Phase 7** | Own virtual driver + software volume |
-| **Phase 8** | Sony SRS-ZR5 wake on keyboard/mouse activity |
+| Area | Status |
+|------|--------|
+| Routing CLI, eqMac integration, volume retries, daemon polling | Implemented |
+| Sony speaker wake via ScalarWebAPI + daemon idle polling | Implemented |
+| LaunchAgent status helper | Planned |
+| Native event listener refinements for activity detection | Planned |
+| Own virtual driver + software volume | Planned |
 
 Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 
 ---
 
-## Install via Homebrew (planned)
+## Packaging (planned)
 
-```bash
-brew install rusty-jack   # from your tap
-rusty-jack agent install  # when agent install ships
-```
-
-Formula sketch: [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
+Homebrew packaging is not shipped yet. Until then, use `make install` and the manual per-user LaunchAgent flow above. Formula sketch: [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
 
 ---
 
 ## License
+
+Copyright (c) 2026 Henrique Andrade / thehcma.
 
 MIT

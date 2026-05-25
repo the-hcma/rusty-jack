@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Common issues when using Rusty Jack on macOS with HDMI/DP monitors and eqMac.
+Common issues when using Rusty Jack on macOS with HDMI/DP monitors, eqMac, launchd, and Sony speaker wake support.
 
 ## Volume keys do nothing on the monitor
 
@@ -75,14 +75,59 @@ Normal. Built-in has CoreAudio volume control. HDMI needs eqMac (interim) or Pha
 
 ---
 
+## Daemon is not switching outputs
+
+1. Run `rusty-jack status` and confirm the daemon block says `running`, and the config path and preferred device match what you expect.
+2. Check `auto_switch`; if it is `false`, the daemon stays alive but does not enforce policy.
+3. Confirm the LaunchAgent is running:
+
+```bash
+launchctl print "gui/$(id -u)/com.example.rusty-jack"
+```
+
+4. Check logs:
+
+```bash
+tail -n 100 "$HOME/Library/Logs/rusty-jack.stderr.log"
+tail -n 100 "$HOME/Library/Logs/rusty-jack.stdout.log"
+```
+
+---
+
+## Sony speaker does not wake
+
+1. Confirm the selected Mac output matches `sony_speaker.mac_output`.
+2. Confirm the speaker is reachable by hostname/IP and has Quick Start-Up enabled.
+3. Run `rusty-jack picker` and look for the Sony power-state note on the configured output.
+4. Check daemon logs for `speaker wake error` or discovery warnings.
+
+Rusty Jack uses Sony ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
+
+---
+
 ## `disable` vs `pause`
 
 | Command | Use when |
 |---------|----------|
+| `disable` / `uninstall` | Removing rusty-jack from launchd entirely |
 | `pause` | Temporarily stop auto-routing; you will `resume` later |
-| `disable` | Removing rusty-jack from launchd entirely |
 
 Neither stops eqMac — manage eqMac separately in System Settings or its app.
+
+---
+
+## Daemon still runs the old version after update
+
+Pause the LaunchAgent before replacing the binary, then resume it:
+
+```bash
+rusty-jack pause
+git pull
+make install
+rusty-jack upgrade
+```
+
+If `rusty-jack --help` shows the new version but the daemon logs do not, the plist may point at an old binary path. Run `rusty-jack upgrade` to regenerate `~/Library/LaunchAgents/com.example.rusty-jack.plist` and restart the daemon.
 
 ---
 
@@ -117,3 +162,7 @@ Hardware-specific tests are `#[ignore]`; eqMac HAL test skips when driver not in
 3. Note macOS version, eqMac version, and whether eqMac app is running.
 
 File issues: [github.com/thehcma/rusty-jack](https://github.com/thehcma/rusty-jack/issues).
+
+---
+
+Copyright (c) 2026 Henrique Andrade / thehcma.

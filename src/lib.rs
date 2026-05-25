@@ -1,10 +1,12 @@
 //! Rusty Jack — macOS HDMI output router.
 
+pub mod activity;
 pub mod apply;
 pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod coreaudio;
+pub mod daemon;
 pub mod device_select;
 pub mod display;
 pub mod eqmac;
@@ -32,9 +34,15 @@ pub use error::RustyJackError;
 pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
     match cli.command {
         cli::Commands::Disable(args) => commands::disable::run(args.json)?,
+        cli::Commands::Install(args) => commands::install::run(args.json)?,
         cli::Commands::Pause(args) => commands::pause::run(args.json)?,
         cli::Commands::Resume(args) => commands::resume::run(args.json)?,
-        cli::Commands::Daemon => anyhow::bail!("daemon is not implemented yet"),
+        cli::Commands::Uninstall(args) => commands::disable::run(args.json)?,
+        cli::Commands::Upgrade(args) => commands::upgrade::run(args.json)?,
+        cli::Commands::Daemon => {
+            let hal = coreaudio::platform_hal()?;
+            commands::daemon::run(hal.as_ref(), cli.config.as_deref())?;
+        }
         cli::Commands::List(args) => {
             let hal = coreaudio::platform_hal()?;
             commands::list::run(hal.as_ref(), args.hdmi, args.json)?;

@@ -1,6 +1,10 @@
 {
   "version": 1,
   "auto_switch": true,
+  "poll_interval_ms": 3000,
+  "switch_delay_ms": 500,
+  "activity_idle_threshold_ms": 60000,
+  "activity_poll_interval_ms": 1000,
   "preferred_device": {
     "monitor_name": "DELL U3219Q"
   },

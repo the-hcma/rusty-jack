@@ -29,6 +29,8 @@ pub enum Commands {
     Daemon,
     /// Uninstall the launchd LaunchAgent (stop, disable, remove plist)
     Disable(DisableArgs),
+    /// Install and start the launchd LaunchAgent for this user
+    Install(InstallArgs),
     /// List audio output devices
     List(ListArgs),
     /// Pause the daemon (stop auto-routing; keeps LaunchAgent installed)
@@ -39,6 +41,10 @@ pub enum Commands {
     Resume(ResumeArgs),
     /// Show current default output and policy status
     Status(StatusArgs),
+    /// Uninstall the launchd LaunchAgent (alias for disable)
+    Uninstall(UninstallArgs),
+    /// Refresh the LaunchAgent to the current binary and restart it
+    Upgrade(UpgradeArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -78,6 +84,13 @@ pub struct DisableArgs {
 }
 
 #[derive(Parser, Debug)]
+pub struct InstallArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
 pub struct PauseArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
@@ -93,6 +106,20 @@ pub struct ResumeArgs {
 
 #[derive(Parser, Debug)]
 pub struct StatusArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct UninstallArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct UpgradeArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
     pub json: bool,
@@ -137,6 +164,14 @@ mod tests {
             "help should include version+commit: {help}"
         );
         assert!(help.starts_with("rusty-jack"));
+    }
+
+    #[test]
+    fn test_help_shows_copyright() {
+        use clap::CommandFactory;
+
+        let help = Cli::command().render_help().to_string();
+        assert!(help.contains(crate::version::COPYRIGHT));
     }
 
     #[test]
@@ -194,6 +229,15 @@ mod tests {
     }
 
     #[test]
+    fn test_install_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "install", "--json"]).unwrap();
+        match cli.command {
+            Commands::Install(args) => assert!(args.json),
+            _ => panic!("expected install"),
+        }
+    }
+
+    #[test]
     fn test_resume_json_flag() {
         let cli = Cli::try_parse_from(["rusty-jack", "resume", "--json"]).unwrap();
         match cli.command {
@@ -208,6 +252,24 @@ mod tests {
         match cli.command {
             Commands::Picker(args) => assert_eq!(args.index, Some(2)),
             _ => panic!("expected picker"),
+        }
+    }
+
+    #[test]
+    fn test_uninstall_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "uninstall", "--json"]).unwrap();
+        match cli.command {
+            Commands::Uninstall(args) => assert!(args.json),
+            _ => panic!("expected uninstall"),
+        }
+    }
+
+    #[test]
+    fn test_upgrade_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "upgrade", "--json"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => assert!(args.json),
+            _ => panic!("expected upgrade"),
         }
     }
 

@@ -1,8 +1,26 @@
 # Rusty Jack — Implementation Plan
 
-**Rusty Jack** is a macOS **command-line daemon** (no GUI) that makes **hardware volume keys work** when system audio is routed to an **HDMI, DisplayPort, or dock** output — the same core problem [eqMac](https://github.com/bitgapp/eqMac) solves, without the menu bar app, EQ, or per-app mixer. It lists available external outputs, keeps routing policy-driven, runs under **launchd**, and uses JSON configuration. Written in **Rust**. Installable via **Homebrew** (see [README.md](./README.md)).
+**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured Sony Songpal / ScalarWebAPI speakers. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the software volume layer; the native virtual driver described below remains future work.
 
 This plan is based on investigation of the open-source [eqMac v1.3.2](https://github.com/bitgapp/eqMac) tree (`native/app`, `native/driver`, `native/shared`) and comparable tools ([audio-priority-cli](https://github.com/mateusbadalotti/audio-priority-cli-macos), [audioswitch](https://github.com/retrography/audioswitch)).
+
+---
+
+## Current implementation status
+
+This document mixes shipped architecture and roadmap notes. For the exact user-facing command reference, use [docs/USAGE.md](./docs/USAGE.md).
+
+| Area | Current status |
+|------|----------------|
+| Device listing and policy status | Implemented: `list`, `list --hdmi`, `status` |
+| One-shot routing | Implemented: `apply` with preferred/fallback selection |
+| Manual selection | Implemented: `picker`, `picker --index N`, Sony power notes |
+| eqMac integration | Implemented: launch when installed, warn with https://eqmac.app when missing |
+| Config volume | Implemented on real switches with retry/readback |
+| Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
+| LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`; status helper remains planned |
+| Sony wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
+| Native HDMI/DP software volume without eqMac | Planned: virtual AudioServerPlugIn + passthrough |
 
 ---
 
@@ -34,11 +52,11 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 |------|--------|
 | **Volume keys control audible level on HDMI/DP** | Primary outcome — same class of fix as eqMac |
 | **Route to chosen external output** | Required companion: user picks which monitor/dock |
-| **Wake Sony speakers on user activity** | When line-out is the active/preferred output and **mouse or keyboard activity** is detected, call Sony **ScalarWebAPI** (`system.setPowerStatus`) to wake an **SRS-ZR5** on the LAN — see §1.1 |
+| **Wake Sony speakers on user activity** | When line-out is the active/preferred output and daemon idle polling detects the Mac went idle then active, call Sony **ScalarWebAPI** (`system.setPowerStatus`) to wake an **SRS-ZR5** on the LAN — see §1.1 |
 | **No GUI, launchd-friendly, JSON config** | Deliberate simplification vs eqMac |
 | **No EQ, booster, or per-app mixer in v1** | Out of scope unless explicitly added later |
 
-**Phased delivery:** Phases 1–6 (below) build **enumeration, routing, config, and daemon** — necessary infrastructure, but **insufficient alone** for working volume keys. **Phase 7+** adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down). Document this clearly so “default output switching only” is not mistaken for the finished product.
+**Phased delivery:** Enumeration, routing, config, daemon polling, LaunchAgent controls, eqMac integration, and Sony wake support are implemented. A future phase adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can eventually provide HDMI/DP volume-key support without eqMac.
 
 ---
 
@@ -48,21 +66,21 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 
 | Requirement | Approach |
 |-------------|----------|
-| **Volume keys work on HDMI/DP output** | Virtual HAL device as system default + **software volume** in daemon (eqMac-style passthrough); see §0 and Phase 7 |
+| **Volume keys work on HDMI/DP output** | Today: eqMac integration. Future: Rusty Jack virtual HAL device as system default + **software volume** in daemon (eqMac-style passthrough); see §0 and Phase 7 |
 | Redirect system sound to HDMI/DP | Set macOS **default output device** via CoreAudio HAL (`kAudioHardwarePropertyDefaultOutputDevice`); virtual device becomes default once driver exists |
 | List HDMI outputs | Enumerate output devices; filter by **transport type** and/or UID/name rules |
-| launchd integration | Ship a **LaunchAgent** plist + `install-agent` / `uninstall-agent` CLI |
-| Periodic inspection + auto-switch | **Property listeners** (event-driven) + **polling fallback** (covers wake/clamshell cases eqMac misses) |
+| launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, and `upgrade`; status helper remains planned |
+| Periodic inspection + auto-switch | Shipped polling daemon with config reload; property listeners remain future refinement |
 | JSON configuration | `~/.config/rusty-jack/config.json` (path overridable) |
-| Homebrew distribution | Native binary via personal tap → optional homebrew-core |
-| **Clean uninstall** | `rusty-jack uninstall` stops agent, removes plist, optional config/logs; Brew `uninstall` hook |
+| Homebrew distribution | Planned; current install path is `make install` |
+| **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent and removes the plist; config/log purge is future work |
 | **Intel + Apple Silicon** | Cross-compile both targets; release **universal** binary + per-arch Homebrew bottles |
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
 | Rust + best-practice tooling | `rustfmt`, `clippy` (deny warnings in CI), optional `cargo-deny` / `cargo-audit` |
 | **Unit tests per component** | Every module has `#[cfg(test)]` coverage; CI runs `cargo test` on macOS; CoreAudio behind traits for mocks |
-| **Sony SRS-ZR5 wake on user input** | Map Mac **line-out** UID to ScalarWebAPI endpoint; wake on mouse/keyboard activity via native Rust HTTP client; see §1.1 |
+| **Sony SRS-ZR5 wake on user input** | Map Mac **line-out** UID to ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI client; see §1.1 |
 
-### 1.1 Sony SRS-ZR5 wake-on-user-activity (planned)
+### 1.1 Sony SRS-ZR5 wake-on-user-activity (implemented with polling)
 
 #### Problem
 
@@ -73,7 +91,7 @@ A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or 
 1. User configures rusty-jack with:
    - **`preferred_device_uid`** (or equivalent) = the Mac **Built-in Output / line-out** CoreAudio device that feeds the SRS-ZR5.
    - **`sony_speaker`** block = ScalarWebAPI endpoint + model hint for the ZR5 on the LAN.
-2. Daemon monitors **user input activity** — **keyboard** (any key down) and/or **mouse** (move, click, scroll) via a macOS event tap.
+2. Daemon samples macOS HID idle time and treats idle-to-active transitions as user activity. Native event taps remain a possible refinement.
 3. When **both** are true:
    - active or preferred output is the configured line-out UID (or policy has just switched to it), **and**
    - a configured input-activity event occurred (keyboard and/or mouse, per `triggers`),
@@ -81,37 +99,37 @@ A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or 
 
 #### Reference: Sony ScalarWebAPI (Rust-native client)
 
-[python-songpal](https://github.com/rytilahti/python-songpal) is a **protocol reference only** — we do **not** depend on Python, pip, or the `songpal` CLI at runtime. rusty-jack speaks the same HTTP JSON API directly. If another Sony Songpal / ScalarWebAPI speaker works, users should consider contributing a device info file upstream; the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) includes the `songpal dump-devinfo` helper.
+[python-songpal](https://github.com/rytilahti/python-songpal) is a **protocol reference only** — we do **not** depend on Python, pip, or the `songpal` CLI at runtime. rusty-jack speaks ScalarWebAPI directly. If another Sony Songpal / ScalarWebAPI speaker works, users should consider contributing a device info file upstream; the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) includes the `songpal dump-devinfo` helper.
 
 | Topic | Detail |
 |-------|--------|
-| Protocol | Sony **ScalarWebAPI** (“Audio Control API” / Songpal) — JSON-RPC-style POST bodies over **`xhrpost:jsonizer`** (plain HTTP POST) |
-| Base URL | `http://<speaker-ip>:10000/sony` (typical for SRS-ZR5; user configures or discovers) |
+| Protocol | Sony **ScalarWebAPI** (“Audio Control API” / Songpal) — JSON-RPC-style calls over WebSocket with HTTP fallback |
+| Base URL | Discovered via SSDP/UPnP `X_ScalarWebAPI_BaseURL` when possible; configured `host` / `port` / `path` is fallback |
 | Guide endpoint | `{base}/guide` — bootstrap: `getSupportedApiInfo` lists services (`system`, `audio`, `avContent`, …) |
 | Service endpoint | `{base}/{service}` — e.g. `http://192.168.1.42:10000/sony/system` |
-| Request shape | `{"method":"<name>","params":[{...}],"id":<n>,"version":"1.0"}` with `Content-Type: application/json` |
+| Request shape | `{"method":"<name>","params":[{...}],"id":<n>,"version":"1.1"}` |
 | Method discovery | POST `getMethodTypes` with `params: [""]` on each service URL (see python-songpal `Service.fetch_signatures`) |
-| **Wake (Phase 8 minimum)** | `system.setPowerStatus` with `params: [{"status":"active"}]` |
-| **Status (optional)** | `system.getPowerStatus` — skip wake if already active; log standby vs off |
-| WebSocket | Used by python-songpal for push notifications (`notifyPowerStatus`, etc.) — **optional later** in Rust; not required for wake-on-user-activity |
+| **Wake** | `system.setPowerStatus` with `params: [{"status":"active"}]` |
+| **Status** | `system.getPowerStatus` is used for picker notes and wake messages |
+| WebSocket | Implemented for ScalarWebAPI calls, with HTTP POST fallback |
 | SRS-ZR5 | Listed as officially supported by Sony’s Songpal / Home Assistant integration |
 | Power on | **`Quick Start-Up`** must be enabled on the speaker for network wake from standby; cold power-off may need **Wake-on-LAN** (future; MAC from `getSystemInformation`) |
-| Rust deps | `reqwest` (+ `serde_json`) for HTTP; mock with `wiremock` or httptest in unit tests |
-| Isolation | `SpeakerWake` trait + `ScalarWebClient` + `MockSpeakerWake`; no LAN I/O in default unit tests |
+| Rust deps | `tungstenite` for WebSocket plus standard TCP/UDP networking and `serde_json` |
+| Isolation | Unit tests cover parsing, filtering, and formatting; LAN I/O is skipped unless a configured Sony speaker is actually targeted |
 
 ##### ScalarWebAPI call flow (wake)
 
 ```text
-1. POST {endpoint}/guide
-   {"method":"getSupportedApiInfo","params":[{}],"id":1,"version":"1.0"}
+1. Call {endpoint}/guide
+   {"method":"getSupportedApiInfo","params":[{}],"id":1,"version":"1.1"}
    → confirms "system" service exists
 
-2. POST {endpoint}/system
-   {"method":"getPowerStatus","params":[{}],"id":2,"version":"1.0"}
-   → if already "active", no-op (respect debounce)
+2. Call {endpoint}/system
+   {"method":"getPowerStatus","params":[{}],"id":2,"version":"1.1"}
+   → annotate current state and avoid noisy wake attempts via debounce
 
-3. POST {endpoint}/system
-   {"method":"setPowerStatus","params":[{"status":"active"}],"id":3,"version":"1.0"}
+3. Call {endpoint}/system
+   {"method":"setPowerStatus","params":[{"status":"active"}],"id":3,"version":"1.1"}
    → wake from standby
 ```
 
@@ -120,22 +138,15 @@ Example (curl):
 ```bash
 curl -s -X POST "http://192.168.1.42:10000/sony/system" \
   -H "Content-Type: application/json" \
-  -d '{"method":"setPowerStatus","params":[{"status":"active"}],"id":1,"version":"1.0"}'
+  -d '{"method":"setPowerStatus","params":[{"status":"active"}],"id":1,"version":"1.1"}'
 ```
 
-##### Rust module layout (planned)
+##### Rust module layout (current)
 
 ```text
-src/sony/
-  mod.rs
-  scalar_api.rs    # HTTP transport, request envelope, error mapping
-  power.rs         # getPowerStatus / setPowerStatus
-  discover.rs      # optional SSDP/UPnP endpoint discovery (Phase 8.1)
-  traits.rs        # SpeakerWake trait
-src/activity/
-  mod.rs
-  macos.rs         # CGEventTap: keyboard + mouse activity (Phase 8)
-  traits.rs        # UserActivityMonitor trait + mock
+src/sony.rs        # discovery, service priming, power status, wake command
+src/activity.rs    # macOS HID idle-time sampling abstraction
+src/daemon.rs      # scheduled policy ticks and idle-to-active wake trigger
 ```
 
 **Non-goal:** shipping or invoking python-songpal, pip, or a Python interpreter.
@@ -156,12 +167,12 @@ flowchart LR
 
 | Trigger | Source | Notes |
 |---------|--------|-------|
-| `keyboard` | `CGEventTap` — `kCGEventKeyDown` (and optionally `kCGEventFlagsChanged` for modifiers) | Primary; any key press counts as “user at desk”; **do not log keycodes** |
-| `mouse` | `CGEventTap` — `kCGEventMouseMoved`, button down/up, scroll wheel | Wake on pointer motion, click, or scroll |
-| `output_selected` | `kAudioHardwarePropertyDefaultOutputDevice` → configured UID | Wake when output switches to line-out even without input yet |
+| `keyboard` | Daemon HID idle-time polling | Treated as activity when the Mac transitions from idle to active |
+| `mouse` | Daemon HID idle-time polling | Treated as activity when the Mac transitions from idle to active |
+| `output_selected` | `apply`, `picker`, or daemon route switch to configured UID | Wake when output switches to line-out even without input yet |
 | `debounce` | Timer in daemon | Avoid spamming the speaker API (e.g. 30–60 s cooldown while already awake) |
 
-**Permissions:** A global event tap requires **Accessibility** (System Settings → Privacy & Security → Accessibility). Document clearly. The tap observes **event types only** for wake gating — not keystroke logging or screen recording.
+**Permissions:** Current idle-time polling does not require Accessibility permission. If a future native event tap is added, it should observe event types only for wake gating — not keystroke logging or screen recording.
 
 #### Configuration sketch (see `config.example.sony.json`)
 
@@ -191,9 +202,9 @@ flowchart LR
 - Replacing the Sony app for everyday control.
 - Waking speakers when line-out is **not** the active/preferred output.
 
-#### Phase
+#### Status
 
-**Phase 8** (after daemon + config exist — Phase 4+); can ship **before** Phase 7 virtual driver if line-out routing alone is enough for the ZR5 use case.
+Implemented with daemon idle polling and output-selection hooks. Native event taps and a dedicated `sony discover` helper remain optional refinements.
 
 ### Non-goals (for v1)
 
@@ -313,10 +324,10 @@ flowchart LR
 
 **Single binary**, two modes:
 
-1. **Foreground / one-shot CLI** — `list`, `status`, `set`, `apply`, `install-agent`, etc.
+1. **Foreground / one-shot CLI** — `list`, `status`, `apply`, `picker`, `install`, `pause`, `resume`, `uninstall`, `upgrade`, etc.
 2. **Daemon mode** — `rusty-jack daemon` (long-running; used by launchd)
 
-**Phase 1–6:** HAL-only binary (enumerate + route to physical device). **Phase 7+:** daemon also hosts **passthrough + software volume** once the virtual driver is installed; system default becomes the Rusty Jack virtual device.
+**Current:** HAL-only binary enumerates and routes to physical devices, with eqMac as the optional software volume layer. **Future driver work:** daemon also hosts **passthrough + software volume** once the virtual driver is installed; system default becomes the Rusty Jack virtual device.
 
 ### 3.2 Crate layout
 
@@ -331,7 +342,7 @@ rusty-jack/
 ├── IMPLEMENTATION_PLAN.md         # this file
 ├── config.example.json
 ├── .cargo/config.toml             # MACOSX_DEPLOYMENT_TARGET=12.0
-├── scripts/build-universal.sh     # aarch64 + x86_64 → lipo
+├── scripts/build-universal        # aarch64 + x86_64 → lipo
 ├── packaging/homebrew/rusty-jack.rb
 ├── launchd/
 │   └── com.example.rusty-jack.plist.template
@@ -347,18 +358,10 @@ rusty-jack/
 │   │   listener.rs                # property listeners + run loop integration
 │   │   sys.rs                     # unsafe FFI wrappers (thin)
 │   ├── policy.rs                  # “should switch?” + target selection
-│   ├── sony/                      # Phase 8: ScalarWebAPI client (SRS-ZR5 wake)
-│   │   mod.rs
-│   │   scalar_api.rs
-│   │   power.rs
-│   │   discover.rs
-│   │   traits.rs
-│   ├── activity/                  # Phase 8: keyboard + mouse activity monitor
-│   │   mod.rs
-│   │   macos.rs
-│   │   traits.rs
+│   ├── sony.rs                    # ScalarWebAPI client (SRS-ZR5 wake)
+│   ├── activity.rs                # HID idle-time activity monitor
 │   ├── daemon.rs                  # main loop, poll, wake handling
-│   ├── launchd.rs                 # install/uninstall agent plist
+│   ├── launchd.rs                 # install/pause/resume/uninstall/upgrade LaunchAgent helpers
 │   └── cli.rs                     # clap parsing (testable without main)
 └── tests/
     ├── cli_integration.rs         # optional: assert_cmd end-to-end
@@ -377,9 +380,8 @@ Each `src/*.rs` and `src/coreaudio/*.rs` module includes a `#[cfg(test)] mod tes
 | `thiserror`, `anyhow` | Errors (`thiserror` in library, `anyhow` in binary) |
 | `tracing`, `tracing-subscriber` | Structured logs (JSON or pretty in foreground) |
 | `directories` | Default config path under `~/.config` |
-| `reqwest` | Phase 8: Sony ScalarWebAPI HTTP client (blocking or async) |
-| `core-graphics` | Phase 8: `CGEventTapCreate` for keyboard/mouse activity monitor |
-| `ctrlc` | Graceful shutdown in daemon mode |
+| `tungstenite` | Sony ScalarWebAPI WebSocket calls |
+| `ctrlc` | Future graceful shutdown in daemon mode |
 
 **Dev-dependencies (tests):**
 
@@ -388,7 +390,7 @@ Each `src/*.rs` and `src/coreaudio/*.rs` module includes a `#[cfg(test)] mod tes
 | `tempfile` | Isolated config/state/plist paths in unit tests |
 | `pretty_assertions` | Readable diffs for policy/plist golden tests |
 | `assert_cmd` / `predicates` | Optional CLI integration tests in `tests/` |
-| `wiremock` | Phase 8: mock ScalarWebAPI HTTP responses in unit tests |
+| `wiremock` | Future network fixtures if Sony HTTP/WebSocket tests grow |
 | `serial_test` | Optional: serialize tests that touch global HAL mocks |
 
 **macOS-only:** gate with `cfg(target_os = "macos")` and fail compile on other targets with a clear message.
@@ -522,42 +524,37 @@ Resolution order:
 2. `$HDMI_SOUND_CONTROLLER_CONFIG`
 3. `~/.config/rusty-jack/config.json`
 
-`config init` writes a starter file with commented JSON or separate `config.example.json` in repo.
+Starter configs currently live in `config.example.json` and `config.example.sony.json`.
 
 ---
 
-## 5. CLI specification
+## 5. Current CLI specification
 
 Binary name: **`rusty-jack`** (crate `rusty-jack`, `RUSTY_JACK_CONFIG` env override).
 
 | Subcommand | Description |
 |------------|-------------|
-| `list` | Print output devices (table: index, uid, name, transport, alive, default marker) |
-| `list --hdmi` | Only HDMI-matched transports |
-| `status` | Current default output + whether it matches policy |
-| `set <uid\|index>` | One-shot switch default output |
-| `apply` | Apply policy once (useful for scripts) |
-| `daemon` | Run supervisor loop (launchd invokes this) |
-| `config init` | Write example config |
-| `config validate` | Parse and validate JSON |
-| `agent install` | Copy plist to `~/Library/LaunchAgents/`, `launchctl bootstrap` |
-| `agent uninstall` | Stop job (`bootout`), remove plist only |
-| `agent status` | Whether job is loaded |
-| **`uninstall`** | **Full cleanup** (see §8): agent + optional config/state/logs + optional audio restore |
+| `apply` | Apply policy once from config |
+| `daemon` | Run the long-lived polling supervisor loop |
+| `disable` | Stop, disable, and remove the per-user LaunchAgent plist |
+| `install` | Render, enable, and bootstrap the per-user LaunchAgent for the current binary |
+| `list` | Print output devices (`--hdmi`, `--json`) |
+| `pause` | Stop and disable the LaunchAgent while keeping the plist |
+| `picker` | Interactive picker or scripted `--index N` route switch |
+| `resume` | Re-enable and bootstrap an installed LaunchAgent |
+| `status` | Current default output, virtual default info, policy match, and volume |
+| `uninstall` | Remove the per-user LaunchAgent plist (same daemon behavior as `disable`) |
+| `upgrade` | Rewrite the plist for the current binary path and restart the LaunchAgent |
 
-**Global flags:** `--config`, `-v` / `--verbose`, `--json` for machine-readable `list`/`status`.
+**Global flags:** `--config PATH`. Subcommands with JSON support expose `--json`.
 
-### `uninstall` flags
+### Planned CLI helpers
 
-| Flag | Default | Effect |
-|------|---------|--------|
-| `--purge` | off | Remove config, state dir, and log files |
-| `--keep-config` | off | Keep `~/.config/rusty-jack/` (mutually exclusive with `--purge`) |
-| `--restore-audio` | on | Restore default output UID saved before first switch (if state exists) |
-| `--no-restore-audio` | — | Leave current system output unchanged |
-| `-y` / `--yes` | off | Non-interactive (for Homebrew `uninstall` hook) |
-
-Idempotent: safe to run twice; second run reports “nothing to do” where appropriate.
+| Planned helper | Purpose |
+|----------------|---------|
+| LaunchAgent status | Report loaded state without manual `launchctl` commands |
+| Config init/validate | Generate starter config and validate config without running policy |
+| Full uninstall/purge | Optional config/log removal and audio restore orchestration |
 
 ### Example session
 
@@ -565,23 +562,22 @@ Idempotent: safe to run twice; second run reports “nothing to do” where appr
 # Discover devices
 rusty-jack list --hdmi
 
-# Set preferred UID in config, then
-rusty-jack config init
+# Copy and edit a starter config, then
+cp config.example.json ~/.config/rusty-jack/config.json
 $EDITOR ~/.config/rusty-jack/config.json
 
 # Test once
 rusty-jack apply
 
-# Install background service
-rusty-jack agent install
-rusty-jack agent status
+# Install the background service
+rusty-jack install
 
-# Or install the binary via Homebrew first
-brew install YOUR_USER/tap/rusty-jack
+# Temporarily stop or resume an installed LaunchAgent
+rusty-jack pause
+rusty-jack resume
 
-# Remove everything later
-rusty-jack uninstall --purge -y
-# or: brew uninstall rusty-jack   # formula calls uninstall hook
+# Remove the installed LaunchAgent plist later
+rusty-jack uninstall
 ```
 
 ---
@@ -650,7 +646,7 @@ lipo -create \
   -output target/release/rusty-jack-universal
 ```
 
-Provide `scripts/build-universal.sh` that runs both builds, `lipo`, and optional `codesign` (adhoc for local dev).
+Provide `scripts/build-universal` that runs both builds, `lipo`, and optional `codesign` (adhoc for local dev).
 
 ### CI (GitHub Actions)
 
@@ -671,13 +667,15 @@ Before each release, smoke-test on at least:
 - [ ] macOS 13+ **Apple Silicon**
 - [ ] macOS 14+ **Apple Silicon** (optional)
 
-Check: `list`, `apply`, `agent install` / `uninstall`, sleep/wake + HDMI dock.
+Check: `list`, `apply`, `install`, `pause`, `resume`, `uninstall`, `upgrade`, sleep/wake + HDMI dock.
 
 ---
 
-## 8. Homebrew distribution
+## 8. Packaging roadmap
 
 Rust compiles to a **native Mach-O binary** per architecture (`aarch64-apple-darwin`, `x86_64-apple-darwin`). Homebrew builds or bottles each arch separately; releases may also ship a **universal** tarball for manual install.
+
+Homebrew distribution is not shipped yet. Current local install uses `make install`; LaunchAgent installation is handled by `rusty-jack install`.
 
 ### Recommended path
 
@@ -691,26 +689,26 @@ Rust compiles to a **native Mach-O binary** per architecture (`aarch64-apple-dar
 ```bash
 brew install your/tap/rusty-jack
 rusty-jack list --hdmi
-rusty-jack config init
-rusty-jack agent install
+cp config.example.json ~/.config/rusty-jack/config.json
+rusty-jack install
 ```
 
-Homebrew puts the binary in `$(brew --prefix)/bin` (Apple Silicon: `/opt/homebrew/bin`). `agent install` should use `std::env::current_exe()` when writing the LaunchAgent plist.
+Homebrew puts the binary in `$(brew --prefix)/bin` (Apple Silicon: `/opt/homebrew/bin`). `rusty-jack install` uses `std::env::current_exe()` when writing the LaunchAgent plist.
 
 ### Clean uninstall from Homebrew
 
-The formula **must** invoke the CLI uninstall hook so no LaunchAgent or state is left behind:
+Once a full uninstall hook exists, the formula should invoke it so no LaunchAgent or state is left behind:
 
 ```ruby
 def uninstall
   # Non-interactive full cleanup when binary still exists
-  safe_system bin/"rusty-jack", "uninstall", "--yes", "--purge", "--no-restore-audio"
+  safe_system bin/"rusty-jack", "disable", "--json"
 end
 ```
 
-Use `--no-restore-audio` in the Brew hook to avoid surprising users who uninstalled the tool but changed outputs since install; document that `rusty-jack uninstall --restore-audio` is available for manual runs before removal.
+Current `uninstall` / `disable` removes only the per-user plist and leaves config/logs behind. Future purge support can remove config/state/logs explicitly.
 
-Optional: print caveats on `brew install` reminding users to run `rusty-jack agent install` after install.
+Optional: print caveats on `brew install` reminding users to run `rusty-jack install` after install.
 
 ### Notarization
 
@@ -718,14 +716,14 @@ Not required for typical Homebrew installs. Notarize only if you also ship a sta
 
 ---
 
-## 9. Clean uninstall (design)
+## 9. Clean uninstall (current + design)
 
-Uninstall must leave the Mac in a predictable state — no orphaned launchd job, no stale plists, no silent background process.
+Uninstall must leave the Mac in a predictable state — no orphaned launchd job, no stale plists, no silent background process. Current shipped behavior is `rusty-jack uninstall` / `disable`, which stops/disables the per-user job and removes the plist. Config/log purge and audio restore are future design items.
 
 ### What gets removed
 
-| Component | `agent uninstall` | `uninstall` (default) | `uninstall --purge` |
-|-----------|-------------------|------------------------|---------------------|
+| Component | `uninstall` / `disable` today | future full uninstall | future purge |
+|-----------|-----------------|-----------------------|--------------|
 | `launchctl bootout` + stop daemon | yes | yes | yes |
 | `~/Library/LaunchAgents/com.*.rusty-jack.plist` | yes | yes | yes |
 | `~/.config/rusty-jack/` | no | no | yes |
@@ -808,13 +806,13 @@ Path: `~/Library/LaunchAgents/com.<reverse-domain>.rusty-jack.plist`
 </plist>
 ```
 
-`agent install` should:
+Current `install`:
 
 1. Resolve absolute path to the binary (`std::env::current_exe` at install time).
 2. Substitute user home for log paths.
 3. Run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/....plist` (macOS 12+).
 
-`agent uninstall` runs `launchctl bootout gui/$(id -u) <label>` then deletes the plist.
+Current `uninstall` / `disable` runs launchd stop/disable actions and deletes the plist.
 
 ### 10.2 Permissions
 
@@ -920,40 +918,41 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 
 ### Phase 2 — Write path (1 day)
 
-- [ ] `set` / `apply` — set default output (+ optional system output)
-- [ ] Manual hardware smoke test (not unit tests)
-- [ ] **Tests:** `default_output.rs` — set default calls mock once, handles errors; save pre-install UID on first switch
+- [x] `apply` — set default output (+ optional system output)
+- [x] Manual hardware smoke test (not unit tests)
+- [x] **Tests:** CoreAudio/default-output and mock HAL coverage for set default behavior
 
 ### Phase 3 — Config + policy (1 day)
 
-- [ ] JSON config load/validate
-- [ ] `config init` / `config validate`
-- [ ] Policy engine + `apply` respects `preferred_device_uid` / fallbacks
-- [ ] **Tests:** `config.rs` — round-trip, missing fields, invalid JSON, path resolution; `policy.rs` — table-driven cases (preferred present/absent, fallbacks, allowlist, `auto_switch: false`)
+- [x] JSON config load/validate
+- [ ] `config init` / `config validate` helpers
+- [x] Policy engine + `apply` respects `preferred_device`, legacy `preferred_device_uid`, and fallbacks
+- [x] **Tests:** `config.rs`, `policy.rs`, command smoke tests
 
 ### Phase 4 — Daemon + listeners + poll (2–3 days)
 
 - [ ] Property listeners + run loop thread
-- [ ] Poll timer with debounce (`switch_delay_ms`)
-- [ ] `daemon` subcommand; signal handling
-- [ ] Wake / relist heuristic (poll burst after `sleep` wake if detectable)
-- [ ] **Tests:** `daemon.rs` — debounce timing with mock clock; poll tick invokes policy; listener event → policy (channel injection); `coreaudio/listener.rs` — address registration logic with mock callback dispatch
+- [x] Poll timer with `poll_interval_ms`, `switch_delay_ms`, and config reload
+- [x] `daemon` subcommand
+- [x] Idle-to-active activity sampling for Sony wake triggers
+- [x] **Tests:** `daemon.rs` tick behavior, no-op suppression, activity transition, cooldown
 
 ### Phase 5 — launchd + uninstall (1 day)
 
-- [ ] Plist template + `agent install` / `agent uninstall` / `agent status`
-- [ ] Top-level `uninstall` with `--purge`, `--restore-audio`, `-y`
+- [x] Plist template + `install` / `pause` / `resume` / `disable` / `uninstall` / `upgrade`
+- [ ] LaunchAgent status helper
+- [ ] Full purge flow for config/log removal
 - [ ] State file `pre_install_default.json` on first switch
-- [ ] Homebrew formula `uninstall` hook calling `rusty-jack uninstall -y`
-- [ ] README: install / uninstall / troubleshooting
-- [ ] **Tests:** `launchd.rs` — plist render golden file, install paths, `bootout` idempotency (mock `Launchctl` trait); uninstall orchestration with temp dirs
+- [ ] Homebrew formula lifecycle hooks
+- [x] README/usage/troubleshooting: install / uninstall / upgrade flow
+- [x] **Tests:** `launchd.rs` path/result serialization and command wrappers
 
 ### Phase 6 — Hardening (1–2 days)
 
-- [ ] Edge cases: device unplugged, Bluetooth, aggregates
+- [x] Edge cases: device unplugged, aggregates, virtual non-speaker outputs
 - [ ] QA matrix: macOS 12 Intel, macOS 13+ ARM
-- [ ] `scripts/build-universal.sh` + release smoke test
-- [ ] **Tests:** fill gaps to meet coverage target; `tests/fixtures/` regression JSON; optional `assert_cmd` CLI tests
+- [x] `scripts/build-universal` + release target
+- [x] **Tests:** unit coverage and `assert_cmd` CLI help tests
 
 **Milestone after Phase 6:** Reliable **routing** to HDMI/DP — useful for testing and scripts, but **volume keys still broken** on typical external displays until Phase 7.
 
@@ -970,25 +969,26 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
 **Definition of done (Phase 7):** User selects HDMI/DP monitor; **F10/F11/F12 change audible volume**; `rusty-jack list` shows virtual + physical devices; clean uninstall restores pre-install audio stack.
 
-### Phase 8 — Sony SRS-ZR5 wake on user input activity (1–2 weeks)
+### Sony SRS-ZR5 wake on user input activity (implemented; refinements remain)
 
 Wake an **SRS-ZR5** when Mac **line-out** is the target output and the user shows **presence at the Mac** (mouse or keyboard activity). **Native Rust ScalarWebAPI client** — no Python.
 
-- [ ] Config block `sony_speaker` (§4.1) + validation
-- [ ] **`src/sony/scalar_api.rs`** — HTTP POST envelope, `getSupportedApiInfo`, per-service `call(method, params)`, error types
-- [ ] **`src/sony/power.rs`** — `getPowerStatus`, `setPowerStatus(status: active|off)`; skip wake if already active
-- [ ] **`SpeakerWake` trait** + `ScalarWebSpeakerWake` + **`MockSpeakerWake`** for tests
-- [ ] **`src/activity/macos.rs`** — `CGEventTap` for keyboard (`kCGEventKeyDown`) and mouse (move, click, scroll); `UserActivityMonitor` trait + mock
-- [ ] Hook into **daemon** policy loop: on `output_selected` when default switches to line-out
-- [ ] Debounce / status cache to limit LAN traffic
-- [ ] **`rusty-jack sony discover`** (Phase 8.1) — optional SSDP/UPnP endpoint discovery in Rust (reference: python-songpal discover)
-- [ ] **Tests:** wiremock/httptest fixtures for guide + system responses; wake only when UID + trigger match; debounce; no wake when HDMI is default; mock activity events without real event tap
+- [x] Config block `sony_speaker` (§4.1) + validation
+- [x] SSDP/UPnP endpoint discovery and configured endpoint fallback
+- [x] WebSocket ScalarWebAPI calls with HTTP POST fallback
+- [x] `getPowerStatus`, `setPowerStatus(status: active)`, service priming
+- [x] Picker power-state notes for configured Sony output
+- [x] Hook into `apply`, `picker`, and daemon output-selected flow
+- [x] Idle-to-active daemon trigger with `wake_debounce_ms`
+- [x] **Tests:** parsing, endpoint construction, trigger matching, selection filtering, wake message formatting
+- [ ] Native event tap refinement for lower-latency keyboard/mouse event detection
+- [ ] Optional `rusty-jack sony discover` helper
 
-**Definition of done (Phase 8):** Line-out configured as preferred; move mouse or press a key while ZR5 is in standby → Rust client POSTs `setPowerStatus` → speaker wakes; no Python installed; no wake when output is HDMI; Accessibility permission documented; Quick Start-Up documented.
+**Current definition of done:** Line-out configured as preferred; daemon observes idle-to-active transition while ZR5 is in standby → Rust client calls `setPowerStatus` → speaker wakes; no Python installed; no wake when output is not the configured Sony output; Quick Start-Up documented.
 
-**Future (Phase 8+):** WebSocket notifications (`notifyPowerStatus`); Wake-on-LAN from `getSystemInformation` MAC; input select on ZR5 if needed.
+**Future:** Wake-on-LAN from `getSystemInformation` MAC; input select on ZR5 if needed; native event tap if idle polling proves too coarse.
 
-**Total estimate:** ~9–12 days for Phases 0–6; **+2–4 weeks** for Phase 7; **+1–2 weeks** for Phase 8 (Rust ScalarWebAPI + input activity monitor).
+**Remaining estimate:** LaunchAgent helpers and packaging are small follow-up work; native virtual driver remains the largest remaining feature.
 
 **Definition of done (every phase):** feature code + unit tests for touched modules + green `cargo test`.
 
@@ -998,7 +998,7 @@ Wake an **SRS-ZR5** when Mac **line-out** is the target output and the user show
 
 | Feature | Complexity | Approach |
 |---------|------------|----------|
-| **Sony SRS-ZR5 wake on user input** | **Medium** | Phase 8 — native Rust ScalarWebAPI (`reqwest`) + `CGEventTap` activity monitor; see §1.1 |
+| Native event tap activity monitor | **Medium** | Optional refinement over the current daemon idle polling trigger |
 | EQ / “bass boost” | **Medium** | Extend passthrough pipeline (Phase 7) with DSP — eqMac uses `AVAudioEngine` for this |
 | Per-app routing | **High** | Prism-style virtual bus or Background Music fork |
 | Notarization / automated driver signing | **Medium** | Required for wide distribution of the virtual driver outside Homebrew |
@@ -1076,10 +1076,10 @@ Run on **`macos-13` or `macos-14` only** — rusty-jack targets macOS CoreAudio 
 | Scenario | Method |
 |----------|--------|
 | **Volume keys on HDMI/DP** | Phase 7: F10/F11/F12 change audible level with virtual driver installed |
-| **SRS-ZR5 wake on line-out** | Phase 8: line-out preferred + keyboard/mouse activity → Rust `setPowerStatus`; Quick Start-Up enabled |
-| Built-in ↔ HDMI | `set`, `apply`, `daemon` |
+| **SRS-ZR5 wake on line-out** | line-out preferred + daemon idle-to-active activity → Rust `setPowerStatus`; Quick Start-Up enabled |
+| Built-in ↔ HDMI | `apply`, `picker`, `daemon` |
 | Sleep/wake + dock | daemon poll after wake |
-| Uninstall | `uninstall`, `brew uninstall` — no orphan plist |
+| Uninstall | `uninstall` / `disable` — no orphan plist |
 | Cross-arch | x86_64 on Intel 12.x; arm64 on M-series |
 
 Record device UIDs from `list --json` into `tests/fixtures/` when adding regression cases.
@@ -1100,9 +1100,9 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 | Cross-compile link errors on CI | Pin deployment target; install both rustup targets; compile both in CI |
 | Uninstall leaves audio on HDMI | Default `--restore-audio`; document `--no-restore-audio` for Brew |
 | macOS 12 API drift | Test on darwin 21.x hardware; avoid macOS 15-only Swift APIs |
-| **SRS-ZR5 stays asleep on line-out** | Phase 8: ScalarWebAPI wake when `mac_output_uid` active + keyboard/mouse trigger |
-| Songpal wake fails (ZR5 asleep) | Enable **Quick Start-Up** on speaker; verify endpoint with `rusty-jack sony discover` or curl; debounce + log failures |
-| Input activity tap denied | Document Accessibility permission; fallback to `output_selected` trigger only |
+| **SRS-ZR5 stays asleep on line-out** | ScalarWebAPI wake when configured Mac output is active and `output_selected` or idle-to-active trigger fires |
+| Songpal wake fails (ZR5 asleep) | Enable **Quick Start-Up** on speaker; verify endpoint with `picker` power notes or curl; debounce + log failures |
+| Input activity polling is too coarse | Add native event tap refinement later; `output_selected` trigger works today |
 
 ---
 
@@ -1132,10 +1132,12 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 6. **`clippy -D warnings`** — keep codebase clean from day one.
 7. **macOS 12.0 minimum** — supports older Intel Macs (e.g. Monterey 12.7); no macOS 11 in v1.
 8. **Dual-target releases** — always ship `aarch64` + `x86_64` artifacts; optional universal via `lipo`.
-9. **Clean uninstall is first-class** — `uninstall` subcommand + Homebrew hook; state file enables audio restore.
+9. **Clean uninstall is first-class** — current `uninstall` / `disable` removes the per-user LaunchAgent plist; future purge/audio-restore helpers can build on this.
 10. **Unit tests per component** — no module merges without colocated tests; CoreAudio behind `AudioHal` mock.
-11. **Sony SRS-ZR5 wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake on **keyboard/mouse activity** via **native Rust HTTP client** (`system.setPowerStatus`); python-songpal is reference documentation only, not a runtime dependency.
+11. **Sony SRS-ZR5 wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI calls (`system.setPowerStatus`); python-songpal is reference documentation only, not a runtime dependency.
 
 ---
 
-*Document version: 1.6 — Phase 8: wake SRS-ZR5 on mouse/keyboard activity (not volume keys).*
+*Document version: 1.7 — current routing daemon, eqMac integration, LaunchAgent controls, and Sony wake support; native HDMI/DP virtual driver remains future work.*
+
+Copyright (c) 2026 Henrique Andrade / thehcma.

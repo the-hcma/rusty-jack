@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. For architecture and roadmap see [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md).
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and Sony ScalarWebAPI wake support. Native HDMI/DP volume without eqMac remains future driver work.
 
 ## Global options
 
@@ -24,47 +24,6 @@ Environment:
 
 ---
 
-## `list`
-
-Enumerate CoreAudio output devices.
-
-```bash
-rusty-jack list
-rusty-jack list --hdmi
-rusty-jack list --json
-```
-
-| Flag | Description |
-|------|-------------|
-| `--hdmi` | Only HDMI, DisplayPort, Thunderbolt, USB |
-| `--json` | `DeviceList` JSON |
-
-Table columns: **IDX**, **ACT** (`>` = active route), **ALIVE**, **TRANSPORT**, **DEVICE**, **MONITOR**, **UID**.
-
-Non-selectable devices (aggregates, some virtual apps) may appear dimmed when color is enabled.
-
----
-
-## `status`
-
-Snapshot of devices, virtual system default (eqMac footer when applicable), and policy evaluation.
-
-```bash
-rusty-jack status
-rusty-jack status --json
-rusty-jack status --config ~/.config/rusty-jack/config.json
-```
-
-Policy block fields (aligned columns):
-
-- `configured`, `config`, `monitor`, `preferred`, `active`, `matches`, `auto_switch`
-- `config volume`, `volume` (current effective %)
-- `note` (human-readable policy message)
-
-Config is optional for `status`; without it, policy reports “not configured”.
-
----
-
 ## `apply`
 
 One-shot apply of config policy: resolve preferred device (or fallback), ensure eqMac if HDMI-class, switch default output.
@@ -84,6 +43,108 @@ Requires valid config. Results:
 **Volume:** If `volume` is set in config, applied only when a switch occurs (not on `no_change`).
 
 **eqMac:** Started automatically when the target is HDMI-class and eqMac is installed but not running.
+
+---
+
+## `daemon`
+
+Long-running background supervisor used by launchd.
+
+```bash
+rusty-jack daemon
+rusty-jack --config ~/.config/rusty-jack/config.json daemon
+```
+
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the current default differs. No-op polls do not trigger Sony wake calls. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured Sony output is already selected, it sends a wake command subject to `sony_speaker.wake_debounce_ms`.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `auto_switch` | `true` | Master enable for daemon switching and activity wake behavior |
+| `poll_interval_ms` | `3000` | Scheduled route check interval |
+| `switch_delay_ms` | `500` | Delay after a daemon switch before wake hooks |
+| `activity_idle_threshold_ms` | `60000` | Idle duration that counts as away |
+| `activity_poll_interval_ms` | `1000` | How often the daemon samples macOS idle time |
+
+---
+
+## `disable` / `install` / `pause` / `resume` / `uninstall` / `upgrade`
+
+Control the per-user LaunchAgent `com.example.rusty-jack` (template in `launchd/`).
+
+```bash
+rusty-jack disable [--json]
+rusty-jack install [--json]
+rusty-jack pause [--json]
+rusty-jack resume [--json]
+rusty-jack uninstall [--json]
+rusty-jack upgrade [--json]
+```
+
+| Command | Plist | Agent |
+|---------|-------|-------|
+| `disable` | **Removed** | Stopped + disabled |
+| `install` | Written for current binary | Enabled + started |
+| `pause` | Kept | Stopped + disabled |
+| `resume` | Kept | Enabled + started |
+| `uninstall` | **Removed** | Stopped + disabled |
+| `upgrade` | Rewritten for current binary | Restarted |
+
+LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not system-wide. Each macOS account that wants auto-routing can install its own `~/Library/LaunchAgents/com.example.rusty-jack.plist`; the jobs do not conflict across users.
+
+### Install
+
+Install the binary, then let Rusty Jack render and load the LaunchAgent:
+
+```bash
+make install
+rusty-jack install
+```
+
+`install` writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
+
+### Pause, Resume, Uninstall
+
+```bash
+rusty-jack pause      # stop auto-routing; keep plist installed
+rusty-jack resume     # re-enable and start the plist
+rusty-jack uninstall  # stop, disable, and remove the plist
+```
+
+`disable` remains available and has the same daemon uninstall behavior as `uninstall`. Neither command deletes `~/.config/rusty-jack/config.json` or log files.
+
+### Update
+
+Replace the binary first, then refresh and restart the LaunchAgent:
+
+```bash
+rusty-jack pause
+git pull
+make install
+rusty-jack upgrade
+```
+
+`upgrade` does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable and restarts the daemon. If the daemon was not installed yet, `upgrade` installs it.
+
+---
+
+## `list`
+
+Enumerate CoreAudio output devices.
+
+```bash
+rusty-jack list
+rusty-jack list --hdmi
+rusty-jack list --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--hdmi` | Only HDMI, DisplayPort, Thunderbolt, USB |
+| `--json` | `DeviceList` JSON |
+
+Table columns: **IDX**, **ACT** (`>` = active route), **ALIVE**, **TRANSPORT**, **DEVICE**, **MONITOR**, **UID**.
+
+Non-selectable devices (aggregates, some virtual apps) may appear dimmed when color is enabled.
 
 ---
 
@@ -124,27 +185,29 @@ Press **Esc** to cancel without switching.
 
 ---
 
-## `pause` / `resume` / `disable`
+## `status`
 
-Control the LaunchAgent `com.example.rusty-jack` (template in `launchd/`).
+Snapshot of devices, virtual system default (eqMac footer when applicable), policy evaluation, and per-user LaunchAgent state.
 
 ```bash
-rusty-jack pause [--json]
-rusty-jack resume [--json]
-rusty-jack disable [--json]
+rusty-jack status
+rusty-jack status --json
+rusty-jack status --config ~/.config/rusty-jack/config.json
 ```
 
-| Command | Plist | Agent |
-|---------|-------|-------|
-| `pause` | Kept | Stopped + disabled |
-| `resume` | Kept | Enabled + started |
-| `disable` | **Removed** | Stopped + disabled |
+Policy block fields (aligned columns):
 
----
+- `configured`, `config`, `monitor`, `preferred`, `active`, `matches`, `auto_switch`
+- `config volume`, `volume` (current effective %)
+- `note` (human-readable policy message)
 
-## `daemon`
+Daemon block states:
 
-Reserved for the background supervisor. **Not implemented** — running it will error. Use `apply` manually until the daemon lands.
+- `running` — LaunchAgent plist exists and launchd reports the job loaded; PID is shown when available.
+- `paused` — plist exists but launchd does not currently have the job loaded.
+- `not_installed` — plist is not present under `~/Library/LaunchAgents`.
+
+Config is optional for `status`; without it, policy reports “not configured”.
 
 ---
 
@@ -180,15 +243,42 @@ Use **either** (or both; `preferred_device` wins when set):
 
 Array of UIDs tried in order when preferred is missing or not alive.
 
+### Daemon fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `auto_switch` | `true` | Enables daemon policy enforcement. When false, `daemon` keeps running but does not switch or activity-wake. |
+| `poll_interval_ms` | `3000` | Scheduled daemon policy check interval. Must be greater than zero. |
+| `switch_delay_ms` | `500` | Delay after daemon-initiated route switches before wake hooks run. |
+| `activity_idle_threshold_ms` | `60000` | Idle duration that must be reached before the next active sample counts as an idle-to-active transition. Must be greater than zero. |
+| `activity_poll_interval_ms` | `1000` | How often `daemon` samples macOS idle time between scheduled route checks. Must be greater than zero. |
+
 ### `volume`
 
 Integer 0–100. Applied on switch to preferred device only (`apply` / `picker` when preferred matches). Uses retry + readback for eqMac compatibility.
 
 ### `sony_speaker`
 
-Optional block for waking a Sony SRS-ZR5 or similar Songpal / ScalarWebAPI speaker. When enabled and `triggers` includes `output_selected`, `apply` and `picker` discover the speaker's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `sony_speaker.mac_output`. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. Keyboard/mouse activity triggers are still daemon work. See `config.example.sony.json`.
+Optional block for waking a Sony SRS-ZR5 or similar Songpal / ScalarWebAPI speaker. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the speaker's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `sony_speaker.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the speaker on idle-to-active transitions if that Mac output is already selected. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.sony.json`.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | Enables Sony wake integration. |
+| `model` | `SRS-ZR5` | Human-readable model hint for docs/logging. |
+| `host` | none | Hostname, FQDN, or IP used for discovery fallback and configured endpoint construction. Required when enabled. |
+| `port` | `10000` | Fallback ScalarWebAPI port when SSDP discovery is unavailable. |
+| `path` | `sony` | ScalarWebAPI base path. |
+| `mac_output` | none | Device selector for the Mac output connected to the speaker. Required when enabled. |
+| `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or daemon idle-to-active activity. |
+| `wake_debounce_ms` | `30000` | Minimum time between activity-triggered wake attempts. |
+| `request_timeout_ms` | `3000` | Network timeout for speaker requests. |
+| `require_quick_start` | `true` | Documents the expectation that Sony Quick Start-Up is enabled for standby wake. |
 
 Other Sony speakers may also work if they expose the same ScalarWebAPI. If you verify another model, please consider contributing a device info file to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal); the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) provides the `songpal dump-devinfo` helper.
+
+### Reserved example keys
+
+`match`, `exclude`, and `logging` appear in `config.example.json` as roadmap placeholders. The current loader ignores unknown keys and does not apply those settings.
 
 ---
 
@@ -209,3 +299,7 @@ make install    # cargo install --path .
 Cross-compilation targets used in CI: `aarch64-apple-darwin`, `x86_64-apple-darwin`.
 
 `MACOSX_DEPLOYMENT_TARGET=12.0` is set in the Makefile.
+
+---
+
+Copyright (c) 2026 Henrique Andrade / thehcma.

@@ -23,7 +23,14 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         .find(|d| d.is_active)
         .map(|d| d.uid.as_str());
     let volume_percent = active_uid.and_then(|uid| hal.output_volume_percent(uid));
-    let snapshot = build_status(list, config.as_ref(), resolved.as_deref(), volume_percent);
+    let daemon = crate::launchd::daemon_status().ok();
+    let snapshot = build_status(
+        list,
+        config.as_ref(),
+        resolved.as_deref(),
+        volume_percent,
+        daemon,
+    );
 
     if json {
         print_json(&snapshot)?;

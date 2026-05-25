@@ -386,6 +386,10 @@ mod tests {
         let config = Config {
             version: 1,
             auto_switch: true,
+            poll_interval_ms: 3_000,
+            switch_delay_ms: 500,
+            activity_idle_threshold_ms: 60_000,
+            activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
                 uid: None,
                 monitor_name: Some("DELL U3219Q".into()),
@@ -440,6 +444,10 @@ mod tests {
         let config = Config {
             version: 1,
             auto_switch: true,
+            poll_interval_ms: 3_000,
+            switch_delay_ms: 500,
+            activity_idle_threshold_ms: 60_000,
+            activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
                 uid: None,
                 monitor_name: Some("DELL U3219Q".into()),

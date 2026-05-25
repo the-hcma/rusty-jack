@@ -8,6 +8,7 @@
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
+export CARGO_BUILD_JOBS ?= $(shell sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
 
 CARGO ?= cargo
 
@@ -38,7 +39,7 @@ clippy: check-cargo
 	$(CARGO) clippy --all-targets -- -D warnings
 
 universal: check-cargo
-	./scripts/build-universal.sh
+	./scripts/build-universal
 
 install: release
 	$(CARGO) install --path . --force

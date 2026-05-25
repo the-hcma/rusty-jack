@@ -14,6 +14,18 @@ fn test_help_shows_version_and_commit() {
 }
 
 #[test]
+fn test_help_shows_copyright() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Copyright (c) 2026 Henrique Andrade / thehcma",
+        ));
+}
+
+#[test]
 fn test_help_subcommands_alphabetical() {
     let output = Command::cargo_bin("rusty-jack")
         .unwrap()
@@ -92,6 +104,17 @@ fn test_disable_subcommand_in_help() {
 }
 
 #[test]
+fn test_install_subcommand_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("install")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("LaunchAgent"));
+}
+
+#[test]
 fn test_pause_subcommand_in_help() {
     Command::cargo_bin("rusty-jack")
         .unwrap()
@@ -122,4 +145,37 @@ fn test_apply_subcommand_in_help() {
         .assert()
         .success()
         .stdout(predicate::str::contains("policy"));
+}
+
+#[test]
+fn test_daemon_subcommand_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("daemon")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("background"));
+}
+
+#[test]
+fn test_uninstall_subcommand_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("uninstall")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Uninstall"));
+}
+
+#[test]
+fn test_upgrade_subcommand_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("upgrade")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Refresh"));
 }
