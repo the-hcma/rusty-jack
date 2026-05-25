@@ -34,6 +34,7 @@ pub enum UpgradeResult {
         previous_binary_path: Option<String>,
         previous_binary_version: Option<BinaryVersion>,
         was_loaded: bool,
+        resumed_after_upgrade: bool,
     },
     Installed {
         label: String,
@@ -244,9 +245,16 @@ struct LoadDaemonResult {
     previous_binary_version: Option<BinaryVersion>,
     was_loaded: bool,
     had_plist: bool,
+    resumed_after_upgrade: bool,
 }
 
-fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJackError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadMode {
+    Install,
+    Upgrade,
+}
+
+fn write_and_load_daemon(mode: LoadMode) -> Result<LoadDaemonResult, RustyJackError> {
     let plist_path = plist_path_or_err()?;
     let home = home_dir_or_err()?;
     let binary_path = current_exe_display()?;
@@ -265,13 +273,9 @@ fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJa
         .as_deref()
         .and_then(binary_version_from_path);
     let plist = render_launch_agent_plist(&binary_path, &home_display);
-    let plist_unchanged = had_plist
-        && std::fs::read_to_string(&plist_path)
-            .map(|existing| existing == plist)
-            .unwrap_or(false);
+    let load_after_write = should_load_after_write(mode, had_plist, was_loaded);
 
-    if (had_plist || was_loaded) && !should_fast_restart(fast_restart, was_loaded, plist_unchanged)
-    {
+    if should_stop_before_write(mode, had_plist, was_loaded) {
         stop_job_best_effort(&domain, &plist_path);
     }
 
@@ -283,22 +287,15 @@ fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJa
     std::fs::write(&plist_path, plist).map_err(RustyJackError::Io)?;
 
     let service = service_id(&domain, LAUNCH_AGENT_LABEL);
-    let enable_status = run_launchctl(&["enable", &service])?;
-    if enable_status != 0 {
-        return Err(RustyJackError::Launchd(format!(
-            "launchctl enable {service} failed (status {enable_status})"
-        )));
-    }
-
     let plist_display = plist_path_display(&plist_path)?;
-    if should_fast_restart(fast_restart, was_loaded, plist_unchanged) {
-        let kickstart_status = run_launchctl(&["kickstart", "-k", &service])?;
-        if kickstart_status != 0 {
+    if load_after_write {
+        let enable_status = run_launchctl(&["enable", &service])?;
+        if enable_status != 0 {
             return Err(RustyJackError::Launchd(format!(
-                "launchctl kickstart -k {service} failed (status {kickstart_status})"
+                "launchctl enable {service} failed (status {enable_status})"
             )));
         }
-    } else {
+
         let bootstrap_status = run_launchctl(&["bootstrap", &domain, &plist_display])?;
         if bootstrap_status != 0 {
             return Err(RustyJackError::Launchd(format!(
@@ -316,11 +313,22 @@ fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJa
         previous_binary_version,
         was_loaded,
         had_plist,
+        resumed_after_upgrade: matches!(mode, LoadMode::Upgrade) && had_plist && was_loaded,
     })
 }
 
-fn should_fast_restart(fast_restart: bool, was_loaded: bool, plist_unchanged: bool) -> bool {
-    fast_restart && was_loaded && plist_unchanged
+fn should_stop_before_write(mode: LoadMode, had_plist: bool, was_loaded: bool) -> bool {
+    match mode {
+        LoadMode::Install => had_plist || was_loaded,
+        LoadMode::Upgrade => was_loaded,
+    }
+}
+
+fn should_load_after_write(mode: LoadMode, had_plist: bool, was_loaded: bool) -> bool {
+    match mode {
+        LoadMode::Install => true,
+        LoadMode::Upgrade => !had_plist || was_loaded,
+    }
 }
 
 fn binary_version_from_path(path: &str) -> Option<BinaryVersion> {
@@ -364,7 +372,7 @@ fn unescape_xml(value: &str) -> String {
 
 /// Install or reinstall the LaunchAgent for the current user.
 pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
-    let result = write_and_load_daemon(false)?;
+    let result = write_and_load_daemon(LoadMode::Install)?;
     Ok(InstallResult::Installed {
         label: result.label,
         plist_path: result.plist_path,
@@ -375,7 +383,7 @@ pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
 
 /// Refresh the LaunchAgent plist to the current binary and restart the daemon.
 pub fn upgrade_daemon() -> Result<UpgradeResult, RustyJackError> {
-    let result = write_and_load_daemon(true)?;
+    let result = write_and_load_daemon(LoadMode::Upgrade)?;
     if result.had_plist {
         Ok(UpgradeResult::Upgraded {
             label: result.label,
@@ -385,6 +393,7 @@ pub fn upgrade_daemon() -> Result<UpgradeResult, RustyJackError> {
             previous_binary_path: result.previous_binary_path,
             previous_binary_version: result.previous_binary_version,
             was_loaded: result.was_loaded,
+            resumed_after_upgrade: result.resumed_after_upgrade,
         })
     } else {
         Ok(UpgradeResult::Installed {
@@ -545,6 +554,7 @@ pub fn print_upgrade_result(result: &UpgradeResult) {
             previous_binary_path,
             previous_binary_version,
             was_loaded,
+            resumed_after_upgrade,
         } => {
             println!("Upgraded rusty-jack daemon LaunchAgent ({label})");
             println!(
@@ -558,7 +568,22 @@ pub fn print_upgrade_result(result: &UpgradeResult) {
             println!("  binary:     {binary_path}");
             println!("  plist:      {plist_path}");
             println!("  was running: {}", if *was_loaded { "yes" } else { "no" });
-            println!("  auto-routing active");
+            println!(
+                "  paused during upgrade: {}",
+                if *was_loaded { "yes" } else { "no" }
+            );
+            println!(
+                "  resumed after upgrade: {}",
+                if *resumed_after_upgrade { "yes" } else { "no" }
+            );
+            println!(
+                "  auto-routing: {}",
+                if *resumed_after_upgrade {
+                    "active"
+                } else {
+                    "remains paused"
+                }
+            );
         }
         UpgradeResult::Installed {
             label,
@@ -712,11 +737,11 @@ mod tests {
     }
 
     #[test]
-    fn test_should_fast_restart_only_when_loaded_and_unchanged() {
-        assert!(should_fast_restart(true, true, true));
-        assert!(!should_fast_restart(false, true, true));
-        assert!(!should_fast_restart(true, false, true));
-        assert!(!should_fast_restart(true, true, false));
+    fn test_install_always_loads_after_write() {
+        assert!(should_stop_before_write(LoadMode::Install, true, false));
+        assert!(should_stop_before_write(LoadMode::Install, false, true));
+        assert!(should_load_after_write(LoadMode::Install, true, false));
+        assert!(should_load_after_write(LoadMode::Install, false, false));
     }
 
     #[test]
@@ -747,9 +772,19 @@ mod tests {
                 commit: "old1234".into(),
             }),
             was_loaded: true,
+            resumed_after_upgrade: true,
         })
         .unwrap();
         assert!(json.contains("\"status\":\"upgraded\""));
+        assert!(json.contains("\"resumed_after_upgrade\":true"));
+    }
+
+    #[test]
+    fn test_upgrade_pauses_only_running_daemon() {
+        assert!(should_stop_before_write(LoadMode::Upgrade, true, true));
+        assert!(!should_stop_before_write(LoadMode::Upgrade, true, false));
+        assert!(should_load_after_write(LoadMode::Upgrade, true, true));
+        assert!(!should_load_after_write(LoadMode::Upgrade, true, false));
     }
 
     #[test]

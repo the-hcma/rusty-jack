@@ -1,5 +1,10 @@
 # Rusty Jack
 
+[![CI](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml)
+[![Release](https://github.com/the-hcma/rusty-jack/actions/workflows/release.yml/badge.svg)](https://github.com/the-hcma/rusty-jack/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/the-hcma/rusty-jack?sort=semver)](https://github.com/the-hcma/rusty-jack/releases)
+[![Homebrew tap](https://img.shields.io/badge/homebrew-the--hcma%2Ftap-blue?logo=homebrew)](https://github.com/the-hcma/homebrew-tap)
+
 macOS CLI that keeps audio on your chosen **HDMI, DisplayPort, USB-C dock, or line-out** output, helps keyboard volume keys work with fixed-volume HDMI/DisplayPort devices through an eqMac-style software volume layer, and wakes Sony-like Songpal / ScalarWebAPI speakers when their Mac output is selected.
 
 > *Your preferred output, on deck — without a menu bar app.*
