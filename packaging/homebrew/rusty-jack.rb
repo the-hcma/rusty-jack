@@ -13,8 +13,8 @@ class RustyJack < Formula
   # url "https://github.com/the-hcma/rusty-jack/archive/refs/tags/v0.1.1.tar.gz"
   # sha256 "..."
 
-  depends_on macos: :monterey
   depends_on "rust" => :build
+  depends_on macos: :monterey
 
   def install
     ENV["MACOSX_DEPLOYMENT_TARGET"] = "12.0"

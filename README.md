@@ -1,6 +1,7 @@
 # Rusty Jack
 
 [![CI](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml)
+[![Release Please](https://github.com/the-hcma/rusty-jack/actions/workflows/release-please.yml/badge.svg?branch=main)](https://github.com/the-hcma/rusty-jack/actions/workflows/release-please.yml)
 [![Release](https://github.com/the-hcma/rusty-jack/actions/workflows/release.yml/badge.svg)](https://github.com/the-hcma/rusty-jack/actions/workflows/release.yml)
 [![GitHub release](https://img.shields.io/github/v/release/the-hcma/rusty-jack?sort=semver)](https://github.com/the-hcma/rusty-jack/releases)
 [![Homebrew tap](https://img.shields.io/badge/homebrew-the--hcma%2Ftap-blue?logo=homebrew)](https://github.com/the-hcma/homebrew-tap)
