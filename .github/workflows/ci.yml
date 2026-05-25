@@ -56,25 +56,36 @@ jobs:
       - name: build release (host)
         run: cargo build --release --jobs "$(sysctl -n hw.logicalcpu)"
 
-  build-release:
-    name: Build release (${{ matrix.target }})
+  build-release-aarch64:
+    name: Build release (aarch64-apple-darwin)
     needs: guard
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
       - name: build release
-        run: cargo build --release --target ${{ matrix.target }} --jobs "$(sysctl -n hw.logicalcpu)"
+        run: cargo build --release --target aarch64-apple-darwin --jobs "$(sysctl -n hw.logicalcpu)"
+
+  build-release-x86_64:
+    name: Build release (x86_64-apple-darwin)
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build release
+        run: cargo build --release --target x86_64-apple-darwin --jobs "$(sysctl -n hw.logicalcpu)"
