@@ -1,5 +1,5 @@
-# Rusty Jack is macOS-only (CoreAudio HAL). All jobs must run on macOS runners.
-# Linux CI cannot compile or test the real audio stack; non-macOS stub exists only for local editor checks.
+# Rusty Jack is macOS-only (CoreAudio HAL). Build/test jobs must run on macOS runners.
+# The lightweight guard job may run on Linux because it only decides whether to skip Graphite staging PRs.
 
 name: CI
 
@@ -14,8 +14,25 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          # Skip merge-queue staging branches; Graphite validates the integrated state.
+          if [[ "${HEAD_REF}" == gtmq_merge_* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
   test-macos:
     name: Test (macOS)
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +58,8 @@ jobs:
 
   build-release:
     name: Build release (${{ matrix.target }})
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     strategy:
       fail-fast: false
