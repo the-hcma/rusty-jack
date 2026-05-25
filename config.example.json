@@ -17,6 +17,7 @@
     "uid_denylist": []
   },
   "also_set_system_output": true,
+  "volume": 13,
   "logging": {
     "level": "info",
     "file": "~/Library/Logs/rusty-jack.log"

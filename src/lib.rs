@@ -9,12 +9,16 @@ pub mod device_select;
 pub mod display;
 pub mod error;
 pub mod hal_plugin;
+pub mod launchd;
 pub mod list_fmt;
 pub mod output_device;
+pub mod picker;
 pub mod policy;
 pub mod status;
 pub mod system_default;
+pub mod version;
 pub mod transport;
+pub mod volume_result;
 
 pub use error::RustyJackError;
 
@@ -22,22 +26,33 @@ pub use error::RustyJackError;
 ///
 /// # Errors
 ///
-/// Returns an error if CoreAudio enumeration fails or an unimplemented subcommand is invoked.
+/// Returns an error if CoreAudio enumeration fails or a subcommand fails.
 pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
-    let hal = coreaudio::platform_hal()?;
-
     match cli.command {
+        cli::Commands::Disable(args) => commands::disable::run(args.json)?,
+        cli::Commands::Pause(args) => commands::pause::run(args.json)?,
+        cli::Commands::Resume(args) => commands::resume::run(args.json)?,
+        cli::Commands::Daemon => anyhow::bail!("daemon is not implemented yet"),
         cli::Commands::List(args) => {
+            let hal = coreaudio::platform_hal()?;
             commands::list::run(hal.as_ref(), args.hdmi, args.json)?;
         }
         cli::Commands::Status(args) => {
+            let hal = coreaudio::platform_hal()?;
             commands::status::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
         cli::Commands::Apply(args) => {
+            let hal = coreaudio::platform_hal()?;
             commands::apply::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
-        cli::Commands::Daemon => {
-            anyhow::bail!("daemon is not implemented yet");
+        cli::Commands::Picker(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::picker::run(
+                hal.as_ref(),
+                args.json,
+                args.index,
+                cli.config.as_deref(),
+            )?;
         }
     }
 

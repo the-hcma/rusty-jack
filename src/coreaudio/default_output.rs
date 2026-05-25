@@ -85,6 +85,46 @@ mod hardware_tests {
 
     #[test]
     #[ignore = "mutates system audio default"]
+    fn test_builtin_default_shows_active() {
+        use crate::coreaudio::hal::CoreAudioHal;
+        use crate::coreaudio::traits::AudioHal;
+        use crate::transport::TransportKind;
+
+        let Some(original) = default_output_uid().unwrap() else {
+            return;
+        };
+        let hal = CoreAudioHal::new().unwrap();
+        let before = hal.list_outputs().unwrap();
+        let Some(builtin_uid) = before
+            .devices
+            .iter()
+            .find(|d| d.transport == TransportKind::BuiltIn)
+            .map(|d| d.uid.clone())
+        else {
+            eprintln!("skip: no built-in device on this machine");
+            return;
+        };
+
+        set_default_output(&builtin_uid, true).unwrap();
+        let list = hal.list_outputs().unwrap();
+        let builtin = list
+            .devices
+            .iter()
+            .find(|d| d.uid == builtin_uid)
+            .expect("built-in in list");
+        eprintln!(
+            "builtin is_default={} is_active={}",
+            builtin.is_default, builtin.is_active
+        );
+        assert!(builtin.is_default, "built-in should be HAL default");
+        assert!(builtin.is_active, "built-in should be active");
+        assert!(list.system_default.is_none(), "no virtual footer when physical default");
+
+        set_default_output(&original, true).unwrap();
+    }
+
+    #[test]
+    #[ignore = "mutates system audio default"]
     fn test_set_default_round_trip() {
         let Some(original) = default_output_uid().unwrap() else {
             return;

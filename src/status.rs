@@ -1,7 +1,7 @@
 //! Build and format `rusty-jack status` output.
 
 use crate::config::Config;
-use crate::list_fmt;
+use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
 use crate::system_default::DeviceList;
 use anyhow::Result;
@@ -28,6 +28,9 @@ pub struct PolicyStatus {
     pub preferred_alive: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_switch: Option<bool>,
+    /// Volume (0–100) from config, applied when switching to preferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_volume: Option<u8>,
     pub message: String,
 }
 
@@ -38,6 +41,9 @@ pub struct StatusSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_default: Option<crate::system_default::SystemDefaultInfo>,
     pub policy: PolicyStatus,
+    /// Current effective output volume (0–100) for the active route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_percent: Option<u8>,
 }
 
 /// Build a status snapshot from a device list and optional config.
@@ -46,6 +52,7 @@ pub fn build_status(
     list: DeviceList,
     config: Option<&Config>,
     config_path: Option<&Path>,
+    volume_percent: Option<u8>,
 ) -> StatusSnapshot {
     let policy = evaluate_policy(
         &DeviceList {
@@ -60,49 +67,62 @@ pub fn build_status(
         devices: list.devices,
         system_default: list.system_default,
         policy,
+        volume_percent,
     }
 }
 
-fn format_policy_block(policy: &PolicyStatus) -> String {
-    let mut lines = vec!["Policy".to_string()];
-
-    lines.push(format!(
-        "  configured: {}",
-        if policy.configured { "yes" } else { "no" }
-    ));
+fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> String {
+    let mut rows: Vec<(&str, String)> = vec![(
+        "configured",
+        if policy.configured {
+            "yes".into()
+        } else {
+            "no".into()
+        },
+    )];
 
     if let Some(path) = &policy.config_path {
-        lines.push(format!("  config:     {path}"));
+        rows.push(("config", path.clone()));
     }
 
     if let Some(name) = &policy.preferred_monitor_name {
-        lines.push(format!("  monitor:    {name}"));
+        rows.push(("monitor", name.clone()));
     }
 
     if let Some(uid) = &policy.preferred_device_uid {
-        lines.push(format!("  preferred:  {uid}"));
+        rows.push(("preferred", uid.clone()));
     }
 
     if let Some(uid) = &policy.active_device_uid {
-        lines.push(format!("  active:     {uid}"));
+        rows.push(("active", uid.clone()));
     }
 
     if let Some(matches) = policy.matches_preferred {
-        lines.push(format!(
-            "  matches:    {}",
-            if matches { "yes" } else { "no" }
+        rows.push((
+            "matches",
+            if matches { "yes".into() } else { "no".into() },
         ));
     }
 
     if let Some(auto) = policy.auto_switch {
-        lines.push(format!(
-            "  auto_switch: {}",
-            if auto { "yes" } else { "no" }
+        rows.push((
+            "auto_switch",
+            if auto { "yes".into() } else { "no".into() },
         ));
     }
 
-    lines.push(format!("  note:       {}", policy.message));
-    lines.join("\n")
+    if let Some(volume) = policy.config_volume {
+        rows.push(("config volume", format!("{volume}%")));
+    }
+
+    if let Some(volume) = volume_percent {
+        rows.push(("volume", format!("{volume}%")));
+    }
+
+    rows.push(("note", policy.message.clone()));
+
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    format_labeled_section("Policy", "  ", &borrowed)
 }
 
 /// Print human-readable status: device table, virtual default block, policy.
@@ -116,7 +136,11 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
     list_fmt::print_virtual_default_footer(&list)?;
     let mut out = io::stdout().lock();
     writeln!(out)?;
-    writeln!(out, "{}", format_policy_block(&snapshot.policy))?;
+    writeln!(
+        out,
+        "{}",
+        format_policy_block(&snapshot.policy, snapshot.volume_percent)
+    )?;
     Ok(())
 }
 
@@ -157,8 +181,10 @@ mod tests {
             },
             None,
             None,
+            Some(42),
         );
         assert!(!snapshot.policy.configured);
+        assert_eq!(snapshot.volume_percent, Some(42));
         assert_eq!(snapshot.policy.active_device_uid.as_deref(), Some("hdmi-1"));
     }
 
@@ -174,8 +200,11 @@ mod tests {
             preferred_device_uid: None,
             fallback_uids: vec![],
             also_set_system_output: true,
+            volume: None,
             sony_speaker: None,
         };
+        let mut config = config;
+        config.volume = Some(13);
         let snapshot = build_status(
             DeviceList {
                 devices: vec![hdmi_device(true)],
@@ -183,9 +212,12 @@ mod tests {
             },
             Some(&config),
             Some(Path::new("/tmp/config.json")),
+            Some(13),
         );
         assert!(snapshot.policy.configured);
         assert_eq!(snapshot.policy.matches_preferred, Some(true));
+        assert_eq!(snapshot.policy.config_volume, Some(13));
+        assert_eq!(snapshot.volume_percent, Some(13));
     }
 
     #[test]
@@ -212,26 +244,64 @@ mod tests {
             },
             None,
             None,
+            None,
         );
         assert!(snapshot.system_default.is_some());
     }
 
     #[test]
+    fn test_format_policy_block_includes_volume() {
+        let block = format_policy_block(
+            &PolicyStatus {
+                configured: true,
+                config_path: Some("/tmp/c.json".into()),
+                preferred_monitor_name: Some("DELL U3219Q".into()),
+                preferred_device_uid: Some("hdmi-1".into()),
+                active_device_uid: Some("hdmi-1".into()),
+                matches_preferred: Some(true),
+                preferred_present: Some(true),
+                preferred_alive: Some(true),
+                auto_switch: Some(true),
+                config_volume: Some(13),
+                message: "ok".into(),
+            },
+            Some(13),
+        );
+        assert!(block.contains("matches"));
+        assert!(block.contains("config volume"));
+        assert!(block.contains("13%"));
+        let detail_lines: Vec<&str> = block
+            .lines()
+            .filter(|line| line.starts_with("  ") && line.contains(": "))
+            .collect();
+        let value_starts: Vec<usize> = detail_lines
+            .iter()
+            .map(|line| line.find(": ").unwrap() + 2)
+            .collect();
+        assert!(value_starts.windows(2).all(|w| w[0] == w[1]));
+    }
+
+    #[test]
     fn test_format_policy_block_includes_match_line() {
-        let block = format_policy_block(&PolicyStatus {
-            configured: true,
-            config_path: Some("/tmp/c.json".into()),
-            preferred_monitor_name: Some("DELL U3219Q".into()),
-            preferred_device_uid: Some("hdmi-1".into()),
-            active_device_uid: Some("hdmi-1".into()),
-            matches_preferred: Some(true),
-            preferred_present: Some(true),
-            preferred_alive: Some(true),
-            auto_switch: Some(true),
-            message: "ok".into(),
-        });
-        assert!(block.contains("matches:    yes"));
-        assert!(block.contains("preferred:  hdmi-1"));
+        let block = format_policy_block(
+            &PolicyStatus {
+                configured: true,
+                config_path: Some("/tmp/c.json".into()),
+                preferred_monitor_name: Some("DELL U3219Q".into()),
+                preferred_device_uid: Some("hdmi-1".into()),
+                active_device_uid: Some("hdmi-1".into()),
+                matches_preferred: Some(true),
+                preferred_present: Some(true),
+                preferred_alive: Some(true),
+                auto_switch: Some(true),
+                config_volume: None,
+                message: "ok".into(),
+            },
+            None,
+        );
+        assert!(block.contains("matches"));
+        assert!(block.contains("preferred"));
+        assert!(block.contains("hdmi-1"));
     }
 
     #[test]
@@ -243,9 +313,25 @@ mod tests {
             },
             None,
             None,
+            None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"active_device_uid\""));
         assert!(json.contains("\"policy\""));
+    }
+
+    #[test]
+    fn test_print_json_includes_volume_percent() {
+        let snapshot = build_status(
+            DeviceList {
+                devices: vec![hdmi_device(true)],
+                system_default: None,
+            },
+            None,
+            None,
+            Some(13),
+        );
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("\"volume_percent\":13"));
     }
 }

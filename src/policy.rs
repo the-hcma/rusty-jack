@@ -30,6 +30,7 @@ pub fn evaluate_policy(
             preferred_present: None,
             preferred_alive: None,
             auto_switch: None,
+            config_volume: None,
             message: format!("no config at {path_hint}"),
         };
     };
@@ -84,6 +85,7 @@ pub fn evaluate_policy(
         preferred_present,
         preferred_alive,
         auto_switch: Some(config.auto_switch),
+        config_volume: config.volume,
         message,
     }
 }
@@ -116,6 +118,7 @@ fn find_device<'a>(devices: &'a [OutputDevice], uid: &str) -> Option<&'a OutputD
 pub enum RoutingTargetSource {
     Preferred,
     Fallback { index: usize },
+    Picker,
 }
 
 /// Device to route system audio to.
@@ -230,6 +233,7 @@ mod tests {
             preferred_device_uid: None,
             fallback_uids: vec![],
             also_set_system_output: true,
+            volume: None,
             sony_speaker: None,
         }
     }
@@ -245,6 +249,7 @@ mod tests {
             preferred_device_uid: None,
             fallback_uids: vec![],
             also_set_system_output: true,
+            volume: None,
             sony_speaker: None,
         }
     }
@@ -260,6 +265,7 @@ mod tests {
             preferred_device_uid: None,
             fallback_uids: vec![fallback_uid.into()],
             also_set_system_output: true,
+            volume: None,
             sony_speaker: None,
         }
     }

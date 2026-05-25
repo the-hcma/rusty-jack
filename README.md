@@ -39,35 +39,117 @@ For a Mac **line-out** cabled to a **Sony SRS-ZR5** (Sony **ScalarWebAPI** / Son
 
 **Phase 1:** device enumeration, `list`, and `status` on macOS (transport, monitor name, active device highlighting, policy match). Routing write path, daemon, and the **virtual driver + software volume** path are planned — see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
 
-### Build
+### Build (local — debug & release)
 
-Requires [Rust](https://rustup.rs/) 1.85+ and macOS 12+ for CoreAudio.
+Requires **macOS 12 Monterey or later**, **Apple Silicon or Intel**, and **[Rust](https://rustup.rs/) 1.85+** (see `rust-version` in `Cargo.toml`). CoreAudio is macOS-only; build on a Mac, not Linux.
 
-One-time setup (if `cargo` is not found):
+#### 1. One-time setup on a new Mac
 
 ```bash
+# Xcode command-line tools (compiler + SDK) — skip if already installed
+xcode-select --install
+
+# Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"    # add cargo to PATH in this shell
+source "$HOME/.cargo/env"
+
+rustc --version    # should be ≥ 1.85
 ```
 
+#### 2. Get the source
+
 ```bash
-# From repo root
-make build          # debug binary
-make release        # optimized binary → target/release/rusty-jack
-make test           # unit tests
-make universal      # aarch64 + x86_64 + lipo (release)
-make install        # cargo install --path . to ~/.cargo/bin
+git clone https://github.com/thehcma/rusty-jack.git
+cd rusty-jack
 ```
 
-Or directly:
+#### 3. Debug vs release
+
+| Build | Command | Binary path | When to use |
+|-------|---------|-------------|-------------|
+| **Debug** | `make build` or `cargo build` | `target/debug/rusty-jack` | Fast compile while developing; larger binary, no LTO |
+| **Release** | `make release` or `cargo build --release` | `target/release/rusty-jack` | What you should run day-to-day; optimized, stripped |
+
+Debug builds compile faster and include debug symbols (useful with `lldb`). Release builds are smaller, faster at runtime, and match what CI produces.
 
 ```bash
-cargo build --release
+# Debug — quick iteration
+make build
+./target/debug/rusty-jack --help
+./target/debug/rusty-jack list
+
+# Release — verify like a “real” install
+make release
+./target/release/rusty-jack --help
+./target/release/rusty-jack status
+```
+
+`--help` prints the version **and embedded git commit** (from `build.rs`), e.g. `rusty-jack 0.1.0 (commit abc1234)` — useful to confirm which revision is on the machine.
+
+#### 4. Run without installing to PATH
+
+```bash
+# Either binary works; substitute debug/release as needed
 ./target/release/rusty-jack list
 ./target/release/rusty-jack list --hdmi
-./target/release/rusty-jack list --json
 ./target/release/rusty-jack status
-./target/release/rusty-jack status --json
+./target/release/rusty-jack picker          # interactive; needs a TTY
+./target/release/rusty-jack picker --index 0
+./target/release/rusty-jack apply           # needs ~/.config/rusty-jack/config.json
+```
+
+Copy `config.example.json` to `~/.config/rusty-jack/config.json` and edit `preferred_device` before testing `apply` / policy in `status`.
+
+#### 5. Optional: install to `~/.cargo/bin`
+
+```bash
+make install          # builds release, then cargo install --path .
+rusty-jack --help     # on PATH if ~/.cargo/bin is in your shell profile
+```
+
+#### 6. Universal binary (Apple Silicon + Intel in one file)
+
+For distributing a single Mach-O to mixed Macs:
+
+```bash
+make universal        # runs scripts/build-universal.sh → target/release/rusty-jack-universal
+```
+
+#### 7. Verify on another Mac (checklist)
+
+```bash
+make test             # unit + integration tests (needs macOS)
+make clippy           # optional lint pass
+
+# Smoke test after build
+./target/release/rusty-jack list
+./target/release/rusty-jack status
+./target/release/rusty-jack picker --index 0 --json   # non-interactive switch test
+```
+
+If you use eqMac or Zoom virtual devices: `list` / `status` show them; **ZoomAudioDevice** appears dimmed in `picker` and cannot be selected (app virtual driver, not a speaker).
+
+#### Makefile targets
+
+```bash
+make build          # debug → target/debug/rusty-jack
+make release        # release → target/release/rusty-jack
+make test           # cargo test --all-targets
+make fmt            # cargo fmt
+make clippy         # cargo clippy --all-targets
+make universal      # fat binary (aarch64 + x86_64)
+make install        # release + cargo install --path .
+make clean          # cargo clean
+```
+
+Or use `cargo` directly (same results):
+
+```bash
+cargo build                    # debug
+cargo build --release          # release
+cargo test
+cargo run -- list              # debug via cargo run
+cargo run --release -- status  # release via cargo run
 ```
 
 ### `list` command
@@ -95,7 +177,31 @@ Config is read from `--config`, `RUSTY_JACK_CONFIG`, or `~/.config/rusty-jack/co
 | `rusty-jack apply` | Set default output to preferred device (or fallback) from config |
 | `rusty-jack apply --json` | Same result as JSON (`switched` or `no_change`) |
 
-Requires a valid config file. Resolves `preferred_device.monitor_name` or `uid`, then sets the system default output (and system/alert output when `also_set_system_output` is true).
+Requires a valid config file. Resolves `preferred_device.monitor_name` or `uid`, then sets the system default output (and system/alert output when `also_set_system_output` is true). When `volume` is set in config, applies it only on an actual switch.
+
+### `picker` command
+
+| Command | Description |
+|---------|-------------|
+| `rusty-jack picker` | Interactive menu to choose an output device and switch to it |
+| `rusty-jack picker --index N` | Switch to device index `N` (same IDX as `list`) without a menu |
+| `rusty-jack picker --json` | Same result as JSON (`switched` or `no_change`) |
+
+Does not require config. When config is present, uses `also_set_system_output` from it; otherwise defaults to `true`. If you pick the **configured preferred device** and a switch occurs, config `volume` is applied (same as `apply`). Other picks leave volume unchanged. Press **Esc** to cancel without switching.
+
+### Daemon control
+
+| Command | Description |
+|---------|-------------|
+| `rusty-jack pause` | Stop auto-routing; keeps the LaunchAgent plist installed |
+| `rusty-jack resume` | Re-enable and start a paused daemon |
+| `rusty-jack disable` | Uninstall: stop, disable, and **remove** the LaunchAgent plist |
+
+Add `--json` to any of these for machine-readable output.
+
+- **pause** — `launchctl bootout` + `disable`; plist stays at `~/Library/LaunchAgents/com.example.rusty-jack.plist`. Use when you want to temporarily stop auto-routing.
+- **resume** — `launchctl enable` + `bootstrap` to start the daemon again after pause.
+- **disable** — full cleanup/uninstall from launchd (plist removed). Use when removing rusty-jack entirely.
 
 ### Configuration
 

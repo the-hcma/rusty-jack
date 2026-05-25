@@ -9,6 +9,8 @@ mod property;
 
 mod active;
 #[cfg(target_os = "macos")]
+pub mod volume;
+#[cfg(target_os = "macos")]
 mod system_default;
 pub use active::resolve_active_uid;
 #[cfg(target_os = "macos")]

@@ -25,10 +25,67 @@ impl OutputDevice {
         name.contains("CADefaultDeviceAggregate") || name.contains("(eqMac)")
     }
 
+    /// True when the device can be chosen as the system output route.
+    #[must_use]
+    pub fn is_selectable(&self) -> bool {
+        is_routable_output(&self.uid, &self.name, self.transport)
+    }
+
+    /// Short explanation when [`Self::is_selectable`] is false.
+    #[must_use]
+    pub fn non_selectable_reason(&self) -> Option<&'static str> {
+        non_selectable_reason(&self.uid, &self.name, self.transport)
+    }
+
     #[must_use]
     pub fn matches_hdmi_filter(&self) -> bool {
         self.transport.is_hdmi_class() && !Self::is_excluded_by_name(&self.name)
     }
+
+    /// Human-readable label (monitor name when available).
+    #[must_use]
+    pub fn friendly_label(&self) -> String {
+        if let Some(monitor) = &self.monitor_name {
+            format!("{} ({monitor})", self.name)
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
+/// Whether this endpoint can route audible system output (excludes app virtual drivers).
+#[must_use]
+pub fn is_routable_output(uid: &str, name: &str, transport: TransportKind) -> bool {
+    if OutputDevice::is_excluded_by_name(name) {
+        return false;
+    }
+    if transport == TransportKind::Aggregate {
+        return false;
+    }
+    !is_app_virtual_output(uid, name)
+}
+
+#[must_use]
+pub fn non_selectable_reason(
+    uid: &str,
+    name: &str,
+    transport: TransportKind,
+) -> Option<&'static str> {
+    if OutputDevice::is_excluded_by_name(name) {
+        return Some("virtual router entry");
+    }
+    if transport == TransportKind::Aggregate {
+        return Some("aggregate device");
+    }
+    if is_app_virtual_output(uid, name) {
+        return Some("app virtual audio — not a speaker");
+    }
+    None
+}
+
+fn is_app_virtual_output(uid: &str, name: &str) -> bool {
+    let uid_lower = uid.to_ascii_lowercase();
+    name.contains("ZoomAudio") || uid_lower.contains("zoom.us")
 }
 
 /// Filter listed devices for `list --hdmi`.
@@ -86,5 +143,32 @@ mod tests {
     fn test_is_excluded_by_name() {
         assert!(OutputDevice::is_excluded_by_name("Foo (eqMac)"));
         assert!(!OutputDevice::is_excluded_by_name("CalDigit TS4 Audio"));
+    }
+
+    #[test]
+    fn test_zoom_device_not_selectable() {
+        let zoom = sample(
+            "zoom.us:123",
+            "ZoomAudioDevice",
+            TransportKind::Virtual,
+            false,
+        );
+        assert!(!zoom.is_selectable());
+        assert!(zoom
+            .non_selectable_reason()
+            .unwrap()
+            .contains("app virtual"));
+    }
+
+    #[test]
+    fn test_hdmi_device_is_selectable() {
+        let hdmi = sample("hdmi-1", "HDMI", TransportKind::Hdmi, false);
+        assert!(hdmi.is_selectable());
+    }
+
+    #[test]
+    fn test_aggregate_not_selectable() {
+        let agg = sample("agg", "Multi Output", TransportKind::Aggregate, false);
+        assert!(!agg.is_selectable());
     }
 }

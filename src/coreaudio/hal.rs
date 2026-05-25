@@ -7,7 +7,10 @@ use crate::coreaudio::property::{
 use crate::coreaudio::resolve_active_uid;
 #[cfg(target_os = "macos")]
 use crate::coreaudio::system_default::build_system_default_info;
+#[cfg(target_os = "macos")]
+use crate::coreaudio::volume;
 use crate::coreaudio::traits::AudioHal;
+use crate::volume_result::VolumeEnsureResult;
 use crate::display;
 use crate::output_device::OutputDevice;
 use crate::system_default::DeviceList;
@@ -98,5 +101,13 @@ impl AudioHal for CoreAudioHal {
 
     fn default_output_uid(&self) -> Result<Option<String>, RustyJackError> {
         crate::coreaudio::default_output::default_output_uid()
+    }
+
+    fn set_output_volume(&self, uid: &str, percent: u8) -> Result<VolumeEnsureResult, RustyJackError> {
+        volume::ensure_output_volume(uid, percent)
+    }
+
+    fn output_volume_percent(&self, uid: &str) -> Option<u8> {
+        volume::read_effective_output_volume(uid)
     }
 }

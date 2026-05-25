@@ -1,6 +1,7 @@
 //! Non-macOS stub (compile-check only).
 
 use crate::coreaudio::traits::AudioHal;
+use crate::volume_result::VolumeEnsureResult;
 use crate::system_default::DeviceList;
 use crate::RustyJackError;
 
@@ -25,5 +26,19 @@ impl AudioHal for StubHal {
         Err(RustyJackError::CoreAudio(
             "rusty-jack requires macOS (CoreAudio is not available on this platform)".into(),
         ))
+    }
+
+    fn set_output_volume(
+        &self,
+        _uid: &str,
+        _percent: u8,
+    ) -> Result<VolumeEnsureResult, RustyJackError> {
+        Err(RustyJackError::CoreAudio(
+            "rusty-jack requires macOS (CoreAudio is not available on this platform)".into(),
+        ))
+    }
+
+    fn output_volume_percent(&self, _uid: &str) -> Option<u8> {
+        None
     }
 }

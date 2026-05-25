@@ -115,6 +115,9 @@ pub struct Config {
     pub fallback_uids: Vec<String>,
     #[serde(default = "default_also_set_system_output")]
     pub also_set_system_output: bool,
+    /// Output volume (0–100) to apply when switching to the preferred device. Omitted = leave volume unchanged.
+    #[serde(default)]
+    pub volume: Option<u8>,
     #[serde(default)]
     pub sony_speaker: Option<SonySpeakerConfig>,
 }
@@ -234,6 +237,14 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
             "set preferred_device.monitor_name or preferred_device.uid (see config.example.json)"
                 .into(),
         ));
+    }
+
+    if let Some(volume) = config.volume {
+        if volume > 100 {
+            return Err(RustyJackError::Config(
+                "volume must be between 0 and 100".into(),
+            ));
+        }
     }
 
     if let Some(sony) = &config.sony_speaker {
@@ -360,6 +371,37 @@ mod tests {
         )
         .unwrap();
         assert!(load_config(file.path()).is_err());
+    }
+
+    #[test]
+    fn test_rejects_volume_out_of_range() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
+  "volume": 101
+}}"#
+        )
+        .unwrap();
+        assert!(load_config(file.path()).is_err());
+    }
+
+    #[test]
+    fn test_load_config_with_volume() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
+  "volume": 13
+}}"#
+        )
+        .unwrap();
+        let config = load_config(file.path()).unwrap();
+        assert_eq!(config.volume, Some(13));
     }
 
     #[test]

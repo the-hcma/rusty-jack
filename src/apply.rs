@@ -1,12 +1,22 @@
 //! Apply routing policy once (set default output).
 
 use crate::config::Config;
+use crate::volume_result::VolumeEnsureResult;
 use crate::coreaudio::AudioHal;
 use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource};
+use crate::system_default::DeviceList;
 use crate::RustyJackError;
 use serde::Serialize;
 
-/// Result of `rusty-jack apply`.
+/// Options when switching the default output device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwitchOptions {
+    pub also_set_system_output: bool,
+    /// When `Some`, set output volume after switching. Omitted for manual picks.
+    pub volume: Option<u8>,
+}
+
+/// Result of `rusty-jack apply` / `rusty-jack picker`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ApplyResult {
@@ -18,6 +28,8 @@ pub enum ApplyResult {
         monitor_name: Option<String>,
         source: RoutingTargetSource,
         also_set_system_output: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        volume: Option<VolumeEnsureResult>,
     },
     NoChange {
         uid: String,
@@ -28,27 +40,55 @@ pub enum ApplyResult {
     },
 }
 
-/// Apply config policy: resolve target device and set default output if needed.
-pub fn apply_policy(hal: &dyn AudioHal, config: &Config) -> Result<ApplyResult, RustyJackError> {
-    let list = hal.list_outputs()?;
-    let target = select_routing_target(config, &list.devices)
-        .map_err(|err| RustyJackError::Config(err.to_string()))?;
-
+/// Switch default output to `target` when it differs from the current default.
+pub fn switch_output(
+    hal: &dyn AudioHal,
+    target: &RoutingTarget,
+    options: &SwitchOptions,
+) -> Result<ApplyResult, RustyJackError> {
     let current = hal.default_output_uid()?;
     if current.as_deref() == Some(target.uid.as_str()) {
-        return Ok(no_change_result(&target, "default output already on target"));
+        return Ok(no_change_result(target, "default output already on target"));
     }
 
-    hal.set_default_output(&target.uid, config.also_set_system_output)?;
+    hal.set_default_output(&target.uid, options.also_set_system_output)?;
+
+    let volume = if let Some(percent) = options.volume {
+        Some(hal.set_output_volume(&target.uid, percent)?)
+    } else {
+        None
+    };
 
     Ok(ApplyResult::Switched {
         from_uid: current,
         to_uid: target.uid.clone(),
         device_name: target.name.clone(),
         monitor_name: target.monitor_name.clone(),
-        source: target.source,
-        also_set_system_output: config.also_set_system_output,
+        source: target.source.clone(),
+        also_set_system_output: options.also_set_system_output,
+        volume,
     })
+}
+
+/// Apply config policy: resolve target device and set default output if needed.
+pub fn apply_policy(
+    hal: &dyn AudioHal,
+    config: &Config,
+) -> Result<(ApplyResult, DeviceList), RustyJackError> {
+    let list = hal.list_outputs()?;
+    let target = select_routing_target(config, &list.devices)
+        .map_err(|err| RustyJackError::Config(err.to_string()))?;
+
+    let result = switch_output(
+        hal,
+        &target,
+        &SwitchOptions {
+            also_set_system_output: config.also_set_system_output,
+            volume: config.volume,
+        },
+    )?;
+
+    Ok((result, list))
 }
 
 fn no_change_result(target: &RoutingTarget, reason: &str) -> ApplyResult {
@@ -60,45 +100,90 @@ fn no_change_result(target: &RoutingTarget, reason: &str) -> ApplyResult {
     }
 }
 
-/// Print human-readable apply result.
-pub fn print_text(result: &ApplyResult) {
+/// Resolve a UID to a human-readable device label using a device list snapshot.
+#[must_use]
+pub fn label_for_uid(list: &DeviceList, uid: &str) -> String {
+    if let Some(device) = list.devices.iter().find(|d| d.uid == uid) {
+        return device.friendly_label();
+    }
+    if let Some(system_default) = &list.system_default {
+        if system_default.uid == uid {
+            return system_default.name.clone();
+        }
+    }
+    uid.to_string()
+}
+
+/// Print human-readable apply/picker result.
+pub fn print_text(result: &ApplyResult, list: &DeviceList) {
     match result {
         ApplyResult::Switched {
             from_uid,
-            to_uid,
+            to_uid: _,
             device_name,
             monitor_name,
             source,
             also_set_system_output,
+            volume,
         } => {
-            let label = format_device_label(device_name, monitor_name.as_deref());
-            let from = from_uid.as_deref().unwrap_or("(none)");
+            let to = friendly_label(device_name, monitor_name.as_deref());
+            let from = from_uid
+                .as_deref()
+                .map(|uid| label_for_uid(list, uid))
+                .unwrap_or_else(|| "(none)".into());
             let via = match source {
                 RoutingTargetSource::Preferred => "preferred device".to_string(),
                 RoutingTargetSource::Fallback { index } => format!("fallback #{index}"),
+                RoutingTargetSource::Picker => "picker".to_string(),
             };
-            println!("Switched default output to {label} ({via})");
+            println!("Switched default output to {to} ({via})");
             println!("  from: {from}");
-            println!("  to:   {to_uid}");
+            println!("  to:   {to}");
             if *also_set_system_output {
                 println!("  also set system (alert) output");
             }
+            if let Some(result) = volume {
+                if result.verified {
+                    if let Some(actual) = result.actual {
+                        if actual == result.target {
+                            println!("  volume set to {}%", result.target);
+                        } else {
+                            println!(
+                                "  volume set to {}% (read back {}% after {} attempts)",
+                                result.target, actual, result.attempts
+                            );
+                        }
+                    } else {
+                        println!("  volume set to {}%", result.target);
+                    }
+                } else if let Some(actual) = result.actual {
+                    eprintln!(
+                        "  warning: volume target {}% but read back {}% after {} attempts",
+                        result.target, actual, result.attempts
+                    );
+                } else {
+                    eprintln!(
+                        "  warning: could not verify volume {}% after {} attempts",
+                        result.target, result.attempts
+                    );
+                }
+            }
         }
         ApplyResult::NoChange {
-            uid,
+            uid: _,
             device_name,
             monitor_name,
             reason,
         } => {
-            let label = format_device_label(device_name, monitor_name.as_deref());
+            let label = friendly_label(device_name, monitor_name.as_deref());
             println!("No change: {reason}");
             println!("  device: {label}");
-            println!("  uid:    {uid}");
         }
     }
 }
 
-fn format_device_label(name: &str, monitor_name: Option<&str>) -> String {
+#[must_use]
+fn friendly_label(name: &str, monitor_name: Option<&str>) -> String {
     if let Some(monitor) = monitor_name {
         format!("{name} ({monitor})")
     } else {
@@ -112,6 +197,7 @@ mod tests {
     use crate::config::{Config, DeviceSelectorConfig};
     use crate::coreaudio::mock::MockHal;
     use crate::output_device::OutputDevice;
+    use crate::system_default::DeviceList;
     use crate::transport::TransportKind;
 
     fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
@@ -138,6 +224,7 @@ mod tests {
             preferred_device_uid: None,
             fallback_uids: vec![],
             also_set_system_output: true,
+            volume: None,
             sony_speaker: None,
         }
     }
@@ -150,17 +237,82 @@ mod tests {
         ])
         .with_default("builtin");
 
-        let result = apply_policy(&hal, &test_config("DELL U3219Q")).unwrap();
+        let (result, _list) = apply_policy(&hal, &test_config("DELL U3219Q")).unwrap();
         assert!(matches!(result, ApplyResult::Switched { .. }));
         assert_eq!(hal.set_calls().len(), 1);
         assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
     }
 
     #[test]
+    fn test_apply_sets_volume_on_switch() {
+        let hal = MockHal::new(vec![
+            hdmi_device("builtin", "Built-in"),
+            hdmi_device("hdmi-1", "DELL U3219Q"),
+        ])
+        .with_default("builtin");
+
+        let mut config = test_config("DELL U3219Q");
+        config.volume = Some(42);
+
+        let (result, _list) = apply_policy(&hal, &config).unwrap();
+        assert!(matches!(result, ApplyResult::Switched { .. }));
+        assert_eq!(hal.set_calls().len(), 1);
+        assert_eq!(hal.volume_calls(), vec![crate::coreaudio::mock::SetVolumeCall {
+            uid: "hdmi-1".into(),
+            percent: 42,
+        }]);
+    }
+
+    #[test]
+    fn test_apply_no_volume_when_already_default() {
+        let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
+        let mut config = test_config("DELL U3219Q");
+        config.volume = Some(42);
+
+        let (result, _list) = apply_policy(&hal, &config).unwrap();
+        assert!(matches!(result, ApplyResult::NoChange { .. }));
+        assert!(hal.volume_calls().is_empty());
+    }
+
+    #[test]
     fn test_apply_no_change_when_already_default() {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
-        let result = apply_policy(&hal, &test_config("DELL U3219Q")).unwrap();
+        let (result, _list) = apply_policy(&hal, &test_config("DELL U3219Q")).unwrap();
         assert!(matches!(result, ApplyResult::NoChange { .. }));
         assert!(hal.set_calls().is_empty());
+    }
+
+    #[test]
+    fn test_label_for_uid_uses_monitor_name() {
+        let list = DeviceList {
+            devices: vec![hdmi_device("hdmi-1", "DELL U3219Q")],
+            system_default: None,
+        };
+        assert_eq!(label_for_uid(&list, "hdmi-1"), "HDMI (DELL U3219Q)");
+    }
+
+    #[test]
+    fn test_label_for_uid_uses_system_default_name() {
+        use crate::system_default::SystemDefaultInfo;
+        use crate::transport::TransportKind;
+
+        let list = DeviceList {
+            devices: vec![],
+            system_default: Some(SystemDefaultInfo {
+                uid: "EQMOutputCapture".into(),
+                name: "Internal Speakers (eqMac)".into(),
+                transport: TransportKind::Virtual,
+                manufacturer: None,
+                model_uid: None,
+                router: Some("eqMac".into()),
+                driver: None,
+                routed_to_uid: None,
+                routed_to_label: None,
+            }),
+        };
+        assert_eq!(
+            label_for_uid(&list, "EQMOutputCapture"),
+            "Internal Speakers (eqMac)"
+        );
     }
 }

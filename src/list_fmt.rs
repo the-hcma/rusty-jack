@@ -6,8 +6,10 @@ use anyhow::Result;
 use std::io::{self, IsTerminal, Write};
 
 const NO_MONITOR: &str = "-";
-const ANSI_GREEN: &str = "\x1b[32m";
-const ANSI_RESET: &str = "\x1b[0m";
+pub const ANSI_GREEN: &str = "\x1b[32m";
+pub const ANSI_CYAN: &str = "\x1b[36m";
+pub const ANSI_DIM: &str = "\x1b[2m";
+pub const ANSI_RESET: &str = "\x1b[0m";
 const COL_GAP: &str = "  ";
 
 struct TableWidths {
@@ -121,9 +123,20 @@ fn stdout_supports_color() -> bool {
     io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
-fn colorize_active_row(row: &str, is_active: bool, use_color: bool) -> String {
-    if use_color && is_active {
+/// True when stdout is a TTY and `NO_COLOR` is unset.
+#[must_use]
+pub fn terminal_supports_color() -> bool {
+    stdout_supports_color()
+}
+
+fn colorize_table_row(row: &str, device: &OutputDevice, use_color: bool) -> String {
+    if !use_color {
+        return row.to_string();
+    }
+    if device.is_active {
         format!("{ANSI_GREEN}{row}{ANSI_RESET}")
+    } else if !device.is_selectable() {
+        format!("{ANSI_DIM}{row}{ANSI_RESET}")
     } else {
         row.to_string()
     }
@@ -148,7 +161,7 @@ pub fn format_table_with_color(devices: &[OutputDevice], use_color: bool) -> Str
 
     for (index, device) in devices.iter().enumerate() {
         let row = format_row(index, device, &w);
-        lines.push(colorize_active_row(&row, device.is_active, use_color));
+        lines.push(colorize_table_row(&row, device, use_color));
     }
 
     lines.join("\n")
@@ -200,9 +213,33 @@ pub fn print_table(list: &DeviceList, hdmi_only: bool) -> Result<()> {
     print_device_table(list)
 }
 
+/// Format `label: value` rows with values aligned in one column.
+#[must_use]
+pub fn format_detail_rows(indent: &str, rows: &[(&str, &str)]) -> Vec<String> {
+    if rows.is_empty() {
+        return vec![];
+    }
+    let width = rows
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(0);
+    rows.iter()
+        .map(|(label, value)| format!("{indent}{label:width$}: {value}", width = width))
+        .collect()
+}
+
+/// Format a titled block of aligned `label: value` rows.
+#[must_use]
+pub fn format_labeled_section(title: &str, indent: &str, rows: &[(&str, &str)]) -> String {
+    let mut lines = vec![title.to_string()];
+    lines.extend(format_detail_rows(indent, rows));
+    lines.join("\n")
+}
+
 /// Format the virtual system-default footer block (shared with `status`).
 pub fn format_system_default_block(info: &SystemDefaultInfo) -> String {
-    let mut lines = vec![String::new(), "System default (virtual)".to_string()];
+    let mut rows: Vec<(&str, String)> = Vec::new();
 
     if let Some(router) = &info.router {
         let version = info
@@ -211,35 +248,36 @@ pub fn format_system_default_block(info: &SystemDefaultInfo) -> String {
             .and_then(|d| d.version.as_deref())
             .map(|v| format!(" {v}"))
             .unwrap_or_default();
-        lines.push(format!("  router:       {router}{version}"));
+        rows.push(("router", format!("{router}{version}")));
     }
 
-    lines.push(format!("  device:       {}", info.name));
-    lines.push(format!("  uid:          {}", info.uid));
-    lines.push(format!("  transport:    {}", info.transport));
+    rows.push(("device", info.name.clone()));
+    rows.push(("uid", info.uid.clone()));
+    rows.push(("transport", info.transport.to_string()));
 
     if let Some(m) = &info.manufacturer {
-        lines.push(format!("  manufacturer: {m}"));
+        rows.push(("manufacturer", m.clone()));
     }
     if let Some(model) = &info.model_uid {
-        lines.push(format!("  model uid:    {model}"));
+        rows.push(("model uid", model.clone()));
     }
 
     if let Some(driver) = &info.driver {
-        lines.push(format!("  driver:       {}", driver.bundle_id));
+        rows.push(("driver", driver.bundle_id.clone()));
         if let Some(version) = &driver.version {
-            lines.push(format!("  driver ver:   {version}"));
+            rows.push(("driver ver", version.clone()));
         }
-        lines.push(format!("  driver path:  {}", driver.install_path));
+        rows.push(("driver path", driver.install_path.clone()));
     }
 
     if let Some(label) = &info.routed_to_label {
-        lines.push(format!("  routing to:   {label}"));
+        rows.push(("routing to", label.clone()));
     } else if let Some(uid) = &info.routed_to_uid {
-        lines.push(format!("  routing to:   {uid}"));
+        rows.push(("routing to", uid.clone()));
     }
 
-    lines.join("\n")
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    format!("\n{}", format_labeled_section("System default (virtual)", "  ", &borrowed))
 }
 
 /// Print JSON to stdout.
@@ -350,6 +388,24 @@ mod tests {
     }
 
     #[test]
+    fn test_non_selectable_row_dimmed() {
+        let mut devices = sample_devices();
+        devices.push(OutputDevice {
+            id: 4,
+            uid: "zoom.us:0".into(),
+            name: "ZoomAudioDevice".into(),
+            transport: TransportKind::Virtual,
+            is_alive: true,
+            is_default: false,
+            is_active: false,
+            monitor_name: None,
+        });
+        let table = format_table_with_color(&devices, true);
+        let zoom_line = table.lines().last().unwrap();
+        assert!(zoom_line.starts_with(ANSI_DIM));
+    }
+
+    #[test]
     fn test_active_row_colored_when_enabled() {
         let table = format_table_with_color(&sample_devices(), true);
         let active_line = table.lines().nth(2).unwrap();
@@ -361,6 +417,21 @@ mod tests {
     fn test_no_color_when_disabled() {
         let table = format_table_with_color(&sample_devices(), false);
         assert!(!table.contains(ANSI_GREEN));
+    }
+
+    #[test]
+    fn test_detail_rows_align_value_column() {
+        let rows = [
+            ("config volume", "13%"),
+            ("volume", "13%"),
+            ("note", "hello"),
+        ];
+        let lines = format_detail_rows("  ", &rows);
+        let value_starts: Vec<usize> = lines
+            .iter()
+            .map(|line| line.find(": ").unwrap() + 2)
+            .collect();
+        assert!(value_starts.windows(2).all(|w| w[0] == w[1]));
     }
 
     #[test]
@@ -387,7 +458,17 @@ mod tests {
 
         assert!(block.contains("eqMac 2.6.0"));
         assert!(block.contains("com.bitgapp.eqmac.driver"));
-        assert!(block.contains("routing to:   HDMI (DELL U3219Q)"));
+        assert!(block.contains("routing to"));
+        assert!(block.contains("HDMI (DELL U3219Q)"));
+        let detail_lines: Vec<&str> = block
+            .lines()
+            .filter(|line| line.starts_with("  ") && line.contains(": "))
+            .collect();
+        let value_starts: Vec<usize> = detail_lines
+            .iter()
+            .map(|line| line.find(": ").unwrap() + 2)
+            .collect();
+        assert!(value_starts.windows(2).all(|w| w[0] == w[1]));
     }
 
     #[test]

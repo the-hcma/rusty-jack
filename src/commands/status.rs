@@ -17,7 +17,18 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     };
 
     let list = hal.list_outputs()?;
-    let snapshot = build_status(list, config.as_ref(), resolved.as_deref());
+    let active_uid = list
+        .devices
+        .iter()
+        .find(|d| d.is_active)
+        .map(|d| d.uid.as_str());
+    let volume_percent = active_uid.and_then(|uid| hal.output_volume_percent(uid));
+    let snapshot = build_status(
+        list,
+        config.as_ref(),
+        resolved.as_deref(),
+        volume_percent,
+    );
 
     if json {
         print_json(&snapshot)?;
@@ -36,6 +47,23 @@ mod tests {
     use crate::transport::TransportKind;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_run_json_includes_volume() {
+        let hal = MockHal::new(vec![OutputDevice {
+            id: 1,
+            uid: "hdmi".into(),
+            name: "Monitor".into(),
+            transport: TransportKind::Hdmi,
+            is_alive: true,
+            is_default: true,
+            is_active: true,
+            monitor_name: Some("LG TV".into()),
+        }])
+        .with_output_volume(42);
+
+        run(&hal, true, None).unwrap();
+    }
 
     #[test]
     fn test_run_json_does_not_panic() {

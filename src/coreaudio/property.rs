@@ -137,10 +137,11 @@ pub fn all_device_ids() -> Result<Vec<AudioDeviceID>, RustyJackError> {
 }
 
 pub fn default_output_device_id() -> Option<AudioDeviceID> {
-    let address = property_address(
-        kAudioHardwarePropertyDefaultOutputDevice,
-        kAudioObjectPropertyScopeGlobal,
-    );
+    system_property_device_id(kAudioHardwarePropertyDefaultOutputDevice)
+}
+
+fn system_property_device_id(selector: u32) -> Option<AudioDeviceID> {
+    let address = property_address(selector, kAudioObjectPropertyScopeGlobal);
     let mut id: AudioDeviceID = 0;
     let mut size = std::mem::size_of::<AudioDeviceID>() as u32;
     let status = unsafe {

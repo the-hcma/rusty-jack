@@ -11,13 +11,13 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     let path = resolve_config_path(config_path)
         .context("no config path — use --config or ~/.config/rusty-jack/config.json")?;
     let config = load_config(&path).map_err(anyhow::Error::new)?;
-    let result = apply_policy(hal, &config).map_err(anyhow::Error::new)?;
+    let (result, list) = apply_policy(hal, &config).map_err(anyhow::Error::new)?;
 
     if json {
         let value = serde_json::to_string_pretty(&result)?;
         println!("{value}");
     } else {
-        print_text(&result);
+        print_text(&result, &list);
     }
 
     Ok(())
