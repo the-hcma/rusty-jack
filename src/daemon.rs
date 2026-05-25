@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 /// Why the daemon is evaluating policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonTickReason {
+    Startup,
     Scheduled,
     UserActivity,
 }
@@ -52,7 +53,7 @@ impl DaemonState {
         became_active
     }
 
-    pub fn allow_activity_wake(&mut self, now: Instant, cooldown: Duration) -> bool {
+    pub fn allow_sony_wake(&mut self, now: Instant, cooldown: Duration) -> bool {
         if self
             .last_activity_wake
             .is_some_and(|last| now.duration_since(last) < cooldown)
@@ -123,10 +124,10 @@ pub fn run_forever(
     let mut config = load_config(config_path)?;
     let mut state = DaemonState::new();
     seed_activity_state(activity, &mut state, &config);
-    run_startup_wake_check(hal, &config, &mut state);
+    run_tick_logged(hal, &config, DaemonTickReason::Startup, Some(&mut state));
 
     loop {
-        run_tick_logged(hal, &config, DaemonTickReason::Scheduled);
+        run_tick_logged(hal, &config, DaemonTickReason::Scheduled, Some(&mut state));
         let poll_interval = Duration::from_millis(config.poll_interval_ms);
         let activity_interval = Duration::from_millis(config.activity_poll_interval_ms);
         let started = Instant::now();
@@ -144,8 +145,8 @@ pub fn run_forever(
                             Err(err) => eprintln!("warning: could not reload config: {err}"),
                         }
                         let cooldown = sony_wake_cooldown(&config);
-                        if state.allow_activity_wake(Instant::now(), cooldown) {
-                            run_tick_logged(hal, &config, DaemonTickReason::UserActivity);
+                        if state.allow_sony_wake(Instant::now(), cooldown) {
+                            run_tick_logged(hal, &config, DaemonTickReason::UserActivity, None);
                         }
                     }
                 }
@@ -157,22 +158,49 @@ pub fn run_forever(
     }
 }
 
-fn run_startup_wake_check(hal: &dyn AudioHal, config: &Config, state: &mut DaemonState) {
-    let cooldown = sony_wake_cooldown(config);
-    if state.allow_activity_wake(Instant::now(), cooldown) {
-        run_tick_logged(hal, config, DaemonTickReason::UserActivity);
-    }
-}
-
-fn run_tick_logged(hal: &dyn AudioHal, config: &Config, reason: DaemonTickReason) {
+fn run_tick_logged(
+    hal: &dyn AudioHal,
+    config: &Config,
+    reason: DaemonTickReason,
+    state: Option<&mut DaemonState>,
+) {
     match daemon_tick(hal, config, reason) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
         }
-        Ok((DaemonTickResult::NoChange(_), _)) | Ok((DaemonTickResult::AutoSwitchDisabled, _)) => {}
+        Ok((DaemonTickResult::NoChange(result), list)) => {
+            maybe_wake_selected_sony(config, reason, state, &result, &list);
+        }
+        Ok((DaemonTickResult::AutoSwitchDisabled, _)) => {}
         Err(err) => {
             eprintln!("warning: daemon tick failed: {err}");
         }
+    }
+}
+
+fn maybe_wake_selected_sony(
+    config: &Config,
+    reason: DaemonTickReason,
+    state: Option<&mut DaemonState>,
+    result: &ApplyResult,
+    list: &DeviceList,
+) {
+    if !matches!(
+        reason,
+        DaemonTickReason::Startup | DaemonTickReason::Scheduled
+    ) {
+        return;
+    }
+    let Some(state) = state else {
+        return;
+    };
+    let ApplyResult::NoChange { uid, .. } = result else {
+        return;
+    };
+
+    let cooldown = sony_wake_cooldown(config);
+    if state.allow_sony_wake(Instant::now(), cooldown) {
+        crate::sony::warn_on_output_selected(config, &list.devices, uid);
     }
 }
 
@@ -321,8 +349,8 @@ mod tests {
         let mut state = DaemonState::new();
         let now = Instant::now();
 
-        assert!(state.allow_activity_wake(now, Duration::from_secs(30)));
-        assert!(!state.allow_activity_wake(now + Duration::from_secs(1), Duration::from_secs(30)));
-        assert!(state.allow_activity_wake(now + Duration::from_secs(31), Duration::from_secs(30)));
+        assert!(state.allow_sony_wake(now, Duration::from_secs(30)));
+        assert!(!state.allow_sony_wake(now + Duration::from_secs(1), Duration::from_secs(30)));
+        assert!(state.allow_sony_wake(now + Duration::from_secs(31), Duration::from_secs(30)));
     }
 }

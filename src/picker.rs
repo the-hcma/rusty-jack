@@ -8,9 +8,15 @@ use crate::list_fmt::{self, ANSI_CYAN, ANSI_DIM, ANSI_GREEN, ANSI_RESET};
 use crate::output_device::OutputDevice;
 use crate::policy::{RoutingTarget, RoutingTargetSource};
 use crate::RustyJackError;
-use dialoguer::{theme::ColorfulTheme, Select};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{self, ClearType},
+};
 use serde::Serialize;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
+use std::time::{Duration, Instant};
 
 /// Outcome of an interactive or scripted device pick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +48,7 @@ impl PickerCancelled {
 
 const PICKER_PROMPT: &str =
     "Select output device (↑↓, Enter, Esc to cancel)  (> active, * preferred, dim = not routable)";
+const PICKER_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Resolve the configured preferred device UID against live outputs.
 #[must_use]
@@ -147,6 +154,20 @@ pub fn pick_device_index_with_notes(
     preferred_uid: Option<&str>,
     notes: &[(String, String)],
 ) -> Result<PickSelection, RustyJackError> {
+    pick_device_index_with_refreshed_notes(devices, index, preferred_uid, notes, || notes.to_vec())
+}
+
+/// Pick a device index and refresh per-device notes while the interactive picker is open.
+pub fn pick_device_index_with_refreshed_notes<F>(
+    devices: &[OutputDevice],
+    index: Option<usize>,
+    preferred_uid: Option<&str>,
+    notes: &[(String, String)],
+    mut refresh_notes: F,
+) -> Result<PickSelection, RustyJackError>
+where
+    F: FnMut() -> Vec<(String, String)>,
+{
     if devices.is_empty() {
         return Err(RustyJackError::Config(
             "no output devices available to pick".into(),
@@ -171,41 +192,169 @@ pub fn pick_device_index_with_notes(
     }
 
     let use_color = list_fmt::terminal_supports_color();
+    run_interactive_picker(devices, preferred_uid, notes, &mut refresh_notes, use_color)
+}
+
+fn run_interactive_picker(
+    devices: &[OutputDevice],
+    preferred_uid: Option<&str>,
+    notes: &[(String, String)],
+    refresh_notes: &mut dyn FnMut() -> Vec<(String, String)>,
+    use_color: bool,
+) -> Result<PickSelection, RustyJackError> {
+    let _guard = PickerTerminalGuard::enter()?;
+    let mut out = io::stdout();
+    let mut notes = notes.to_vec();
+    let mut selected = default_picker_index(devices);
+    let mut last_refresh = Instant::now();
+    let mut message: Option<String> = None;
+
+    render_interactive_picker(
+        &mut out,
+        devices,
+        preferred_uid,
+        &notes,
+        selected,
+        message.as_deref(),
+        use_color,
+    )?;
 
     loop {
-        let labels: Vec<String> = devices
-            .iter()
-            .map(|device| {
-                let label = format_picker_label_with_options(device, preferred_uid, use_color);
-                append_picker_note(label, note_for_uid(notes, &device.uid))
-            })
-            .collect();
-        let default = default_picker_index(devices);
-
-        let selection = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt(PICKER_PROMPT)
-            .items(&labels)
-            .default(default)
-            .interact_opt()
-            .map_err(|err| RustyJackError::Config(format!("picker failed: {err}")))?;
-
-        match selection {
-            None => return Ok(PickSelection::Cancelled),
-            Some(index) => {
-                let device = &devices[index];
-                if device.is_selectable() {
-                    return Ok(PickSelection::Selected(index));
+        if event::poll(Duration::from_millis(100)).map_err(picker_io_error)? {
+            match event::read().map_err(picker_io_error)? {
+                Event::Key(key) => match key.code {
+                    KeyCode::Esc => return Ok(PickSelection::Cancelled),
+                    KeyCode::Char('q') => return Ok(PickSelection::Cancelled),
+                    KeyCode::Up => {
+                        selected = selected.saturating_sub(1);
+                        message = None;
+                        render_interactive_picker(
+                            &mut out,
+                            devices,
+                            preferred_uid,
+                            &notes,
+                            selected,
+                            None,
+                            use_color,
+                        )?;
+                    }
+                    KeyCode::Down => {
+                        selected = (selected + 1).min(devices.len() - 1);
+                        message = None;
+                        render_interactive_picker(
+                            &mut out,
+                            devices,
+                            preferred_uid,
+                            &notes,
+                            selected,
+                            None,
+                            use_color,
+                        )?;
+                    }
+                    KeyCode::Enter => {
+                        let device = &devices[selected];
+                        if device.is_selectable() {
+                            return Ok(PickSelection::Selected(selected));
+                        }
+                        let reason = device
+                            .non_selectable_reason()
+                            .unwrap_or("not a routable output");
+                        message = Some(format!(
+                            "Cannot switch to {} — {reason}. Pick a speaker, monitor, or dock output.",
+                            device.friendly_label()
+                        ));
+                        render_interactive_picker(
+                            &mut out,
+                            devices,
+                            preferred_uid,
+                            &notes,
+                            selected,
+                            message.as_deref(),
+                            use_color,
+                        )?;
+                    }
+                    _ => {}
+                },
+                Event::Resize(_, _) => {
+                    render_interactive_picker(
+                        &mut out,
+                        devices,
+                        preferred_uid,
+                        &notes,
+                        selected,
+                        message.as_deref(),
+                        use_color,
+                    )?;
                 }
-                let reason = device
-                    .non_selectable_reason()
-                    .unwrap_or("not a routable output");
-                eprintln!(
-                    "Cannot switch to {} — {reason}. Pick a speaker, monitor, or dock output.",
-                    device.friendly_label()
-                );
+                _ => {}
             }
         }
+
+        if last_refresh.elapsed() >= PICKER_REFRESH_INTERVAL {
+            notes = refresh_notes();
+            last_refresh = Instant::now();
+            render_interactive_picker(
+                &mut out,
+                devices,
+                preferred_uid,
+                &notes,
+                selected,
+                message.as_deref(),
+                use_color,
+            )?;
+        }
     }
+}
+
+fn render_interactive_picker(
+    out: &mut impl Write,
+    devices: &[OutputDevice],
+    preferred_uid: Option<&str>,
+    notes: &[(String, String)],
+    selected: usize,
+    message: Option<&str>,
+    use_color: bool,
+) -> Result<(), RustyJackError> {
+    execute!(out, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))
+        .map_err(picker_io_error)?;
+    writeln!(out, "{PICKER_PROMPT}").map_err(picker_io_error)?;
+    writeln!(out).map_err(picker_io_error)?;
+
+    for (index, device) in devices.iter().enumerate() {
+        let label = format_picker_label_with_options(device, preferred_uid, use_color);
+        let label = append_picker_note(label, note_for_uid(notes, &device.uid));
+        let cursor = if index == selected { "> " } else { "  " };
+        writeln!(out, "{cursor}{label}").map_err(picker_io_error)?;
+    }
+
+    if let Some(message) = message {
+        writeln!(out).map_err(picker_io_error)?;
+        writeln!(out, "{message}").map_err(picker_io_error)?;
+    }
+
+    out.flush().map_err(picker_io_error)
+}
+
+struct PickerTerminalGuard;
+
+impl PickerTerminalGuard {
+    fn enter() -> Result<Self, RustyJackError> {
+        terminal::enable_raw_mode().map_err(picker_io_error)?;
+        execute!(io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)
+            .map_err(picker_io_error)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for PickerTerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(io::stdout(), cursor::Show, terminal::LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+fn picker_io_error(err: io::Error) -> RustyJackError {
+    RustyJackError::Config(format!("picker failed: {err}"))
 }
 
 fn note_for_uid<'a>(notes: &'a [(String, String)], uid: &str) -> Option<&'a str> {

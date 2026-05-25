@@ -76,6 +76,12 @@ pub fn wake_on_output_selected(
     }
 
     let previous_status = current_power_status(sony).ok();
+    if previous_status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("active"))
+    {
+        return Ok(None);
+    }
     let mut result = send_wake_command(sony)?;
     result.previous_status = previous_status;
     Ok(Some(result))
@@ -111,6 +117,12 @@ pub fn wake_on_activity(
     }
 
     let previous_status = current_power_status(sony).ok();
+    if previous_status
+        .as_deref()
+        .is_some_and(|status| status.eq_ignore_ascii_case("active"))
+    {
+        return Ok(None);
+    }
     let mut result = send_wake_command(sony)?;
     result.previous_status = previous_status;
     Ok(Some(result))

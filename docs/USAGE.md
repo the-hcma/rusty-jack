@@ -93,7 +93,15 @@ LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not syst
 
 ### Install
 
-Install the binary, then let Rusty Jack render and load the LaunchAgent:
+Install the binary through Homebrew, then let Rusty Jack render and load the LaunchAgent:
+
+```bash
+brew tap thehcma/tap
+brew install rusty-jack
+rusty-jack install
+```
+
+For a source checkout, use `make install` first:
 
 ```bash
 make install
@@ -119,11 +127,10 @@ Replace the binary first, then refresh and restart the LaunchAgent:
 ```bash
 rusty-jack pause
 git pull
-make install
-rusty-jack upgrade
+make upgrade
 ```
 
-`upgrade` does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable and restarts the daemon. If the daemon was not installed yet, `upgrade` installs it.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable and restarts the daemon. If the daemon was not installed yet, `upgrade` installs it.
 
 ---
 
@@ -167,6 +174,7 @@ Config is optional. When present:
 
 - `also_set_system_output` from config (default `true` if no config)
 - `volume` applied only when you pick the **configured preferred** device and a switch happens
+- Sony power-state notes refresh while the interactive picker is open.
 
 **Interactive legend:**
 
@@ -294,6 +302,8 @@ make fmt        # check formatting (CI)
 make clippy     # lint (CI)
 make universal  # fat binary
 make install    # cargo install --path .
+make upgrade    # install once, then restart LaunchAgent
+make uninstall  # remove LaunchAgent and cargo-installed binary
 ```
 
 Cross-compilation targets used in CI: `aarch64-apple-darwin`, `x86_64-apple-darwin`.

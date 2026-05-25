@@ -219,7 +219,7 @@ struct LoadDaemonResult {
     had_plist: bool,
 }
 
-fn write_and_load_daemon() -> Result<LoadDaemonResult, RustyJackError> {
+fn write_and_load_daemon(fast_restart: bool) -> Result<LoadDaemonResult, RustyJackError> {
     let plist_path = plist_path_or_err()?;
     let home = home_dir_or_err()?;
     let binary_path = current_exe_display()?;
@@ -227,8 +227,14 @@ fn write_and_load_daemon() -> Result<LoadDaemonResult, RustyJackError> {
     let domain = gui_domain()?;
     let was_loaded = is_job_loaded(&domain, LAUNCH_AGENT_LABEL)?;
     let had_plist = plist_path.exists();
+    let plist = render_launch_agent_plist(&binary_path, &home_display);
+    let plist_unchanged = had_plist
+        && std::fs::read_to_string(&plist_path)
+            .map(|existing| existing == plist)
+            .unwrap_or(false);
 
-    if had_plist || was_loaded {
+    if (had_plist || was_loaded) && !should_fast_restart(fast_restart, was_loaded, plist_unchanged)
+    {
         stop_job_best_effort(&domain, &plist_path);
     }
 
@@ -237,7 +243,6 @@ fn write_and_load_daemon() -> Result<LoadDaemonResult, RustyJackError> {
     }
     std::fs::create_dir_all(home.join("Library/Logs")).map_err(RustyJackError::Io)?;
 
-    let plist = render_launch_agent_plist(&binary_path, &home_display);
     std::fs::write(&plist_path, plist).map_err(RustyJackError::Io)?;
 
     let service = service_id(&domain, LAUNCH_AGENT_LABEL);
@@ -249,11 +254,20 @@ fn write_and_load_daemon() -> Result<LoadDaemonResult, RustyJackError> {
     }
 
     let plist_display = plist_path_display(&plist_path)?;
-    let bootstrap_status = run_launchctl(&["bootstrap", &domain, &plist_display])?;
-    if bootstrap_status != 0 {
-        return Err(RustyJackError::Launchd(format!(
-            "launchctl bootstrap {domain} {plist_display} failed (status {bootstrap_status})"
-        )));
+    if should_fast_restart(fast_restart, was_loaded, plist_unchanged) {
+        let kickstart_status = run_launchctl(&["kickstart", "-k", &service])?;
+        if kickstart_status != 0 {
+            return Err(RustyJackError::Launchd(format!(
+                "launchctl kickstart -k {service} failed (status {kickstart_status})"
+            )));
+        }
+    } else {
+        let bootstrap_status = run_launchctl(&["bootstrap", &domain, &plist_display])?;
+        if bootstrap_status != 0 {
+            return Err(RustyJackError::Launchd(format!(
+                "launchctl bootstrap {domain} {plist_display} failed (status {bootstrap_status})"
+            )));
+        }
     }
 
     Ok(LoadDaemonResult {
@@ -265,9 +279,13 @@ fn write_and_load_daemon() -> Result<LoadDaemonResult, RustyJackError> {
     })
 }
 
+fn should_fast_restart(fast_restart: bool, was_loaded: bool, plist_unchanged: bool) -> bool {
+    fast_restart && was_loaded && plist_unchanged
+}
+
 /// Install or reinstall the LaunchAgent for the current user.
 pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
-    let result = write_and_load_daemon()?;
+    let result = write_and_load_daemon(false)?;
     Ok(InstallResult::Installed {
         label: result.label,
         plist_path: result.plist_path,
@@ -278,7 +296,7 @@ pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
 
 /// Refresh the LaunchAgent plist to the current binary and restart the daemon.
 pub fn upgrade_daemon() -> Result<UpgradeResult, RustyJackError> {
-    let result = write_and_load_daemon()?;
+    let result = write_and_load_daemon(true)?;
     if result.had_plist {
         Ok(UpgradeResult::Upgraded {
             label: result.label,
@@ -568,6 +586,14 @@ mod tests {
 	pid = 12345
 "#;
         assert_eq!(parse_launchctl_pid(output), Some(12_345));
+    }
+
+    #[test]
+    fn test_should_fast_restart_only_when_loaded_and_unchanged() {
+        assert!(should_fast_restart(true, true, true));
+        assert!(!should_fast_restart(false, true, true));
+        assert!(!should_fast_restart(true, false, true));
+        assert!(!should_fast_restart(true, true, false));
     }
 
     #[test]

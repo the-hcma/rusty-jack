@@ -7,22 +7,15 @@ macOS CLI that routes system audio to your chosen **HDMI, DisplayPort, USB-C doc
 ## Quick start
 
 ```bash
-# Prerequisites: macOS 12+, Xcode CLT, Rust 1.85+
-xcode-select --install
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-
-git clone https://github.com/thehcma/rusty-jack.git
-cd rusty-jack
-make release
-
+brew tap thehcma/tap
+brew install rusty-jack
 mkdir -p ~/.config/rusty-jack
-cp config.example.json ~/.config/rusty-jack/config.json
+cp "$(brew --prefix rusty-jack)/share/rusty-jack/config.example.json" ~/.config/rusty-jack/config.json
 # Edit preferred_device.monitor_name to match `rusty-jack list`
 
-./target/release/rusty-jack list
-./target/release/rusty-jack status
-./target/release/rusty-jack apply
+rusty-jack list
+rusty-jack status
+rusty-jack apply
 ```
 
 For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — rusty-jack will start it automatically when needed and warn with the download URL when it is missing. See [Volume on external displays](#volume-on-external-displays).
@@ -225,11 +218,10 @@ When a new Rusty Jack version is available, stop the running job before replacin
 ```bash
 rusty-jack pause
 git pull
-make install
-rusty-jack upgrade
+make upgrade
 ```
 
-`upgrade` does not download or build Rusty Jack. It refreshes the LaunchAgent to whichever `rusty-jack` binary is running the command, then restarts the daemon.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade` to refresh and restart the LaunchAgent. The CLI `upgrade` command itself does not download or build Rusty Jack.
 
 ---
 
@@ -267,6 +259,8 @@ make release
 
 ```bash
 make install    # ~/.cargo/bin/rusty-jack
+make upgrade    # install once, then restart LaunchAgent
+make uninstall  # stop/remove LaunchAgent, then cargo uninstall rusty-jack
 ```
 
 ### 4. Universal binary
@@ -289,7 +283,7 @@ Confirm `--help` commit matches `git rev-parse --short HEAD`.
 
 ### Makefile targets
 
-`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `clean` — see [Makefile](Makefile).
+`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `upgrade`, `uninstall`, `clean` — see [Makefile](Makefile).
 
 ---
 
@@ -310,7 +304,7 @@ See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 |------|--------|
 | Routing CLI, eqMac integration, volume retries, daemon polling | Implemented |
 | Sony speaker wake via ScalarWebAPI + daemon idle polling | Implemented |
-| LaunchAgent status helper | Planned |
+| LaunchAgent install, upgrade, uninstall, and status helper | Implemented |
 | Native event listener refinements for activity detection | Planned |
 | Own virtual driver + software volume | Planned |
 
@@ -318,9 +312,16 @@ Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 
 ---
 
-## Packaging (planned)
+## Packaging
 
-Homebrew packaging is not shipped yet. Until then, use `make install` and the manual per-user LaunchAgent flow above. Formula sketch: [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
+Rusty Jack is distributed through the personal Homebrew tap `thehcma/tap`:
+
+```bash
+brew tap thehcma/tap
+brew install rusty-jack
+```
+
+The formula source lives at [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
 
 ---
 
