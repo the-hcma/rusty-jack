@@ -139,16 +139,21 @@ mod tests {
 
     #[test]
     fn test_match_eqmac_driver_by_uid() {
+        let drivers = installed_hal_drivers();
+        let has_eqmac = drivers
+            .iter()
+            .any(|d| d.bundle_id == "com.bitgapp.eqmac.driver");
+        if !has_eqmac {
+            return;
+        }
+
         let driver = match_hal_driver(
             "EQMOutputCapture",
             "DELL U3219Q (eqMac)",
             Some("Bitgapp Ltd"),
             None,
-        );
-        if installed_hal_drivers().is_empty() {
-            return;
-        }
-        assert!(driver.is_some(), "expected eqMac driver on this machine");
-        assert_eq!(driver.unwrap().bundle_id, "com.bitgapp.eqmac.driver");
+        )
+        .expect("eqMac HAL driver is installed but match_hal_driver returned None");
+        assert_eq!(driver.bundle_id, "com.bitgapp.eqmac.driver");
     }
 }
