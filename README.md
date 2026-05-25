@@ -164,7 +164,7 @@ cargo run --release -- status  # release via cargo run
 
 | Command | Description |
 |---------|-------------|
-| `rusty-jack status` | Routing snapshot: device table (active row highlighted), virtual default details, policy match |
+| `rusty-jack status` | Routing snapshot: device table (active row highlighted), virtual default details, policy match, **current volume** |
 | `rusty-jack status --json` | Same fields as JSON |
 | `rusty-jack status --config /path/to/config.json` | Evaluate policy against a specific config file |
 
@@ -187,7 +187,7 @@ Requires a valid config file. Resolves `preferred_device.monitor_name` or `uid`,
 | `rusty-jack picker --index N` | Switch to device index `N` (same IDX as `list`) without a menu |
 | `rusty-jack picker --json` | Same result as JSON (`switched` or `no_change`) |
 
-Does not require config. When config is present, uses `also_set_system_output` from it; otherwise defaults to `true`. If you pick the **configured preferred device** and a switch occurs, config `volume` is applied (same as `apply`). Other picks leave volume unchanged. Press **Esc** to cancel without switching.
+Does not require config. When config is present, uses `also_set_system_output` from it; otherwise defaults to `true`. If you pick the **configured preferred device** and a switch occurs, config `volume` is applied with retries (helps when eqMac resets level). Other picks leave volume unchanged. In the menu: `>` active, `*` config preferred, **dim** = not routable (e.g. Zoom virtual). Press **Esc** to cancel.
 
 ### Daemon control
 
