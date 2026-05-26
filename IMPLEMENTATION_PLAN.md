@@ -143,7 +143,7 @@ curl -s -X POST "http://192.168.1.42:10000/<base-path>/system" \
 ##### Rust module layout (current)
 
 ```text
-src/scalar_webapi.rs        # discovery, service priming, power status, wake command
+src/scalar_webapi/mod.rs    # discovery, service priming, power status, wake command
 src/activity.rs    # macOS HID idle-time sampling abstraction
 src/daemon.rs      # scheduled policy ticks and idle-to-active wake trigger
 ```

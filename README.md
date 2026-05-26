@@ -173,6 +173,8 @@ Minimal example:
 
 ScalarWebAPI device example: [`config.example.scalarwebapi.json`](./config.example.scalarwebapi.json). Other devices should work if they expose the same ScalarWebAPI service; Rusty Jack discovers the advertised endpoint and uses `system.getPowerStatus` / `system.setPowerStatus`.
 
+Expected compatible Sony devices include Sony `SRS-ZR5` (the model this integration has been tested with), `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`. This list is not exhaustive; compatibility depends on the device advertising a ScalarWebAPI endpoint on the local network.
+
 ---
 
 ## Picker and device list
