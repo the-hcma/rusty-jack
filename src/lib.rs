@@ -50,7 +50,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
         cli::Commands::Uninstall(args) => {
             commands::uninstall::run(args.json, args.remove_config, args.keep_config)?
         }
-        cli::Commands::Upgrade(args) => commands::upgrade::run(args.json)?,
+        cli::Commands::Upgrade(args) => commands::upgrade::run(args.json, args.force)?,
         cli::Commands::Daemon => {
             let hal = coreaudio::platform_hal()?;
             commands::daemon::run(hal.as_ref(), cli.config.as_deref())?;

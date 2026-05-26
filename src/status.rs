@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::hdmi_displayport_volume_control::{
-    hdmi_displayport_volume_control_status, HdmiDisplayPortVolumeControlStatus,
+    hdmi_displayport_volume_control_status_for_target, HdmiDisplayPortVolumeControlStatus,
 };
 use crate::launchd::DaemonStatus;
 use crate::list_fmt::{self, format_labeled_section};
@@ -71,7 +71,12 @@ pub fn build_status(
         config_path,
     );
 
-    let hdmi_displayport_volume_control = hdmi_displayport_volume_control_status(&list.devices);
+    let selected_uid = policy
+        .preferred_device_uid
+        .as_deref()
+        .or(policy.active_device_uid.as_deref());
+    let hdmi_displayport_volume_control =
+        hdmi_displayport_volume_control_status_for_target(&list.devices, selected_uid);
 
     StatusSnapshot {
         devices: list.devices,
@@ -103,14 +108,7 @@ fn format_hdmi_displayport_volume_control_block(
                 "not installed".into()
             },
         ),
-        (
-            "driver recommended",
-            if status.native_driver_recommended {
-                "yes (connected HDMI/DisplayPort output detected)".into()
-            } else {
-                "no".into()
-            },
-        ),
+        ("driver recommended", format_driver_recommended(status)),
         (
             "eqMac fallback",
             if let Some(path) = &status.eqmac_app_path {
@@ -135,6 +133,18 @@ fn format_hdmi_displayport_volume_control_block(
 
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     format_labeled_section("HDMI/DisplayPort Volume Control", "  ", &borrowed)
+}
+
+fn format_driver_recommended(status: &HdmiDisplayPortVolumeControlStatus) -> String {
+    let value = if status.native_driver_recommended {
+        "yes"
+    } else {
+        "no"
+    };
+    status
+        .native_driver_recommendation_reason
+        .as_ref()
+        .map_or_else(|| value.into(), |reason| format!("{value} ({reason})"))
 }
 
 fn format_daemon_block(daemon: &DaemonStatus) -> String {
@@ -497,6 +507,26 @@ mod tests {
         assert!(has_row(&not_installed, "installed", "no"));
         assert!(has_row(&not_installed, "running", "no"));
         assert!(has_row(&not_installed, "paused", "no"));
+    }
+
+    #[test]
+    fn test_format_driver_recommended_explains_selected_builtin() {
+        let value = format_driver_recommended(&HdmiDisplayPortVolumeControlStatus {
+            connected_output_present: true,
+            native_driver_installed: false,
+            native_driver_recommended: false,
+            native_driver_recommendation_reason: Some(
+                "selected output is not HDMI/DisplayPort".into(),
+            ),
+            native_driver_install_path: None,
+            native_driver: None,
+            eqmac_installed: false,
+            eqmac_app_path: None,
+            eqmac_hal_driver_path: None,
+            orphaned_eqmac_hal_driver_path: None,
+            recommendation: None,
+        });
+        assert_eq!(value, "no (selected output is not HDMI/DisplayPort)");
     }
 
     #[test]

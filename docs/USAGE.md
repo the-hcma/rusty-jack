@@ -78,7 +78,7 @@ rusty-jack install [--json]
 rusty-jack pause [--json]
 rusty-jack resume [--json]
 rusty-jack uninstall [--json]
-rusty-jack upgrade [--json]
+rusty-jack upgrade [--json] [--force]
 ```
 
 | Command | Plist | Agent |
@@ -88,7 +88,7 @@ rusty-jack upgrade [--json]
 | `pause` | Kept | Stopped + disabled |
 | `resume` | Kept | Enabled + started |
 | `uninstall` | **Removed** | Stopped + disabled |
-| `upgrade` | Rewritten for current binary | Paused, then resumed if it was running |
+| `upgrade` | Rewritten only when needed | Paused, then resumed if it was running |
 
 LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not system-wide. Each macOS account that wants auto-routing can install its own `~/Library/LaunchAgents/com.example.rusty-jack.plist`; the jobs do not conflict across users.
 
@@ -168,7 +168,7 @@ git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It checks the bundled native driver against the installed driver and only offers a driver upgrade when the bundled driver has a material change. It rewrites the plist to point at the current `rusty-jack` executable, reports the before/after version and commit, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` so launchd restarts after an in-place source install. The CLI `upgrade` command itself does not download source or build a new binary. It checks the bundled native driver against the installed driver and only offers a driver upgrade when the bundled driver has a material change. It rewrites the plist only when the LaunchAgent differs from the current `rusty-jack` executable, reports the before/after version and commit for real daemon refreshes, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it. Use `--force` to rewrite/restart even when the LaunchAgent already matches.
 
 ---
 
@@ -346,7 +346,7 @@ make clippy     # lint (CI)
 make universal  # fat binary
 make driver-bundle  # build target/share/rusty-jack/RustyJack.driver
 make install    # cargo install --path . and install the bundled driver under ~/.cargo/share
-make upgrade    # install once, then restart LaunchAgent
+make upgrade    # install once, then force-refresh LaunchAgent
 make uninstall  # remove LaunchAgent and cargo-installed binary
 ```
 

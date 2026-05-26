@@ -75,7 +75,7 @@ universal: check-cargo
 	./scripts/build-universal
 
 upgrade: install
-	rusty-jack upgrade
+	rusty-jack upgrade --force
 
 validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
 	./scripts/validate-driver-bundle "$(DRIVER_BUNDLE)"

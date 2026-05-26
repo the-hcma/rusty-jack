@@ -177,5 +177,6 @@ fn test_upgrade_subcommand_in_help() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Refresh"));
+        .stdout(predicate::str::contains("Refresh"))
+        .stdout(predicate::str::contains("--force"));
 }

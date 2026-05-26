@@ -3,10 +3,16 @@
 use crate::apply::print_text;
 use crate::config::{load_config_optional, resolve_config_path, Config};
 use crate::coreaudio::AudioHal;
+use crate::hdmi_displayport_volume_control::{
+    native_driver_info, route_needs_hdmi_displayport_volume_control,
+};
 use crate::launchd::{
     daemon_status, pause_daemon_with_reason, DaemonPauseReason, DaemonStatus, PauseResult,
 };
 use crate::list_fmt::{terminal_supports_color, ANSI_CYAN, ANSI_RESET};
+use crate::native_driver::{
+    install_for_connected_hdmi_displayport, print_install_result as print_driver_install_result,
+};
 use crate::output_device::OutputDevice;
 use crate::picker::{
     pick_and_switch, pick_device_index_with_notes, pick_device_index_with_refreshed_notes,
@@ -29,11 +35,9 @@ pub fn run(
     let config = load_picker_config(config_path)?;
 
     let preferred_uid = preferred_uid_from_config(config.as_ref(), &list.devices);
-    let picker_notes = if index.is_none() && !json {
-        config
-            .as_ref()
-            .map(|config| crate::scalar_webapi_device::picker_power_notes(config, &list.devices))
-            .unwrap_or_default()
+    let native_driver_installed = native_driver_info().is_some();
+    let picker_note_rows = if index.is_none() && !json {
+        picker_notes(config.as_ref(), &list.devices, native_driver_installed)
     } else {
         Vec::new()
     };
@@ -43,22 +47,15 @@ pub fn run(
             &list.devices,
             index,
             preferred_uid.as_deref(),
-            &picker_notes,
-            || {
-                config
-                    .as_ref()
-                    .map(|config| {
-                        crate::scalar_webapi_device::picker_power_notes(config, &list.devices)
-                    })
-                    .unwrap_or_default()
-            },
+            &picker_note_rows,
+            || picker_notes(config.as_ref(), &list.devices, native_driver_installed),
         )
     } else {
         pick_device_index_with_notes(
             &list.devices,
             index,
             preferred_uid.as_deref(),
-            &picker_notes,
+            &picker_note_rows,
         )
     }
     .map_err(anyhow::Error::new)?;
@@ -75,6 +72,7 @@ pub fn run(
         }
         PickSelection::Selected(selection) => {
             let device = &list.devices[selection];
+            maybe_offer_native_driver_for_pick(json, &list.devices, device)?;
             let also_set_system_output = config
                 .as_ref()
                 .map(|c| c.also_set_system_output)
@@ -141,6 +139,74 @@ fn load_picker_config(config_path: Option<&Path>) -> Result<Option<Config>> {
     };
     let explicit = config_path.is_some();
     Ok(load_config_optional(&path, explicit)?)
+}
+
+fn picker_notes(
+    config: Option<&Config>,
+    devices: &[OutputDevice],
+    native_driver_installed: bool,
+) -> Vec<(String, String)> {
+    let mut notes = config
+        .map(|config| crate::scalar_webapi_device::picker_power_notes(config, devices))
+        .unwrap_or_default();
+    for (uid, note) in native_driver_picker_notes(devices, native_driver_installed) {
+        append_or_merge_picker_note(&mut notes, uid, note);
+    }
+    notes
+}
+
+fn append_or_merge_picker_note(notes: &mut Vec<(String, String)>, uid: String, note: String) {
+    if let Some((_, existing_note)) = notes.iter_mut().find(|(note_uid, _)| *note_uid == uid) {
+        if !existing_note.is_empty() {
+            existing_note.push_str("; ");
+        }
+        existing_note.push_str(&note);
+        return;
+    }
+    notes.push((uid, note));
+}
+
+fn native_driver_picker_notes(
+    devices: &[OutputDevice],
+    native_driver_installed: bool,
+) -> Vec<(String, String)> {
+    if native_driver_installed {
+        return Vec::new();
+    }
+
+    devices
+        .iter()
+        .filter(|device| {
+            device.is_alive
+                && device.is_selectable()
+                && route_needs_hdmi_displayport_volume_control(devices, &device.uid)
+        })
+        .map(|device| {
+            (
+                device.uid.clone(),
+                "native driver recommended for volume keys".into(),
+            )
+        })
+        .collect()
+}
+
+fn maybe_offer_native_driver_for_pick(
+    json: bool,
+    devices: &[OutputDevice],
+    device: &OutputDevice,
+) -> Result<()> {
+    if json
+        || !crate::setup::terminal_is_interactive()
+        || native_driver_info().is_some()
+        || !route_needs_hdmi_displayport_volume_control(devices, &device.uid)
+    {
+        return Ok(());
+    }
+
+    let result =
+        install_for_connected_hdmi_displayport(devices, true).map_err(anyhow::Error::new)?;
+    print_driver_install_result(&result);
+    Ok(())
 }
 
 fn volume_for_manual_pick(
@@ -337,5 +403,45 @@ mod tests {
     #[test]
     fn test_load_picker_config_explicit_missing_errors() {
         assert!(load_picker_config(Some(Path::new("/no/such/rusty-jack-config.json"))).is_err());
+    }
+
+    #[test]
+    fn test_native_driver_picker_notes_for_hdmi_when_missing() {
+        let devices = vec![
+            device("Built-in Output", "Built-in Output", true),
+            OutputDevice {
+                transport: TransportKind::Hdmi,
+                uid: "hdmi".into(),
+                name: "HDMI".into(),
+                ..device("hdmi", "HDMI", false)
+            },
+        ];
+
+        assert_eq!(
+            native_driver_picker_notes(&devices, false),
+            vec![(
+                "hdmi".into(),
+                "native driver recommended for volume keys".into()
+            )]
+        );
+        assert!(native_driver_picker_notes(&devices, true).is_empty());
+    }
+
+    #[test]
+    fn test_picker_notes_merge_same_uid() {
+        let mut notes = vec![("hdmi".into(), "ScalarWebAPI: standby".into())];
+        append_or_merge_picker_note(
+            &mut notes,
+            "hdmi".into(),
+            "native driver recommended for volume keys".into(),
+        );
+
+        assert_eq!(
+            notes,
+            vec![(
+                "hdmi".into(),
+                "ScalarWebAPI: standby; native driver recommended for volume keys".into()
+            )]
+        );
     }
 }

@@ -43,7 +43,7 @@ pub enum Commands {
     Status(StatusArgs),
     /// Uninstall the launchd LaunchAgent (alias for disable)
     Uninstall(UninstallArgs),
-    /// Refresh the LaunchAgent to the current binary and restart it
+    /// Refresh the LaunchAgent to the current binary when needed
     Upgrade(UpgradeArgs),
 }
 
@@ -131,6 +131,10 @@ pub struct UpgradeArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
     pub json: bool,
+
+    /// Restart/rewrite even when the LaunchAgent already matches this binary
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[cfg(test)]
@@ -297,6 +301,15 @@ mod tests {
         let cli = Cli::try_parse_from(["rusty-jack", "upgrade", "--json"]).unwrap();
         match cli.command {
             Commands::Upgrade(args) => assert!(args.json),
+            _ => panic!("expected upgrade"),
+        }
+    }
+
+    #[test]
+    fn test_upgrade_force_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "upgrade", "--force"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => assert!(args.force),
             _ => panic!("expected upgrade"),
         }
     }
