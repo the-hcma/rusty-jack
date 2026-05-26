@@ -15,7 +15,7 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, HDMI/Display
 
 If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver`, run `make install` from a source checkout, or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
 
-The packaged `RustyJack.driver` is currently the loadable HAL skeleton. Until the virtual output and passthrough pipeline lands, use eqMac as the functional volume-control fallback if you need HDMI/DP keyboard volume today.
+The packaged `RustyJack.driver` currently exposes the minimal virtual output and controls, but it is still a null output. Until the passthrough pipeline lands, use eqMac as the functional volume-control fallback if you need HDMI/DP keyboard volume today.
 
 ---
 

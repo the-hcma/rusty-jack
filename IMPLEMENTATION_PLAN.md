@@ -1,6 +1,6 @@
 # Rusty Jack — Implementation Plan
 
-**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the functional software volume layer when eqMac is already installed. Rusty Jack now packages its own loadable HAL driver skeleton; the virtual output and passthrough software-volume pipeline remain the next native-driver phase.
+**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the functional software volume layer when eqMac is already installed. Rusty Jack now packages its own HAL driver with a minimal virtual output device; the passthrough software-volume pipeline remains the next native-driver phase.
 
 This plan is based on investigation of the open-source [eqMac v1.3.2](https://github.com/bitgapp/eqMac) tree (`native/app`, `native/driver`, `native/shared`) and comparable tools ([audio-priority-cli](https://github.com/mateusbadalotti/audio-priority-cli-macos), [audioswitch](https://github.com/retrography/audioswitch)).
 
@@ -20,7 +20,7 @@ This document mixes shipped architecture and roadmap notes. For the exact user-f
 | Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
 | LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, status reporting |
 | ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
-| Native HDMI/DP software volume without eqMac | In progress: packaged loadable AudioServerPlugIn skeleton; virtual output + passthrough planned |
+| Native HDMI/DP software volume without eqMac | In progress: packaged AudioServerPlugIn with minimal virtual output, stereo stream, and controls; passthrough planned |
 
 ---
 
@@ -56,7 +56,7 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | **No GUI, launchd-friendly, JSON config** | Deliberate simplification vs eqMac |
 | **No EQ, booster, or per-app mixer in v1** | Out of scope unless explicitly added later |
 
-**Phased delivery:** Enumeration, routing, config migration, daemon polling, LaunchAgent controls, eqMac fallback, Native driver lifecycle/package detection, and ScalarWebAPI wake support are implemented. The active driver phase adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can provide HDMI/DP volume-key support without eqMac.
+**Phased delivery:** Enumeration, routing, config migration, daemon polling, LaunchAgent controls, eqMac fallback, native driver lifecycle/package detection, minimal HAL virtual output, and ScalarWebAPI wake support are implemented. The active driver phase adds a **passthrough software-volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can provide HDMI/DP volume-key support without eqMac.
 
 ---
 
@@ -959,8 +959,8 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 
 Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
-- [ ] **AudioServerPlugIn** virtual output device (study eqMac `native/driver`, [tympan-aspl](https://github.com/penta2himajin/tympan-aspl), Apple null-driver sample)
-- [ ] `driver install` / `driver uninstall` (copy to `/Library/Audio/Plug-Ins/HAL/`, restart `coreaudiod` or document reboot)
+- [x] **AudioServerPlugIn** virtual output device skeleton with stereo stream and basic volume/mute controls
+- [x] `driver install` / `driver uninstall` lifecycle via `rusty-jack install`, `upgrade`, and `uninstall`
 - [ ] Daemon **passthrough loop**: read from virtual device, apply **software volume** (sync with volume keys / `kAudioDevicePropertyVolumeScalar`), write to configured physical UID
 - [ ] Set virtual device as **default output** + **default system output** when driver is active
 - [ ] `uninstall` removes driver and restores prior physical default
@@ -1134,6 +1134,6 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 
 ---
 
-*Document version: 1.8 — current routing daemon, eqMac fallback, LaunchAgent controls, ScalarWebAPI wake support, and packaged HAL driver skeleton; native HDMI/DP virtual output and passthrough remain future work.*
+*Document version: 1.9 — current routing daemon, eqMac fallback, LaunchAgent controls, ScalarWebAPI wake support, and packaged HAL virtual output; native HDMI/DP passthrough remains future work.*
 
 Copyright (c) 2026 Henrique Andrade / thehcma.

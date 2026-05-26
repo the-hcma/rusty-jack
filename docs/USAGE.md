@@ -147,7 +147,7 @@ Packages include the bundle at `share/rusty-jack/RustyJack.driver`. Source insta
 ./scripts/validate-driver-bundle
 ```
 
-The current bundle is a loadable HAL skeleton. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle; the virtual output device and passthrough software-volume pipeline are the next driver milestone.
+The current bundle exposes a minimal virtual HAL output named **Rusty Jack**, with a stereo output stream plus volume and mute controls. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle. The device is still a null output until the passthrough software-volume pipeline is wired up, so Rusty Jack does not automatically route audio through it yet.
 
 ### Pause, Resume, Uninstall
 
