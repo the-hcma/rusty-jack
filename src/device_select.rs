@@ -28,7 +28,15 @@ pub enum ResolveError {
     NotSpecified,
     UidNotFound(String),
     MonitorNotFound(String),
-    MonitorAmbiguous { name: String, count: usize },
+    MonitorAmbiguous {
+        name: String,
+        count: usize,
+    },
+    MonitorMismatch {
+        uid: String,
+        expected: String,
+        actual: Option<String>,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -43,6 +51,23 @@ impl std::fmt::Display for ResolveError {
                 f,
                 "monitor name `{name}` matches {count} outputs — set `uid` to disambiguate"
             ),
+            Self::MonitorMismatch {
+                uid,
+                expected,
+                actual,
+            } => {
+                if let Some(actual) = actual {
+                    write!(
+                        f,
+                        "device uid `{uid}` is connected to monitor `{actual}`, but config expects `{expected}`"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "device uid `{uid}` has no monitor name, but config expects `{expected}`"
+                    )
+                }
+            }
         }
     }
 }
@@ -61,11 +86,28 @@ pub fn resolve_device_selector(
         .as_deref()
         .filter(|u| !crate::config::is_placeholder_uid(u))
     {
-        return devices
+        let device = devices
             .iter()
             .find(|d| d.uid == uid)
-            .map(|d| d.uid.clone())
-            .ok_or_else(|| ResolveError::UidNotFound(uid.to_string()));
+            .ok_or_else(|| ResolveError::UidNotFound(uid.to_string()))?;
+
+        if let Some(expected) = selector
+            .monitor_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            let actual = device.monitor_name.as_deref().map(str::trim);
+            if !actual.is_some_and(|name| name.eq_ignore_ascii_case(expected)) {
+                return Err(ResolveError::MonitorMismatch {
+                    uid: uid.to_string(),
+                    expected: expected.to_string(),
+                    actual: device.monitor_name.clone(),
+                });
+            }
+        }
+
+        return Ok(device.uid.clone());
     }
 
     if let Some(name) = selector
@@ -149,6 +191,34 @@ mod tests {
             uid: Some("hdmi-1".into()),
             monitor_name: None,
         };
+        assert_eq!(
+            resolve_device_selector(&selector, &devices).unwrap(),
+            "hdmi-1"
+        );
+    }
+
+    #[test]
+    fn test_resolve_by_uid_requires_matching_monitor_when_configured() {
+        let devices = vec![device("hdmi-1", "DELL U3223QE", true)];
+        let selector = DeviceSelector {
+            uid: Some("hdmi-1".into()),
+            monitor_name: Some("DELL U3219Q".into()),
+        };
+
+        assert!(matches!(
+            resolve_device_selector(&selector, &devices),
+            Err(ResolveError::MonitorMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_resolve_by_uid_allows_matching_monitor() {
+        let devices = vec![device("hdmi-1", "DELL U3219Q", true)];
+        let selector = DeviceSelector {
+            uid: Some("hdmi-1".into()),
+            monitor_name: Some("dell u3219q".into()),
+        };
+
         assert_eq!(
             resolve_device_selector(&selector, &devices).unwrap(),
             "hdmi-1"

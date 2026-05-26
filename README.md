@@ -145,7 +145,7 @@ Default path: `~/.config/rusty-jack/config.json`. Copy from [`config.example.jso
 |-------|-------------|
 | `version` | Must be `1` |
 | `preferred_device.monitor_name` | Match display product name from `list` (unique) |
-| `preferred_device.uid` | Or match CoreAudio UID directly |
+| `preferred_device.uid` | Match CoreAudio UID directly; when paired with `monitor_name`, both must describe the same connected output |
 | `preferred_device_uid` | Legacy; use `preferred_device.uid` |
 | `fallback_uids` | Try in order if preferred is unplugged; empty means use the built-in output automatically when available |
 | `also_set_system_output` | Also set system/alert output (default `true`) |
