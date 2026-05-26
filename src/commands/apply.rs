@@ -53,7 +53,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: Some("TV".into()),
         }]);
 
         run(&hal, true, Some(file.path())).unwrap();

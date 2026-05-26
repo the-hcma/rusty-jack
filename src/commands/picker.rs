@@ -234,7 +234,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: active,
-            monitor_name: None,
         }
     }
 
@@ -244,7 +243,6 @@ mod tests {
             device("builtin", "Built-in Output", true),
             OutputDevice {
                 transport: TransportKind::Hdmi,
-                monitor_name: Some("TV".into()),
                 uid: "hdmi".into(),
                 name: "HDMI".into(),
                 ..device("hdmi", "HDMI", false)
@@ -262,7 +260,6 @@ mod tests {
             device("builtin", "Built-in Output", true),
             OutputDevice {
                 transport: TransportKind::Hdmi,
-                monitor_name: Some("TV".into()),
                 uid: "hdmi".into(),
                 name: "HDMI".into(),
                 ..device("hdmi", "HDMI", false)
@@ -314,7 +311,6 @@ mod tests {
             device("builtin", "Built-in Output", true),
             OutputDevice {
                 transport: TransportKind::Hdmi,
-                monitor_name: Some("TV".into()),
                 uid: "hdmi".into(),
                 name: "HDMI".into(),
                 ..device("hdmi", "HDMI", false)

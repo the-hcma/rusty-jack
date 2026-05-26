@@ -60,7 +60,6 @@ mod tests {
             is_alive: true,
             is_default: true,
             is_active: true,
-            monitor_name: Some("LG TV".into()),
         }])
         .with_output_volume(42);
 
@@ -77,7 +76,6 @@ mod tests {
             is_alive: true,
             is_default: true,
             is_active: true,
-            monitor_name: Some("LG TV".into()),
         }]);
         run(&hal, true, None).unwrap();
     }
@@ -104,7 +102,6 @@ mod tests {
             is_alive: true,
             is_default: true,
             is_active: true,
-            monitor_name: None,
         }]);
 
         run(&hal, true, Some(file.path())).unwrap();

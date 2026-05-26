@@ -181,7 +181,7 @@ flowchart LR
   "model": "ScalarWebAPI device",
   "host": "scalarwebapi-device.local",
   "port": 10000,
-  "mac_output": { "monitor_name": "Built-in Output" },
+  "mac_output": { "name": "External Headphones", "uid": "BuiltInHeadphoneOutputDevice" },
   "triggers": ["keyboard", "mouse", "output_selected"],
   "wake_debounce_ms": 30000,
   "request_timeout_ms": 3000,
@@ -190,7 +190,7 @@ flowchart LR
 ```
 
 - **`host`** — hostname, FQDN, or IP address (e.g. `scalarwebapi-device.local` or `192.168.1.42`); ScalarWebAPI URL is built from `host`, `port`, and the protocol base path.
-- **`mac_output`** — same shape as `preferred_device` (`monitor_name` and/or `uid`) for the Mac line-out feeding the ScalarWebAPI device.
+- **`mac_output`** — same shape as `preferred_device` (`name` plus `uid`) for the Mac line-out feeding the ScalarWebAPI device.
 - Omit `scalar_webapi_device` entirely when the feature is not used on this Mac.
 - **`request_timeout_ms`** — HTTP timeout for ScalarWebAPI calls.
 
@@ -468,7 +468,8 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
   "poll_interval_ms": 3000,
   "switch_delay_ms": 500,
   "preferred_device": {
-    "monitor_name": "DELL U3219Q"
+    "name": "HDMI",
+    "uid": "PASTE-UID-FROM-rusty-jack-list"
   },
   "fallback_uids": [
     "DisplayPort-Secondary-UID"
@@ -494,8 +495,8 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 
 | Field | Description |
 |-------|-------------|
-| `preferred_device.monitor_name` | Monitor product name from `rusty-jack list` / `status` (must match uniquely) |
-| `preferred_device.uid` | CoreAudio UID (alternative or disambiguation when monitor name is not unique) |
+| `preferred_device.name` | Human-readable CoreAudio device name from `rusty-jack list` / `status` |
+| `preferred_device.uid` | Stable CoreAudio UID used for routing |
 | `preferred_device_uid` | **Legacy** — use `preferred_device.uid` instead |
 | `fallback_uids` | Ordered list tried when preferred is absent |
 | `match.transport_types` | Filter for `list --hdmi-only` and optional auto-discovery |
@@ -508,7 +509,7 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `scalar_webapi_device.enabled` | Master switch for ScalarWebAPI device / ScalarWebAPI wake logic |
 | `scalar_webapi_device.host` | Hostname, FQDN, or IP (e.g. `scalarwebapi-device.local`) |
 | `scalar_webapi_device.port` / `path` | ScalarWebAPI URL pieces; `path` usually stays omitted so the protocol default is used |
-| `scalar_webapi_device.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
+| `scalar_webapi_device.mac_output` | Line-out device selector (`name` plus `uid`) |
 | `scalar_webapi_device.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
 | `scalar_webapi_device.wake_debounce_ms` | Minimum interval between wake commands |
 | `scalar_webapi_device.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |

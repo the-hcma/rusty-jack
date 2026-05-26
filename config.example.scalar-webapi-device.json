@@ -4,13 +4,15 @@
   "auto_switch": true,
   "poll_interval_ms": 3000,
   "preferred_device": {
-    "monitor_name": "DELL U3219Q"
+    "name": "HDMI",
+    "uid": "PASTE-HDMI-UID-FROM-rusty-jack-list"
   },
   "scalar_webapi_device": {
     "enabled": true,
     "host": "scalarwebapi-device.local",
     "mac_output": {
-      "monitor_name": "Built-in Output"
+      "name": "External Headphones",
+      "uid": "BuiltInHeadphoneOutputDevice"
     },
     "model": "ScalarWebAPI device",
     "request_timeout_ms": 3000,

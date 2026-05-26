@@ -4,9 +4,10 @@ use crate::activity::ActivityMonitor;
 use crate::apply::{preferred_uid, switch_output, volume_for_target, ApplyResult, SwitchOptions};
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
-use crate::eqmac::{
-    ensure_eqmac_for_target, format_ensure_messages, restart_eqmac_for_target, EqMacEnsureAction,
-    EqMacEnsureResult,
+use crate::hdmi_displayport_volume_control::{
+    ensure_hdmi_displayport_volume_control_for_target, format_ensure_messages,
+    recover_hdmi_displayport_volume_control_for_target, HdmiDisplayPortVolumeControlEnsureAction,
+    HdmiDisplayPortVolumeControlEnsureResult,
 };
 use crate::network::{current_network_access_snapshot, NetworkAccessSnapshot};
 use crate::output_device::OutputDevice;
@@ -112,14 +113,14 @@ pub fn daemon_tick(
     daemon_tick_with_hooks(hal, config, reason, &daemon_hooks())
 }
 
-type EqMacEnsureFn<'a> =
-    dyn Fn(&[OutputDevice], &str) -> Result<EqMacEnsureResult, RustyJackError> + 'a;
-type EqMacRecoverFn<'a> =
-    dyn Fn(&[OutputDevice], &str) -> Result<EqMacEnsureResult, RustyJackError> + 'a;
+type HdmiDisplayPortVolumeControlEnsureFn<'a> = dyn Fn(&[OutputDevice], &str) -> Result<HdmiDisplayPortVolumeControlEnsureResult, RustyJackError>
+    + 'a;
+type HdmiDisplayPortVolumeControlRecoverFn<'a> = dyn Fn(&[OutputDevice], &str) -> Result<HdmiDisplayPortVolumeControlEnsureResult, RustyJackError>
+    + 'a;
 
-struct EqMacHooks<'a> {
-    ensure: &'a EqMacEnsureFn<'a>,
-    recover: &'a EqMacRecoverFn<'a>,
+struct HdmiDisplayPortVolumeControlHooks<'a> {
+    ensure: &'a HdmiDisplayPortVolumeControlEnsureFn<'a>,
+    recover: &'a HdmiDisplayPortVolumeControlRecoverFn<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,18 +143,18 @@ struct ScalarWebApiDeviceHooks<'a> {
 }
 
 struct DaemonHooks<'a> {
-    /// eqMac is transport-specific: these hooks no-op unless the target output is HDMI/DP.
-    eqmac: EqMacHooks<'a>,
+    /// HDMI/DisplayPort volume control is port-specific and no-ops for other transports.
+    hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlHooks<'a>,
     /// ScalarWebAPI is device-specific: these hooks wake the configured external device
-    /// attached to the selected Mac output, regardless of whether that output needs eqMac.
+    /// attached to the selected Mac output, regardless of whether that output needs port volume control.
     scalar_webapi_device: ScalarWebApiDeviceHooks<'a>,
 }
 
 fn daemon_hooks<'a>() -> DaemonHooks<'a> {
     DaemonHooks {
-        eqmac: EqMacHooks {
-            ensure: &ensure_eqmac_for_target,
-            recover: &restart_eqmac_for_target,
+        hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlHooks {
+            ensure: &ensure_hdmi_displayport_volume_control_for_target,
+            recover: &recover_hdmi_displayport_volume_control_for_target,
         },
         scalar_webapi_device: ScalarWebApiDeviceHooks {
             fallback: ScalarWebApiDeviceFallbackPermission::Allowed,
@@ -195,7 +196,7 @@ fn daemon_tick_with_hooks(
                     &list,
                     &fallback,
                     preferred_uid.as_deref(),
-                    hooks.eqmac.ensure,
+                    hooks.hdmi_displayport_volume_control.ensure,
                 )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
@@ -220,19 +221,19 @@ fn daemon_tick_with_hooks(
                     &list,
                     &checked_target,
                     preferred_uid.as_deref(),
-                    hooks.eqmac.ensure,
+                    hooks.hdmi_displayport_volume_control.ensure,
                 )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
         }
-        if let Some(result) = recover_eqmac_for_daemon_target(
+        if let Some(result) = recover_hdmi_displayport_volume_control_for_daemon_target(
             hal,
             config,
             &list,
             &target,
             preferred_uid.as_deref(),
             reason,
-            &hooks.eqmac,
+            &hooks.hdmi_displayport_volume_control,
         )? {
             return Ok((DaemonTickResult::Switched(result), list));
         }
@@ -258,14 +259,14 @@ fn daemon_tick_with_hooks(
     };
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
-        if let Some(result) = recover_eqmac_for_daemon_target(
+        if let Some(result) = recover_hdmi_displayport_volume_control_for_daemon_target(
             hal,
             config,
             &list,
             &target,
             preferred_uid.as_deref(),
             reason,
-            &hooks.eqmac,
+            &hooks.hdmi_displayport_volume_control,
         )? {
             return Ok((DaemonTickResult::Switched(result), list));
         }
@@ -280,7 +281,7 @@ fn daemon_tick_with_hooks(
         &list,
         &target,
         preferred_uid.as_deref(),
-        hooks.eqmac.ensure,
+        hooks.hdmi_displayport_volume_control.ensure,
     )?;
 
     Ok((DaemonTickResult::Switched(result), list))
@@ -290,7 +291,6 @@ fn no_change_result(target: &RoutingTarget) -> ApplyResult {
     ApplyResult::NoChange {
         uid: target.uid.clone(),
         device_name: target.name.clone(),
-        monitor_name: target.monitor_name.clone(),
         reason: "active output already on target".into(),
     }
 }
@@ -325,10 +325,10 @@ fn switch_daemon_target(
     list: &DeviceList,
     target: &RoutingTarget,
     preferred_uid: Option<&str>,
-    ensure_eqmac: &EqMacEnsureFn<'_>,
+    ensure_volume_control: &HdmiDisplayPortVolumeControlEnsureFn<'_>,
 ) -> Result<ApplyResult, RustyJackError> {
-    let eqmac = ensure_eqmac(&list.devices, &target.uid)?;
-    for line in format_ensure_messages(eqmac) {
+    let volume_control = ensure_volume_control(&list.devices, &target.uid)?;
+    for line in format_ensure_messages(volume_control) {
         eprintln!("{line}");
     }
 
@@ -352,55 +352,78 @@ fn switch_daemon_target(
     Ok(result)
 }
 
-fn ensure_eqmac_for_daemon_target(
+fn ensure_hdmi_displayport_volume_control_for_daemon_target(
     devices: &[OutputDevice],
     target_uid: &str,
     reason: DaemonTickReason,
-    ensure_eqmac: &EqMacEnsureFn<'_>,
+    ensure_volume_control: &HdmiDisplayPortVolumeControlEnsureFn<'_>,
 ) -> Result<(), RustyJackError> {
-    let eqmac = ensure_eqmac(devices, target_uid)?;
-    let should_log = matches!(eqmac.action, EqMacEnsureAction::Launched)
-        || (reason == DaemonTickReason::Startup
-            && matches!(eqmac.action, EqMacEnsureAction::NotInstalled));
+    let volume_control = ensure_volume_control(devices, target_uid)?;
+    let should_log = matches!(
+        volume_control.action,
+        HdmiDisplayPortVolumeControlEnsureAction::EqMacLaunched
+    ) || (reason == DaemonTickReason::Startup
+        && matches!(
+            volume_control.action,
+            HdmiDisplayPortVolumeControlEnsureAction::NativeDriverRecommended
+        ));
     if should_log {
-        for line in format_ensure_messages(eqmac) {
+        for line in format_ensure_messages(volume_control) {
             eprintln!("{line}");
         }
     }
     Ok(())
 }
 
-fn recover_eqmac_for_daemon_target(
+fn recover_hdmi_displayport_volume_control_for_daemon_target(
     hal: &dyn AudioHal,
     config: &Config,
     list: &DeviceList,
     target: &RoutingTarget,
     preferred_uid: Option<&str>,
     reason: DaemonTickReason,
-    eqmac_hooks: &EqMacHooks<'_>,
+    volume_control_hooks: &HdmiDisplayPortVolumeControlHooks<'_>,
 ) -> Result<Option<ApplyResult>, RustyJackError> {
     if !matches!(
         reason,
         DaemonTickReason::Startup | DaemonTickReason::UserActivity
     ) {
-        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, eqmac_hooks.ensure)?;
+        ensure_hdmi_displayport_volume_control_for_daemon_target(
+            &list.devices,
+            &target.uid,
+            reason,
+            volume_control_hooks.ensure,
+        )?;
         return Ok(None);
     }
 
-    let eqmac = (eqmac_hooks.recover)(&list.devices, &target.uid)?;
-    let recovered = matches!(eqmac.action, EqMacEnsureAction::Restarted);
+    let volume_control = (volume_control_hooks.recover)(&list.devices, &target.uid)?;
+    let recovered = matches!(
+        volume_control.action,
+        HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted
+    );
     let should_log = recovered
         || (reason == DaemonTickReason::Startup
-            && matches!(eqmac.action, EqMacEnsureAction::NotInstalled));
+            && matches!(
+                volume_control.action,
+                HdmiDisplayPortVolumeControlEnsureAction::NativeDriverRecommended
+            ));
     if should_log {
-        for line in format_ensure_messages(eqmac) {
+        for line in format_ensure_messages(volume_control) {
             eprintln!("{line}");
         }
     }
 
     if recovered {
-        return switch_daemon_target(hal, config, list, target, preferred_uid, eqmac_hooks.ensure)
-            .map(Some);
+        return switch_daemon_target(
+            hal,
+            config,
+            list,
+            target,
+            preferred_uid,
+            volume_control_hooks.ensure,
+        )
+        .map(Some);
     }
 
     Ok(None)
@@ -593,9 +616,9 @@ fn run_tick_logged(
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
 ) {
     let hooks = DaemonHooks {
-        eqmac: EqMacHooks {
-            ensure: &ensure_eqmac_for_target,
-            recover: &restart_eqmac_for_target,
+        hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlHooks {
+            ensure: &ensure_hdmi_displayport_volume_control_for_target,
+            recover: &recover_hdmi_displayport_volume_control_for_target,
         },
         scalar_webapi_device: ScalarWebApiDeviceHooks {
             fallback: scalar_webapi_device_fallback,
@@ -619,15 +642,9 @@ fn print_daemon_switch(result: &ApplyResult, list: &DeviceList) {
     if let ApplyResult::Switched {
         to_uid,
         device_name,
-        monitor_name,
         ..
     } = result
     {
-        let label = if let Some(monitor) = monitor_name {
-            format!("{device_name} ({monitor})")
-        } else {
-            device_name.clone()
-        };
         let from = crate::apply::label_for_uid(
             list,
             match result {
@@ -635,7 +652,7 @@ fn print_daemon_switch(result: &ApplyResult, list: &DeviceList) {
                 ApplyResult::NoChange { .. } => "(none)",
             },
         );
-        println!("daemon: switched default output from {from} to {label} ({to_uid})");
+        println!("daemon: switched default output from {from} to {device_name} ({to_uid})");
     }
 }
 
@@ -696,7 +713,7 @@ mod tests {
     use crate::transport::TransportKind;
     use std::sync::Mutex;
 
-    fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
+    fn hdmi_device(uid: &str, _monitor: &str) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -705,7 +722,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: Some(monitor.into()),
         }
     }
 
@@ -718,7 +734,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         }
     }
 
@@ -731,8 +746,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
+                name: None,
                 uid: Some(uid.into()),
-                monitor_name: None,
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -742,25 +757,25 @@ mod tests {
         }
     }
 
-    fn no_op_eqmac(
+    fn no_op_hdmi_displayport_volume_control(
         _devices: &[OutputDevice],
         _target_uid: &str,
-    ) -> Result<EqMacEnsureResult, RustyJackError> {
-        Ok(EqMacEnsureResult {
-            action: EqMacEnsureAction::NotNeeded,
+    ) -> Result<HdmiDisplayPortVolumeControlEnsureResult, RustyJackError> {
+        Ok(HdmiDisplayPortVolumeControlEnsureResult {
+            action: HdmiDisplayPortVolumeControlEnsureAction::NotNeeded,
         })
     }
 
-    fn no_op_eqmac_recovery(
+    fn no_op_hdmi_displayport_volume_control_recovery(
         _devices: &[OutputDevice],
         _target_uid: &str,
-    ) -> Result<EqMacEnsureResult, RustyJackError> {
-        Ok(EqMacEnsureResult {
-            action: EqMacEnsureAction::NotNeeded,
+    ) -> Result<HdmiDisplayPortVolumeControlEnsureResult, RustyJackError> {
+        Ok(HdmiDisplayPortVolumeControlEnsureResult {
+            action: HdmiDisplayPortVolumeControlEnsureAction::NotNeeded,
         })
     }
 
-    fn daemon_tick_no_eqmac(
+    fn daemon_tick_no_hdmi_displayport_volume_control(
         hal: &dyn AudioHal,
         config: &Config,
         reason: DaemonTickReason,
@@ -769,10 +784,10 @@ mod tests {
         daemon_tick_with_hooks(hal, config, reason, &hooks)
     }
 
-    fn no_op_eqmac_hooks() -> EqMacHooks<'static> {
-        EqMacHooks {
-            ensure: &no_op_eqmac,
-            recover: &no_op_eqmac_recovery,
+    fn no_op_hdmi_displayport_volume_control_hooks() -> HdmiDisplayPortVolumeControlHooks<'static> {
+        HdmiDisplayPortVolumeControlHooks {
+            ensure: &no_op_hdmi_displayport_volume_control,
+            recover: &no_op_hdmi_displayport_volume_control_recovery,
         }
     }
 
@@ -786,7 +801,7 @@ mod tests {
 
     fn no_op_daemon_hooks(fallback: ScalarWebApiDeviceFallbackPermission) -> DaemonHooks<'static> {
         DaemonHooks {
-            eqmac: no_op_eqmac_hooks(),
+            hdmi_displayport_volume_control: no_op_hdmi_displayport_volume_control_hooks(),
             scalar_webapi_device: ScalarWebApiDeviceHooks {
                 fallback,
                 wake_on_output_selected: &no_op_scalar_webapi_device_wake,
@@ -801,7 +816,7 @@ mod tests {
         wake_on_activity: &'a ScalarWebApiDeviceWakeFn<'a>,
     ) -> DaemonHooks<'a> {
         DaemonHooks {
-            eqmac: no_op_eqmac_hooks(),
+            hdmi_displayport_volume_control: no_op_hdmi_displayport_volume_control_hooks(),
             scalar_webapi_device: ScalarWebApiDeviceHooks {
                 fallback,
                 wake_on_output_selected,
@@ -810,12 +825,12 @@ mod tests {
         }
     }
 
-    fn daemon_hooks_with_eqmac<'a>(
-        ensure: &'a EqMacEnsureFn<'a>,
-        recover: &'a EqMacRecoverFn<'a>,
+    fn daemon_hooks_with_hdmi_displayport_volume_control<'a>(
+        ensure: &'a HdmiDisplayPortVolumeControlEnsureFn<'a>,
+        recover: &'a HdmiDisplayPortVolumeControlRecoverFn<'a>,
     ) -> DaemonHooks<'a> {
         DaemonHooks {
-            eqmac: EqMacHooks { ensure, recover },
+            hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlHooks { ensure, recover },
             scalar_webapi_device: ScalarWebApiDeviceHooks {
                 fallback: ScalarWebApiDeviceFallbackPermission::Allowed,
                 wake_on_output_selected: &no_op_scalar_webapi_device_wake,
@@ -833,8 +848,8 @@ mod tests {
             port: 10000,
             path: protocol_path(),
             mac_output: DeviceSelectorConfig {
+                name: None,
                 uid: Some(uid.into()),
-                monitor_name: None,
             },
             triggers: vec!["output_selected".into(), "keyboard".into(), "mouse".into()],
             wake_debounce_ms: 30_000,
@@ -867,9 +882,12 @@ mod tests {
         ])
         .with_default("builtin");
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
-                .unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Scheduled,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
@@ -879,9 +897,12 @@ mod tests {
     fn test_daemon_tick_no_change_does_not_switch() {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
-                .unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Scheduled,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -895,8 +916,12 @@ mod tests {
         ])
         .with_default("hdmi-1");
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Startup).unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Startup,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -908,9 +933,12 @@ mod tests {
         hdmi.is_active = true;
         let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
-                .unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Scheduled,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -1153,11 +1181,11 @@ mod tests {
     fn test_daemon_no_change_checks_eqmac_health_for_hdmi_target() {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
         let calls = std::sync::Mutex::new(Vec::<String>::new());
-        let ensure_eqmac = |devices: &[OutputDevice], target_uid: &str| {
+        let ensure_volume_control = |devices: &[OutputDevice], target_uid: &str| {
             assert!(devices.iter().any(|device| device.uid == target_uid));
             calls.lock().unwrap().push(target_uid.to_string());
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::AlreadyRunning,
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacAlreadyRunning,
             })
         };
 
@@ -1165,7 +1193,10 @@ mod tests {
             &hal,
             &test_config("hdmi-1"),
             DaemonTickReason::Scheduled,
-            &daemon_hooks_with_eqmac(&ensure_eqmac, &no_op_eqmac_recovery),
+            &daemon_hooks_with_hdmi_displayport_volume_control(
+                &ensure_volume_control,
+                &no_op_hdmi_displayport_volume_control_recovery,
+            ),
         )
         .unwrap();
 
@@ -1181,16 +1212,16 @@ mod tests {
         hdmi.is_active = true;
         let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
         let recover_calls = std::sync::Mutex::new(Vec::<String>::new());
-        let recover_eqmac = |devices: &[OutputDevice], target_uid: &str| {
+        let recover_volume_control = |devices: &[OutputDevice], target_uid: &str| {
             assert!(devices.iter().any(|device| device.uid == target_uid));
             recover_calls.lock().unwrap().push(target_uid.to_string());
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::Restarted,
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted,
             })
         };
-        let ensure_eqmac = |_: &[OutputDevice], _: &str| {
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::AlreadyRunning,
+        let ensure_volume_control = |_: &[OutputDevice], _: &str| {
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacAlreadyRunning,
             })
         };
 
@@ -1198,7 +1229,10 @@ mod tests {
             &hal,
             &test_config("hdmi-1"),
             DaemonTickReason::Startup,
-            &daemon_hooks_with_eqmac(&ensure_eqmac, &recover_eqmac),
+            &daemon_hooks_with_hdmi_displayport_volume_control(
+                &ensure_volume_control,
+                &recover_volume_control,
+            ),
         )
         .unwrap();
 
@@ -1212,14 +1246,14 @@ mod tests {
         let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
         hdmi.is_active = true;
         let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
-        let recover_eqmac = |_: &[OutputDevice], _: &str| {
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::Restarted,
+        let recover_volume_control = |_: &[OutputDevice], _: &str| {
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted,
             })
         };
-        let ensure_eqmac = |_: &[OutputDevice], _: &str| {
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::AlreadyRunning,
+        let ensure_volume_control = |_: &[OutputDevice], _: &str| {
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacAlreadyRunning,
             })
         };
 
@@ -1227,7 +1261,10 @@ mod tests {
             &hal,
             &test_config("hdmi-1"),
             DaemonTickReason::UserActivity,
-            &daemon_hooks_with_eqmac(&ensure_eqmac, &recover_eqmac),
+            &daemon_hooks_with_hdmi_displayport_volume_control(
+                &ensure_volume_control,
+                &recover_volume_control,
+            ),
         )
         .unwrap();
 
@@ -1241,8 +1278,12 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.volume = Some(25);
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &config,
+            DaemonTickReason::Startup,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -1261,8 +1302,12 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.volume = Some(25);
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Scheduled).unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &config,
+            DaemonTickReason::Scheduled,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.volume_calls().is_empty());
@@ -1275,8 +1320,12 @@ mod tests {
         let mut config = test_config("missing-hdmi");
         config.volume = Some(25);
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &config,
+            DaemonTickReason::Startup,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -1293,8 +1342,12 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.volume = Some(25);
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &config,
+            DaemonTickReason::Startup,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(
@@ -1322,8 +1375,12 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.auto_switch = false;
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Scheduled).unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &config,
+            DaemonTickReason::Scheduled,
+        )
+        .unwrap();
 
         assert_eq!(result, DaemonTickResult::AutoSwitchDisabled);
         assert!(hal.set_calls().is_empty());
@@ -1334,9 +1391,12 @@ mod tests {
         let hal = MockHal::new(vec![builtin_speakers("BuiltInSpeakerDevice")])
             .with_default("disconnected-hdmi");
 
-        let (result, _list) =
-            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
-                .unwrap();
+        let (result, _list) = daemon_tick_no_hdmi_displayport_volume_control(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Scheduled,
+        )
+        .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(

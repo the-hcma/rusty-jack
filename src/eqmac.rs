@@ -51,13 +51,39 @@ pub fn routing_needs_eqmac(devices: &[OutputDevice], uid: &str) -> bool {
         .is_some_and(|d| d.transport.is_hdmi_class())
 }
 
-/// Detect whether eqMac app or HAL driver is installed.
+/// Detect whether the eqMac app is installed.
 #[must_use]
 pub fn eqmac_install_state() -> EqMacInstallState {
-    if Path::new(EQMAC_APP_PATH).exists() || Path::new(EQMAC_HAL_DRIVER_PATH).exists() {
+    if eqmac_app_path().is_some() {
         EqMacInstallState::Installed
     } else {
         EqMacInstallState::NotInstalled
+    }
+}
+
+/// Path to the eqMac app bundle when present.
+#[must_use]
+pub fn eqmac_app_path() -> Option<String> {
+    Path::new(EQMAC_APP_PATH)
+        .exists()
+        .then(|| EQMAC_APP_PATH.to_string())
+}
+
+/// Path to the eqMac HAL driver when present.
+#[must_use]
+pub fn eqmac_hal_driver_path() -> Option<String> {
+    Path::new(EQMAC_HAL_DRIVER_PATH)
+        .exists()
+        .then(|| EQMAC_HAL_DRIVER_PATH.to_string())
+}
+
+/// A leftover eqMac HAL driver without the app bundle is not a usable fallback.
+#[must_use]
+pub fn orphaned_eqmac_hal_driver_path() -> Option<String> {
+    if eqmac_app_path().is_none() {
+        eqmac_hal_driver_path()
+    } else {
+        None
     }
 }
 
@@ -216,11 +242,7 @@ pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
         EqMacEnsureAction::Restarted => {
             vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
         }
-        EqMacEnsureAction::NotInstalled => vec![
-            "warning: eqMac is not installed; volume buttons cannot control HDMI/DisplayPort output."
-                .into(),
-            "  Download eqMac from https://eqmac.app to enable software volume control.".into(),
-        ],
+        EqMacEnsureAction::NotInstalled => vec![],
     }
 }
 
@@ -239,7 +261,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         }
     }
 
@@ -274,13 +295,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_ensure_not_installed_message_has_url() {
+    fn test_format_ensure_not_installed_stays_quiet() {
         let lines = format_ensure_messages(EqMacEnsureResult {
             action: EqMacEnsureAction::NotInstalled,
         });
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("volume buttons cannot control HDMI/DisplayPort"));
-        assert!(lines[1].contains("https://eqmac.app"));
+        assert!(lines.is_empty());
     }
 
     #[test]

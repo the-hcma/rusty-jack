@@ -1,27 +1,28 @@
 {
-  "version": 1,
-  "auto_switch": true,
-  "poll_interval_ms": 3000,
-  "switch_delay_ms": 500,
   "activity_idle_threshold_ms": 60000,
   "activity_poll_interval_ms": 1000,
-  "preferred_device": {
-    "monitor_name": "DELL U3219Q"
-  },
-  "fallback_uids": [],
-  "match": {
-    "transport_types": ["hdmi", "displayport", "thunderbolt"],
-    "name_contains": [],
-    "uid_allowlist": []
-  },
+  "also_set_system_output": true,
+  "auto_switch": true,
   "exclude": {
     "name_contains": ["eqMac", "CADefaultDeviceAggregate"],
     "uid_denylist": []
   },
-  "also_set_system_output": true,
-  "volume": 13,
+  "fallback_uids": [],
   "logging": {
-    "level": "info",
-    "file": "~/Library/Logs/rusty-jack.log"
-  }
+    "file": "~/Library/Logs/rusty-jack.log",
+    "level": "info"
+  },
+  "match": {
+    "name_contains": [],
+    "transport_types": ["hdmi", "displayport", "thunderbolt"],
+    "uid_allowlist": []
+  },
+  "poll_interval_ms": 3000,
+  "preferred_device": {
+    "name": "HDMI",
+    "uid": "PASTE-UID-FROM-rusty-jack-list"
+  },
+  "switch_delay_ms": 500,
+  "version": 1,
+  "volume": 13
 }

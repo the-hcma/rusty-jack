@@ -1,18 +1,19 @@
 # Troubleshooting
 
-Common issues when using Rusty Jack on macOS with HDMI/DP monitors, eqMac, launchd, and ScalarWebAPI device wake support.
+Common issues when using Rusty Jack on macOS with HDMI/DP monitors, HDMI/DisplayPort volume control, launchd, and ScalarWebAPI device wake support.
 
 ## Volume keys do nothing on the monitor
 
 **Cause:** The system default is a **physical HDMI/DP device** with no software volume scalar.
 
-**Fix (today):**
+**Fix:**
 
-1. Install [eqMac](https://eqmac.app).
-2. Run `rusty-jack apply` or pick your monitor in `picker` — rusty-jack starts eqMac if it was installed but not running.
-3. Confirm eqMac is the **system default** in Sound settings (or `rusty-jack status` shows a virtual default footer routing to your monitor).
+1. Run `rusty-jack status` and check the **HDMI/DisplayPort Volume Control** block.
+2. Run `rusty-jack install` with the HDMI/DP device connected and accept the native driver prompt. If eqMac is already installed, Rusty Jack can use it as a fallback.
+3. Run `rusty-jack apply` or pick your monitor in `picker`.
+4. Confirm a virtual volume-control device is the **system default** in Sound settings (or `rusty-jack status` shows a virtual default footer routing to your monitor).
 
-**Long-term:** Rusty Jack Phase 7 virtual driver — see [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md).
+If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver` or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
 
 ---
 
@@ -27,8 +28,8 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, eqMac, launc
 
 ## `apply` says switched but I hear nothing
 
-- Wrong monitor in config — run `list`, fix `preferred_device.monitor_name` and `uid` so they describe the same output.
-- eqMac routing target mismatch — set output inside eqMac to your HDMI device.
+- Wrong device in config — run `list`, fix `preferred_device.uid`; `preferred_device.name` is only the human-readable label.
+- HDMI/DisplayPort volume-control target mismatch — if using installed eqMac fallback, set output inside eqMac to your HDMI device.
 - Monitor input/source — select correct HDMI input on the display.
 
 ---
@@ -58,20 +59,20 @@ rusty-jack picker --index 2 --json
 
 ---
 
-## eqMac warning: not installed
+## HDMI/DisplayPort volume-control warning
 
 ```
-warning: eqMac is not installed; volume buttons cannot control HDMI/DisplayPort output.
-  Download eqMac from https://eqmac.app to enable software volume control.
+warning: HDMI/DisplayPort volume keys need Rusty Jack's native audio driver.
+  Install the Rusty Jack driver to control volume for connected HDMI/DisplayPort outputs.
 ```
 
-Download eqMac from https://eqmac.app, or accept fixed full-level HDMI until Phase 7. Routing to HDMI still works; only **software volume** is missing.
+Run `rusty-jack install` interactively with the HDMI/DisplayPort output connected and accept the native driver prompt. If eqMac is already installed, Rusty Jack uses it as a compatibility fallback. Routing to HDMI still works; only **volume control** is missing.
 
 ---
 
 ## Built-in speakers work; HDMI does not
 
-Normal. Built-in has CoreAudio volume control. HDMI needs eqMac (interim) or Phase 7 driver.
+Normal. Built-in has CoreAudio volume control. HDMI/DisplayPort needs the Rusty Jack native driver, or installed eqMac as fallback.
 
 ---
 
@@ -120,7 +121,7 @@ Check daemon logs for `selected ScalarWebAPI device is unreachable`. If those me
 | `disable` / `uninstall` | Removing rusty-jack from launchd entirely |
 | `pause` | Temporarily stop auto-routing; you will `resume` later |
 
-Neither stops eqMac — manage eqMac separately in System Settings or its app.
+Neither stops external volume-control apps such as eqMac — manage them separately in System Settings or their own apps.
 
 ---
 
@@ -159,15 +160,15 @@ make clippy
 make test
 ```
 
-Hardware-specific tests are `#[ignore]`; eqMac HAL test skips when driver not installed.
+Hardware-specific tests are `#[ignore]`; HAL driver tests skip when matching drivers are not installed.
 
 ---
 
 ## Getting help
 
 1. `rusty-jack status --json` — attach output (redact UIDs if needed).
-2. `rusty-jack list --hdmi` — show monitor names.
-3. Note macOS version, eqMac version, and whether eqMac app is running.
+2. `rusty-jack list --hdmi` — show connected HDMI/DisplayPort device names and UIDs.
+3. Note macOS version, HDMI/DisplayPort Volume Control status, and eqMac version if eqMac fallback is installed.
 
 File issues: [github.com/the-hcma/rusty-jack](https://github.com/the-hcma/rusty-jack/issues).
 

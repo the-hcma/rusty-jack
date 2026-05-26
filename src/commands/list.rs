@@ -39,7 +39,6 @@ mod tests {
                 is_alive: true,
                 is_default: true,
                 is_active: true,
-                monitor_name: None,
             },
             OutputDevice {
                 id: 2,
@@ -49,7 +48,6 @@ mod tests {
                 is_alive: true,
                 is_default: false,
                 is_active: false,
-                monitor_name: Some("LG TV".into()),
             },
         ]
     }

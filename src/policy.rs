@@ -23,7 +23,7 @@ pub fn evaluate_policy(
         return PolicyStatus {
             configured: false,
             config_path: config_path.map(|p| p.display().to_string()),
-            preferred_monitor_name: None,
+            preferred_device_name: None,
             preferred_device_uid: None,
             active_device_uid: active_uid(list),
             matches_preferred: None,
@@ -36,7 +36,7 @@ pub fn evaluate_policy(
     };
 
     let selector = config.preferred_selector();
-    let preferred_monitor_name = selector.monitor_name.clone();
+    let preferred_device_name = config.preferred_device.name.clone();
     let active = active_uid(list);
 
     let resolved = resolve_device_selector(&selector, &list.devices);
@@ -50,7 +50,7 @@ pub fn evaluate_policy(
             } else if preferred_device.is_some_and(|d| !d.is_alive) {
                 format!("preferred device `{uid}` is not alive")
             } else if matches {
-                preferred_match_message(&selector, &uid)
+                preferred_match_message(preferred_device.as_ref(), &uid)
             } else {
                 format!(
                     "active output is `{}`; preferred is `{uid}`",
@@ -65,20 +65,16 @@ pub fn evaluate_policy(
                 preferred_device.map(|d| d.is_alive),
             )
         }
-        Err(ResolveError::NotSpecified) => (
-            None,
-            "set preferred_device.monitor_name or preferred_device.uid".into(),
-            None,
-            None,
-            None,
-        ),
+        Err(ResolveError::NotSpecified) => {
+            (None, "set preferred_device.uid".into(), None, None, None)
+        }
         Err(err) => (None, err.to_string(), None, None, None),
     };
 
     PolicyStatus {
         configured: true,
         config_path: config_path.map(|p| p.display().to_string()),
-        preferred_monitor_name,
+        preferred_device_name,
         preferred_device_uid: preferred_uid,
         active_device_uid: active,
         matches_preferred: matches,
@@ -90,9 +86,12 @@ pub fn evaluate_policy(
     }
 }
 
-fn preferred_match_message(selector: &crate::device_select::DeviceSelector, uid: &str) -> String {
-    if let Some(name) = selector.monitor_name.as_deref() {
-        format!("active output matches preferred monitor `{name}` ({uid})")
+fn preferred_match_message(device: Option<&&OutputDevice>, uid: &str) -> String {
+    if let Some(device) = device {
+        format!(
+            "active output matches preferred device `{}` ({uid})",
+            device.name
+        )
     } else {
         "active output matches preferred device".into()
     }
@@ -124,8 +123,6 @@ pub enum RoutingTargetSource {
 pub struct RoutingTarget {
     pub uid: String,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub monitor_name: Option<String>,
     pub source: RoutingTargetSource,
 }
 
@@ -158,7 +155,6 @@ fn to_routing_target(device: &OutputDevice, source: RoutingTargetSource) -> Rout
     RoutingTarget {
         uid: device.uid.clone(),
         name: device.name.clone(),
-        monitor_name: device.monitor_name.clone(),
         source,
     }
 }
@@ -177,12 +173,10 @@ pub fn select_routing_target(
                 // fall through to fallbacks when preferred is unplugged
             }
         }
-        Err(err @ ResolveError::MonitorAmbiguous { .. })
-        | Err(err @ ResolveError::MonitorMismatch { .. })
-        | Err(err @ ResolveError::NotSpecified) => {
+        Err(err @ ResolveError::NotSpecified) => {
             return Err(SelectTargetError::Resolve(err));
         }
-        Err(ResolveError::MonitorNotFound(_)) | Err(ResolveError::UidNotFound(_)) => {}
+        Err(ResolveError::UidNotFound(_)) => {}
     }
 
     if let Some(target) = select_fallback_target(config, devices) {
@@ -222,7 +216,7 @@ mod tests {
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
 
-    fn hdmi(uid: &str, monitor: &str, active: bool) -> OutputDevice {
+    fn hdmi(uid: &str, _monitor: &str, active: bool) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -231,11 +225,10 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: active,
-            monitor_name: Some(monitor.into()),
         }
     }
 
-    fn config_with_monitor(name: &str) -> Config {
+    fn config_with_device(uid: &str, name: Option<&str>) -> Config {
         Config {
             version: 1,
             auto_switch: true,
@@ -244,8 +237,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
-                uid: None,
-                monitor_name: Some(name.into()),
+                name: name.map(str::to_string),
+                uid: Some(uid.into()),
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -256,26 +249,10 @@ mod tests {
     }
 
     fn config_with_uid(uid: &str) -> Config {
-        Config {
-            version: 1,
-            auto_switch: true,
-            poll_interval_ms: 3_000,
-            switch_delay_ms: 500,
-            activity_idle_threshold_ms: 60_000,
-            activity_poll_interval_ms: 1_000,
-            preferred_device: DeviceSelectorConfig {
-                uid: Some(uid.into()),
-                monitor_name: None,
-            },
-            preferred_device_uid: None,
-            fallback_uids: vec![],
-            also_set_system_output: true,
-            volume: None,
-            scalar_webapi_device: None,
-        }
+        config_with_device(uid, None)
     }
 
-    fn config_with_fallback(preferred_monitor: &str, fallback_uid: &str) -> Config {
+    fn config_with_fallback(preferred_uid: &str, fallback_uid: &str) -> Config {
         Config {
             version: 1,
             auto_switch: true,
@@ -284,8 +261,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
-                uid: None,
-                monitor_name: Some(preferred_monitor.into()),
+                name: None,
+                uid: Some(preferred_uid.into()),
             },
             preferred_device_uid: None,
             fallback_uids: vec![fallback_uid.into()],
@@ -306,15 +283,19 @@ mod tests {
     }
 
     #[test]
-    fn test_matches_preferred_by_monitor_name() {
+    fn test_matches_preferred_by_device_uid() {
         let list = DeviceList {
             devices: vec![hdmi("hdmi-1", "DELL U3219Q", true)],
             system_default: None,
         };
-        let policy = evaluate_policy(&list, Some(&config_with_monitor("DELL U3219Q")), None);
+        let policy = evaluate_policy(
+            &list,
+            Some(&config_with_device("hdmi-1", Some("HDMI"))),
+            None,
+        );
         assert_eq!(policy.matches_preferred, Some(true));
         assert_eq!(policy.preferred_device_uid.as_deref(), Some("hdmi-1"));
-        assert!(policy.message.contains("DELL U3219Q"));
+        assert!(policy.message.contains("HDMI"));
     }
 
     #[test]
@@ -331,19 +312,19 @@ mod tests {
     }
 
     #[test]
-    fn test_monitor_not_found() {
+    fn test_preferred_uid_not_found() {
         let list = DeviceList {
             devices: vec![hdmi("hdmi-1", "LG TV", true)],
             system_default: None,
         };
-        let policy = evaluate_policy(&list, Some(&config_with_monitor("DELL U3219Q")), None);
-        assert!(policy.message.contains("no connected output"));
+        let policy = evaluate_policy(&list, Some(&config_with_uid("missing")), None);
+        assert!(policy.message.contains("not connected"));
     }
 
     #[test]
-    fn test_select_routing_target_by_monitor() {
+    fn test_select_routing_target_by_uid() {
         let devices = vec![hdmi("hdmi-1", "DELL U3219Q", true)];
-        let target = select_routing_target(&config_with_monitor("DELL U3219Q"), &devices).unwrap();
+        let target = select_routing_target(&config_with_uid("hdmi-1"), &devices).unwrap();
         assert_eq!(target.uid, "hdmi-1");
         assert!(matches!(target.source, RoutingTargetSource::Preferred));
     }
@@ -352,7 +333,7 @@ mod tests {
     fn test_select_routing_target_uses_fallback() {
         let devices = vec![hdmi("dp-1", "DELL U3223QE", true)];
         let target =
-            select_routing_target(&config_with_fallback("DELL U3219Q", "dp-1"), &devices).unwrap();
+            select_routing_target(&config_with_fallback("missing", "dp-1"), &devices).unwrap();
         assert_eq!(target.uid, "dp-1");
         assert!(matches!(
             target.source,
@@ -364,11 +345,10 @@ mod tests {
     fn test_select_routing_target_uses_builtin_when_no_fallback_configured() {
         let mut builtin = hdmi("BuiltInSpeakerDevice", "Built-in", false);
         builtin.name = "Mac mini Speakers".into();
-        builtin.monitor_name = None;
         builtin.transport = TransportKind::BuiltIn;
         let devices = vec![builtin];
 
-        let target = select_routing_target(&config_with_monitor("DELL U3219Q"), &devices).unwrap();
+        let target = select_routing_target(&config_with_uid("missing"), &devices).unwrap();
         assert_eq!(target.uid, "BuiltInSpeakerDevice");
         assert!(matches!(
             target.source,

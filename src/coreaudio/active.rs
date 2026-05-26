@@ -16,11 +16,6 @@ fn matches_eqmac_route_target(device: &OutputDevice, target: &str) -> bool {
     if device.name.eq_ignore_ascii_case(target) {
         return true;
     }
-    if let Some(monitor) = &device.monitor_name {
-        if monitor.eq_ignore_ascii_case(target) {
-            return true;
-        }
-    }
     if is_builtin_route_label(target) && device.transport == TransportKind::BuiltIn {
         return true;
     }
@@ -55,14 +50,6 @@ pub fn resolve_active_uid(
         }
     }
 
-    for d in devices {
-        if let Some(monitor) = &d.monitor_name {
-            if default_name.contains(monitor.as_str()) {
-                return Some(d.uid.clone());
-            }
-        }
-    }
-
     None
 }
 
@@ -74,7 +61,7 @@ mod tests {
     fn device(
         uid: &str,
         name: &str,
-        monitor: Option<&str>,
+        _monitor: Option<&str>,
         transport: TransportKind,
     ) -> OutputDevice {
         OutputDevice {
@@ -85,7 +72,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: monitor.map(str::to_string),
         }
     }
 
@@ -99,18 +85,13 @@ mod tests {
     }
 
     #[test]
-    fn test_eqmac_virtual_maps_to_monitor() {
+    fn test_eqmac_virtual_maps_to_device_name() {
         let devices = vec![
-            device("hdmi", "HDMI", Some("DELL U3219Q"), TransportKind::Hdmi),
-            device(
-                "dp",
-                "DisplayPort",
-                Some("DELL U3223QE"),
-                TransportKind::DisplayPort,
-            ),
+            device("hdmi", "HDMI", None, TransportKind::Hdmi),
+            device("dp", "DisplayPort", None, TransportKind::DisplayPort),
         ];
         assert_eq!(
-            resolve_active_uid("EQMOutputCapture", "DELL U3219Q (eqMac)", &devices).as_deref(),
+            resolve_active_uid("EQMOutputCapture", "HDMI (eqMac)", &devices).as_deref(),
             Some("hdmi")
         );
     }
