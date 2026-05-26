@@ -3,6 +3,8 @@
 #[cfg(target_os = "macos")]
 mod default_output;
 #[cfg(target_os = "macos")]
+mod display;
+#[cfg(target_os = "macos")]
 mod hal;
 #[cfg(target_os = "macos")]
 mod property;
