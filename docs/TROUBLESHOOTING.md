@@ -13,7 +13,9 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, HDMI/Display
 3. Run `rusty-jack apply` or pick your monitor in `picker`.
 4. Confirm a virtual volume-control device is the **system default** in Sound settings (or `rusty-jack status` shows a virtual default footer routing to your monitor).
 
-If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver` or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
+If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver`, run `make install` from a source checkout, or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
+
+The packaged `RustyJack.driver` is currently the loadable HAL skeleton. Until the virtual output and passthrough pipeline lands, use eqMac as the functional volume-control fallback if you need HDMI/DP keyboard volume today.
 
 ---
 

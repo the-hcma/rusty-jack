@@ -95,7 +95,9 @@ Run `rusty-jack install` with an HDMI/DisplayPort output connected. In an intera
 ~/Library/Audio/Plug-Ins/HAL/RustyJack.driver
 ```
 
-The installer looks for a bundled driver next to the binary, under `../share/rusty-jack/RustyJack.driver` for Homebrew-style installs, or at `RUSTY_JACK_DRIVER_BUNDLE` for source/testing builds. `rusty-jack uninstall` offers to remove the driver when it is installed. `rusty-jack upgrade` compares the bundled and installed driver and only offers a driver upgrade when the bundle materially changed.
+The installer looks for a bundled driver next to the binary, under `../share/rusty-jack/RustyJack.driver` for Homebrew-style installs, or at `RUSTY_JACK_DRIVER_BUNDLE` for source/testing builds. `make install` builds the source bundle into `~/.cargo/share/rusty-jack/RustyJack.driver`; Homebrew installs the same bundle into `share/rusty-jack`. `rusty-jack uninstall` offers to remove the driver when it is installed. `rusty-jack upgrade` compares the bundled and installed driver and only offers a driver upgrade when the bundle materially changed.
+
+The packaged driver currently contains the loadable HAL skeleton. It is safe for macOS to load, but the virtual output and passthrough software-volume pipeline are the next driver milestone.
 
 ---
 
@@ -329,7 +331,7 @@ See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 | ScalarWebAPI device wake via ScalarWebAPI + daemon idle polling | Implemented |
 | LaunchAgent install, upgrade, uninstall, and status helper | Implemented |
 | Native event listener refinements for activity detection | Planned |
-| Native driver bundle + installer | Planned |
+| Native driver bundle + installer | Implemented: loadable HAL skeleton packaged for source/Homebrew installs |
 
 Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 

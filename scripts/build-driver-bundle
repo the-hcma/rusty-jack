@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Build the Rusty Jack CoreAudio HAL driver bundle.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
+
+if ! command -v xcrun >/dev/null 2>&1; then
+  echo "error: xcrun not found; install Xcode Command Line Tools" >&2
+  exit 1
+fi
+
+VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+if [[ -z "${VERSION}" ]]; then
+  echo "error: could not read package version from Cargo.toml" >&2
+  exit 1
+fi
+
+OUT_DIR="${1:-target/share/rusty-jack}"
+BUNDLE="${OUT_DIR}/RustyJack.driver"
+CONTENTS="${BUNDLE}/Contents"
+MACOS="${CONTENTS}/MacOS"
+INFO="${CONTENTS}/Info.plist"
+SRC="driver/RustyJack/RustyJackAudioServerPlugIn.c"
+INFO_TEMPLATE="driver/RustyJack/Info.plist.in"
+
+rm -rf "$BUNDLE"
+mkdir -p "$MACOS"
+
+python3 - "$INFO_TEMPLATE" "$INFO" "$VERSION" <<'PY'
+from pathlib import Path
+import sys
+
+template, output, version = sys.argv[1:]
+Path(output).write_text(Path(template).read_text().replace("@VERSION@", version))
+PY
+
+xcrun clang \
+  -dynamiclib \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -std=c11 \
+  -fvisibility=hidden \
+  -framework CoreAudio \
+  -framework CoreFoundation \
+  -o "${MACOS}/RustyJack" \
+  "$SRC"
+
+plutil -lint "$INFO" >/dev/null
+chmod 755 "${MACOS}/RustyJack"
+
+echo "$BUNDLE"
