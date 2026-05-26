@@ -118,12 +118,16 @@ pub struct UninstallArgs {
     pub json: bool,
 
     /// Remove the default config file without prompting
-    #[arg(long, conflicts_with = "keep_config")]
+    #[arg(long, conflicts_with_all = ["keep_config", "only_driver"])]
     pub remove_config: bool,
 
     /// Keep the default config file without prompting
-    #[arg(long, conflicts_with = "remove_config")]
+    #[arg(long, conflicts_with_all = ["remove_config", "only_driver"])]
     pub keep_config: bool,
+
+    /// Only remove the native audio driver; keep LaunchAgent, binary, and config
+    #[arg(long)]
+    pub only_driver: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -283,6 +287,7 @@ mod tests {
             Commands::Uninstall(args) => {
                 assert!(args.remove_config);
                 assert!(!args.keep_config);
+                assert!(!args.only_driver);
             }
             _ => panic!("expected uninstall"),
         }
@@ -292,6 +297,27 @@ mod tests {
             "uninstall",
             "--remove-config",
             "--keep-config",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn test_uninstall_only_driver_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "uninstall", "--only-driver"]).unwrap();
+        match cli.command {
+            Commands::Uninstall(args) => {
+                assert!(args.only_driver);
+                assert!(!args.remove_config);
+                assert!(!args.keep_config);
+            }
+            _ => panic!("expected uninstall"),
+        }
+
+        assert!(Cli::try_parse_from([
+            "rusty-jack",
+            "uninstall",
+            "--only-driver",
+            "--remove-config",
         ])
         .is_err());
     }

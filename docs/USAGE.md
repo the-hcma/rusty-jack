@@ -77,7 +77,7 @@ rusty-jack disable [--json]
 rusty-jack install [--json]
 rusty-jack pause [--json]
 rusty-jack resume [--json]
-rusty-jack uninstall [--json]
+rusty-jack uninstall [--json] [--only-driver]
 rusty-jack upgrade [--json] [--force]
 ```
 
@@ -154,10 +154,11 @@ The current bundle exposes a minimal virtual HAL output named **Rusty Jack**, wi
 rusty-jack pause      # stop auto-routing; keep plist installed
 rusty-jack resume     # re-enable and start the plist
 rusty-jack uninstall  # stop, disable, remove plist, offer driver/config cleanup
+rusty-jack uninstall --only-driver  # remove only the native audio driver
 rusty-jack uninstall --remove-config  # also remove default config without prompting
 ```
 
-`resume` applies the configured route and volume synchronously, then starts the daemon. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--keep-config` keeps config without prompting. Neither command deletes log files.
+`resume` applies the configured route and volume synchronously, then starts the daemon. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--only-driver` removes only the native driver and leaves the LaunchAgent, binary, config, and logs alone. `--keep-config` keeps config without prompting. Neither command deletes log files.
 
 ### Update
 

@@ -137,7 +137,7 @@ Global flag: `--config PATH` (overrides `RUSTY_JACK_CONFIG` and `~/.config/rusty
 | `picker` | Interactive menu or `--index N` to switch; pauses a running daemon after confirmation when you pick a non-preferred output |
 | `resume` | Re-enable launchd agent; synchronously routes and restores configured `volume` first |
 | `status` | Devices + virtual default block + policy + volume + daemon state |
-| `uninstall` | Uninstall launchd agent (alias for `disable`) |
+| `uninstall` | Uninstall launchd agent; `--only-driver` removes just the native driver |
 | `upgrade` | Refresh LaunchAgent to current binary when needed |
 
 All subcommands support `--json` where applicable. Subcommands are alphabetical in `--help`.
@@ -234,7 +234,7 @@ rusty-jack install
 
 `install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
 
-Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `disable` for daemon-only removal that always keeps config and logs.
+Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `rusty-jack uninstall --only-driver` to remove only the native audio driver, or `disable` for daemon-only removal that always keeps config and logs.
 
 ### Update the daemon
 

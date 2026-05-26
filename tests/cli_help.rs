@@ -166,7 +166,8 @@ fn test_uninstall_subcommand_in_help() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Uninstall"));
+        .stdout(predicate::str::contains("Uninstall"))
+        .stdout(predicate::str::contains("--only-driver"));
 }
 
 #[test]
