@@ -103,10 +103,11 @@ mod tests {
 
     #[test]
     fn test_run_json_when_not_installed() {
-        if matches!(resume_daemon().unwrap(), ResumeResult::NotInstalled { .. }) {
-            let hal = MockHal::new(vec![]);
-            run(&hal, true, None).unwrap();
-        }
+        let json = serde_json::to_string(&ResumeResult::NotInstalled {
+            plist_path: "/tmp/com.example.rusty-jack.plist".into(),
+        })
+        .unwrap();
+        assert!(json.contains("\"status\":\"not_installed\""));
     }
 
     #[test]

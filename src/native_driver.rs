@@ -1,7 +1,8 @@
 //! Lifecycle helpers for the Rusty Jack CoreAudio HAL driver bundle.
 
 use crate::hdmi_displayport_volume_control::{
-    connected_hdmi_displayport_output_present, native_driver_info, RUSTY_JACK_DRIVER_BUNDLE_ID,
+    connected_hdmi_displayport_output_present, native_driver_info, native_driver_scope_note,
+    RUSTY_JACK_DRIVER_BUNDLE_ID,
 };
 use crate::output_device::OutputDevice;
 use crate::system_default::HalDriverInfo;
@@ -140,7 +141,7 @@ pub fn install_for_connected_hdmi_displayport(
     }
 
     if !Confirm::new()
-        .with_prompt("Install Rusty Jack native audio driver for HDMI/DisplayPort volume keys?")
+        .with_prompt("Install Rusty Jack user audio driver for HDMI/DisplayPort volume keys? No sudo is needed.")
         .default(true)
         .interact()
         .map_err(|err| RustyJackError::Config(format!("driver install prompt failed: {err}")))?
@@ -182,8 +183,9 @@ pub fn uninstall_if_installed(
 
     if !Confirm::new()
         .with_prompt(format!(
-            "Remove Rusty Jack native audio driver at {}?",
-            driver.install_path
+            "Remove Rusty Jack native audio driver at {}? {}.",
+            driver.install_path,
+            native_driver_scope_note(&driver.install_path)
         ))
         .default(false)
         .interact()
@@ -372,6 +374,7 @@ fn bundle_unavailable_message() -> String {
 
 fn print_driver_path(path: &str, version: Option<&str>) {
     println!("  path:    {path}");
+    println!("  scope:   {}", native_driver_scope_note(path));
     if let Some(version) = version {
         println!("  version: {version}");
     }

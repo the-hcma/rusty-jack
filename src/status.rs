@@ -103,7 +103,7 @@ fn format_hdmi_displayport_volume_control_block(
         (
             "native driver",
             if let Some(driver) = &status.native_driver {
-                format!("installed at {}", driver.install_path)
+                format!("installed ({})", driver.name)
             } else {
                 "not installed".into()
             },
@@ -118,6 +118,23 @@ fn format_hdmi_displayport_volume_control_block(
             },
         ),
     ];
+    if let Some(scope) = &status.native_driver_scope {
+        rows.push(("driver scope", scope.clone()));
+    }
+    if let Some(path) = &status.native_driver_install_path {
+        rows.push(("driver path", path.clone()));
+    }
+    if let Some(driver) = &status.native_driver {
+        if let Some(version) = &driver.version {
+            rows.push(("driver version", version.clone()));
+        }
+    }
+    if let Some(stage) = &status.native_driver_stage {
+        rows.push(("driver stage", stage.clone()));
+    }
+    if let Some(warning) = &status.native_driver_warning {
+        rows.push(("driver note", warning.clone()));
+    }
     if let Some(path) = &status.orphaned_eqmac_hal_driver_path {
         rows.push(("eqMac driver", format!("orphaned at {path}")));
         rows.push((
@@ -394,6 +411,7 @@ mod tests {
                         name: "eqMac".into(),
                         bundle_id: "com.bitgapp.eqmac.driver".into(),
                         version: Some("2.6.0".into()),
+                        stage: None,
                         install_path: "/Library/Audio/Plug-Ins/HAL/eqMac.driver".into(),
                     }),
                     routed_to_uid: Some("hdmi-1".into()),
@@ -519,6 +537,9 @@ mod tests {
                 "selected output is not HDMI/DisplayPort".into(),
             ),
             native_driver_install_path: None,
+            native_driver_scope: None,
+            native_driver_stage: None,
+            native_driver_warning: None,
             native_driver: None,
             eqmac_installed: false,
             eqmac_app_path: None,
@@ -527,6 +548,45 @@ mod tests {
             recommendation: None,
         });
         assert_eq!(value, "no (selected output is not HDMI/DisplayPort)");
+    }
+
+    #[test]
+    fn test_format_volume_control_block_includes_driver_details() {
+        let block =
+            format_hdmi_displayport_volume_control_block(&HdmiDisplayPortVolumeControlStatus {
+                connected_output_present: true,
+                native_driver_installed: true,
+                native_driver_recommended: false,
+                native_driver_recommendation_reason: Some(
+                    "native driver is already installed".into(),
+                ),
+                native_driver_install_path: Some(
+                    "/Users/example/Library/Audio/Plug-Ins/HAL/RustyJack.driver".into(),
+                ),
+                native_driver_scope: Some("user".into()),
+                native_driver_stage: Some("virtual-output-null".into()),
+                native_driver_warning: Some("Rusty Jack is currently a null output.".into()),
+                native_driver: Some(HalDriverInfo {
+                    name: "Rusty Jack".into(),
+                    bundle_id: "com.the-hcma.rusty-jack.driver".into(),
+                    version: Some("0.1.1".into()),
+                    stage: Some("virtual-output-null".into()),
+                    install_path: "/Users/example/Library/Audio/Plug-Ins/HAL/RustyJack.driver"
+                        .into(),
+                }),
+                eqmac_installed: false,
+                eqmac_app_path: None,
+                eqmac_hal_driver_path: None,
+                orphaned_eqmac_hal_driver_path: None,
+                recommendation: None,
+            });
+
+        assert!(block.contains("driver scope"));
+        assert!(block.contains("user"));
+        assert!(block.contains("driver version"));
+        assert!(block.contains("0.1.1"));
+        assert!(block.contains("virtual-output-null"));
+        assert!(block.contains("null output"));
     }
 
     #[test]
