@@ -11,6 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  issues: write
   pull-requests: write
 
 jobs:
@@ -24,8 +25,35 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          open_prs=$(gh api "repos/${REPO}/pulls?state=open&per_page=100" \
-            --jq '.[].number')
+
+          gh_api_retry() {
+            local attempt=1
+            local max_attempts=4
+            local delay_seconds=15
+
+            while true; do
+              if gh api "$@"; then
+                return 0
+              fi
+
+              if [ "${attempt}" -ge "${max_attempts}" ]; then
+                return 1
+              fi
+
+              echo "::warning::GitHub API request failed; retrying in ${delay_seconds}s (attempt ${attempt}/${max_attempts})."
+              sleep "${delay_seconds}"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+
+          if ! open_prs=$(gh_api_retry "repos/${REPO}/pulls?state=open&per_page=100" \
+            --jq '.[].number'); then
+            echo "::warning::Could not list open PRs after retries; skipping cleanup so a maintenance task does not fail main."
+            echo "## Merged PR Closer" >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped because the GitHub API request failed after retries." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           if [ -z "${open_prs}" ]; then
             echo "No open PRs found — nothing to do."
@@ -38,7 +66,7 @@ jobs:
           summary_rows=""
 
           for pr in ${open_prs}; do
-            pr_data=$(gh api "repos/${REPO}/pulls/${pr}" \
+            pr_data=$(gh_api_retry "repos/${REPO}/pulls/${pr}" \
               --jq '{title: .title, merged: .merged, merged_at: .merged_at}')
             title=$(echo "${pr_data}" | jq -r '.title')
             is_merged=$(echo "${pr_data}" | jq -r '.merged')
@@ -47,7 +75,7 @@ jobs:
             if [ "${is_merged}" = "true" ]; then
               : # merged via GitHub API — fall through to close
             else
-              merge_comment=$(gh api "repos/${REPO}/issues/${pr}/comments" \
+              merge_comment=$(gh_api_retry "repos/${REPO}/issues/${pr}/comments" \
                 --jq '[.[] | select(
                   .performed_via_github_app.slug == "graphite-app" and
                   (.body | test("Merged by the \\[Graphite merge queue\\]"))
@@ -58,11 +86,11 @@ jobs:
             fi
 
             echo "Closing PR #${pr}: \"${title}\" (merged at ${merge_time})"
-            gh api "repos/${REPO}/issues/${pr}/comments" \
+            gh_api_retry "repos/${REPO}/issues/${pr}/comments" \
               --method POST \
               --field body="This PR's changes have already landed on \`main\` (merged at ${merge_time}). Closing automatically." \
               --silent
-            gh api "repos/${REPO}/pulls/${pr}" \
+            gh_api_retry "repos/${REPO}/pulls/${pr}" \
               --method PATCH \
               --field state=closed \
               --silent
