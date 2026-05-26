@@ -3,7 +3,9 @@
 use crate::apply::{switch_output, ApplyResult, SwitchOptions};
 use crate::config::Config;
 use crate::coreaudio::AudioHal;
-use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
+use crate::hdmi_displayport_volume_control::{
+    ensure_hdmi_displayport_volume_control_for_target, format_ensure_messages,
+};
 use crate::list_fmt::{self, ANSI_CYAN, ANSI_DIM, ANSI_GREEN, ANSI_RESET};
 use crate::output_device::OutputDevice;
 use crate::policy::{RoutingTarget, RoutingTargetSource};
@@ -444,15 +446,14 @@ pub fn pick_and_switch(
         .get(index)
         .ok_or_else(|| RustyJackError::Config(format!("device index {index} out of range")))?;
 
-    let eqmac = ensure_eqmac_for_target(devices, &device.uid)?;
-    for line in format_ensure_messages(eqmac) {
+    let volume_control = ensure_hdmi_displayport_volume_control_for_target(devices, &device.uid)?;
+    for line in format_ensure_messages(volume_control) {
         eprintln!("{line}");
     }
 
     let target = RoutingTarget {
         uid: device.uid.clone(),
         name: device.name.clone(),
-        monitor_name: device.monitor_name.clone(),
         source: RoutingTargetSource::Picker,
     };
 
@@ -473,7 +474,7 @@ mod tests {
     use crate::coreaudio::mock::MockHal;
     use crate::transport::TransportKind;
 
-    fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
+    fn hdmi_device(uid: &str, _monitor: &str) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -482,11 +483,10 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: Some(monitor.into()),
         }
     }
 
-    fn device(name: &str, monitor: Option<&str>, active: bool) -> OutputDevice {
+    fn device(name: &str, _monitor: Option<&str>, active: bool) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: "uid".into(),
@@ -495,7 +495,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: active,
-            monitor_name: monitor.map(str::to_string),
         }
     }
 
@@ -508,7 +507,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         }
     }
 
@@ -529,7 +527,7 @@ mod tests {
     #[test]
     fn test_format_picker_label_marks_active() {
         let active = format_picker_label(&device("HDMI", Some("DELL U3219Q"), true));
-        assert!(active.starts_with(">  HDMI (DELL U3219Q)"));
+        assert!(active.starts_with(">  HDMI"));
         let idle = format_picker_label(&device("Built-in Output", None, false));
         assert!(idle.starts_with("   Built-in Output"));
     }
@@ -541,7 +539,7 @@ mod tests {
             Some("uid"),
             false,
         );
-        assert!(preferred.starts_with("*  HDMI (DELL U3219Q)"));
+        assert!(preferred.starts_with("*  HDMI"));
     }
 
     #[test]
@@ -551,7 +549,7 @@ mod tests {
             Some("uid"),
             false,
         );
-        assert!(both.starts_with(">* HDMI (DELL U3219Q)"));
+        assert!(both.starts_with(">* HDMI"));
     }
 
     #[test]
@@ -586,8 +584,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
-                uid: None,
-                monitor_name: Some("DELL U3219Q".into()),
+                name: None,
+                uid: Some("hdmi-1".into()),
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -631,7 +629,6 @@ mod tests {
             OutputDevice {
                 uid: "preferred".into(),
                 name: "HDMI".into(),
-                monitor_name: Some("TV".into()),
                 ..device("HDMI", Some("TV"), false)
             },
         ];
@@ -671,8 +668,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
-                uid: None,
-                monitor_name: Some("DELL U3219Q".into()),
+                name: None,
+                uid: Some("hdmi-1".into()),
             },
             preferred_device_uid: None,
             fallback_uids: vec![],

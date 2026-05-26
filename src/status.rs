@@ -1,6 +1,9 @@
 //! Build and format `rusty-jack status` output.
 
 use crate::config::Config;
+use crate::hdmi_displayport_volume_control::{
+    hdmi_displayport_volume_control_status, HdmiDisplayPortVolumeControlStatus,
+};
 use crate::launchd::DaemonStatus;
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
@@ -17,7 +20,7 @@ pub struct PolicyStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub preferred_monitor_name: Option<String>,
+    pub preferred_device_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_device_uid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +48,7 @@ pub struct StatusSnapshot {
     /// Current effective output volume (0–100) for the active route.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_percent: Option<u8>,
+    pub hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonStatus>,
 }
@@ -67,13 +71,61 @@ pub fn build_status(
         config_path,
     );
 
+    let hdmi_displayport_volume_control = hdmi_displayport_volume_control_status(&list.devices);
+
     StatusSnapshot {
         devices: list.devices,
         system_default: list.system_default,
         policy,
         volume_percent,
+        hdmi_displayport_volume_control,
         daemon,
     }
+}
+
+fn format_hdmi_displayport_volume_control_block(
+    status: &HdmiDisplayPortVolumeControlStatus,
+) -> String {
+    let mut rows: Vec<(&str, String)> = vec![
+        (
+            "connected output",
+            if status.connected_output_present {
+                "detected".into()
+            } else {
+                "not detected".into()
+            },
+        ),
+        (
+            "native driver",
+            if let Some(driver) = &status.native_driver {
+                format!("installed at {}", driver.install_path)
+            } else {
+                "not installed".into()
+            },
+        ),
+        (
+            "driver recommended",
+            if status.native_driver_recommended {
+                "yes (connected HDMI/DisplayPort output detected)".into()
+            } else {
+                "no".into()
+            },
+        ),
+        (
+            "eqMac fallback",
+            if let Some(path) = &status.eqmac_install_path {
+                format!("installed at {path}")
+            } else {
+                "not installed".into()
+            },
+        ),
+    ];
+    if let Some(recommendation) = &status.recommendation {
+        rows.push(("note", recommendation.clone()));
+    }
+
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    format_labeled_section("HDMI/DisplayPort Volume Control", "  ", &borrowed)
 }
 
 fn format_daemon_block(daemon: &DaemonStatus) -> String {
@@ -154,8 +206,8 @@ fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> Str
         rows.push(("config", path.clone()));
     }
 
-    if let Some(name) = &policy.preferred_monitor_name {
-        rows.push(("monitor", name.clone()));
+    if let Some(name) = &policy.preferred_device_name {
+        rows.push(("device", name.clone()));
     }
 
     if let Some(uid) = &policy.preferred_device_uid {
@@ -204,6 +256,21 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
         "{}",
         format_policy_block(&snapshot.policy, snapshot.volume_percent)
     )?;
+    if snapshot
+        .hdmi_displayport_volume_control
+        .connected_output_present
+        || snapshot
+            .hdmi_displayport_volume_control
+            .native_driver_installed
+        || snapshot.hdmi_displayport_volume_control.eqmac_installed
+    {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{}",
+            format_hdmi_displayport_volume_control_block(&snapshot.hdmi_displayport_volume_control)
+        )?;
+    }
     if let Some(daemon) = &snapshot.daemon {
         writeln!(out)?;
         writeln!(out, "{}", format_daemon_block(daemon))?;
@@ -235,7 +302,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: active,
-            monitor_name: Some("DELL U3219Q".into()),
         }
     }
 
@@ -266,8 +332,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
+                name: None,
                 uid: Some("hdmi-1".into()),
-                monitor_name: None,
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -329,7 +395,7 @@ mod tests {
             &PolicyStatus {
                 configured: true,
                 config_path: Some("/tmp/c.json".into()),
-                preferred_monitor_name: Some("DELL U3219Q".into()),
+                preferred_device_name: Some("HDMI".into()),
                 preferred_device_uid: Some("hdmi-1".into()),
                 active_device_uid: Some("hdmi-1".into()),
                 matches_preferred: Some(true),
@@ -361,7 +427,7 @@ mod tests {
             &PolicyStatus {
                 configured: true,
                 config_path: Some("/tmp/c.json".into()),
-                preferred_monitor_name: Some("DELL U3219Q".into()),
+                preferred_device_name: Some("HDMI".into()),
                 preferred_device_uid: Some("hdmi-1".into()),
                 active_device_uid: Some("hdmi-1".into()),
                 matches_preferred: Some(true),

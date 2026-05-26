@@ -14,9 +14,6 @@ pub struct OutputDevice {
     pub is_default: bool,
     /// Device currently routing audible system audio (may differ from default when a virtual router is default).
     pub is_active: bool,
-    /// Matched display product name (HDMI/DP), when available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub monitor_name: Option<String>,
 }
 
 impl OutputDevice {
@@ -48,14 +45,10 @@ impl OutputDevice {
         is_internal_builtin_output(self)
     }
 
-    /// Human-readable label (monitor name when available).
+    /// Human-readable device label.
     #[must_use]
     pub fn friendly_label(&self) -> String {
-        if let Some(monitor) = &self.monitor_name {
-            format!("{} ({monitor})", self.name)
-        } else {
-            self.name.clone()
-        }
+        self.name.clone()
     }
 }
 
@@ -128,7 +121,6 @@ mod tests {
             is_alive: true,
             is_default: default,
             is_active: default,
-            monitor_name: None,
         }
     }
 

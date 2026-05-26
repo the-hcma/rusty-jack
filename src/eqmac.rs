@@ -54,11 +54,20 @@ pub fn routing_needs_eqmac(devices: &[OutputDevice], uid: &str) -> bool {
 /// Detect whether eqMac app or HAL driver is installed.
 #[must_use]
 pub fn eqmac_install_state() -> EqMacInstallState {
-    if Path::new(EQMAC_APP_PATH).exists() || Path::new(EQMAC_HAL_DRIVER_PATH).exists() {
+    if eqmac_install_path().is_some() {
         EqMacInstallState::Installed
     } else {
         EqMacInstallState::NotInstalled
     }
+}
+
+/// Path that proves eqMac is installed, preferring the app bundle when present.
+#[must_use]
+pub fn eqmac_install_path() -> Option<String> {
+    [EQMAC_APP_PATH, EQMAC_HAL_DRIVER_PATH]
+        .into_iter()
+        .find(|path| Path::new(path).exists())
+        .map(str::to_string)
 }
 
 /// True when the eqMac application process is running.
@@ -216,11 +225,7 @@ pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
         EqMacEnsureAction::Restarted => {
             vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
         }
-        EqMacEnsureAction::NotInstalled => vec![
-            "warning: eqMac is not installed; volume buttons cannot control HDMI/DisplayPort output."
-                .into(),
-            "  Download eqMac from https://eqmac.app to enable software volume control.".into(),
-        ],
+        EqMacEnsureAction::NotInstalled => vec![],
     }
 }
 
@@ -239,7 +244,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         }
     }
 
@@ -274,13 +278,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_ensure_not_installed_message_has_url() {
+    fn test_format_ensure_not_installed_stays_quiet() {
         let lines = format_ensure_messages(EqMacEnsureResult {
             action: EqMacEnsureAction::NotInstalled,
         });
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("volume buttons cannot control HDMI/DisplayPort"));
-        assert!(lines[1].contains("https://eqmac.app"));
+        assert!(lines.is_empty());
     }
 
     #[test]

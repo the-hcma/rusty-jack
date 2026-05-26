@@ -54,13 +54,10 @@ pub struct DeviceList {
 /// Pick a human-readable label for the routed physical device.
 #[must_use]
 pub fn routed_to_label(devices: &[OutputDevice], routed_uid: &str) -> Option<String> {
-    devices.iter().find(|d| d.uid == routed_uid).map(|d| {
-        if let Some(monitor) = &d.monitor_name {
-            format!("{} ({})", d.name, monitor)
-        } else {
-            d.name.clone()
-        }
-    })
+    devices
+        .iter()
+        .find(|d| d.uid == routed_uid)
+        .map(|d| d.name.clone())
 }
 
 /// Guess router product name from device metadata and optional HAL driver.
@@ -73,6 +70,18 @@ pub fn identify_router(
 ) -> Option<String> {
     if let Some(driver) = driver {
         return Some(driver.name.clone());
+    }
+
+    let uid_lower = uid.to_ascii_lowercase();
+    let name_lower = name.to_ascii_lowercase();
+    if uid_lower.contains("rustyjack")
+        || name_lower.contains("rusty jack")
+        || manufacturer.is_some_and(|m| {
+            let m = m.to_ascii_lowercase();
+            m.contains("rusty jack") || m.contains("the-hcma")
+        })
+    {
+        return Some("Rusty Jack".into());
     }
 
     if uid.contains("EQM") || name.contains("(eqMac)") {

@@ -2,7 +2,9 @@
 
 use crate::config::Config;
 use crate::coreaudio::AudioHal;
-use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
+use crate::hdmi_displayport_volume_control::{
+    ensure_hdmi_displayport_volume_control_for_target, format_ensure_messages,
+};
 use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource};
 use crate::system_default::DeviceList;
 use crate::volume_memory::{remember_active_non_preferred, remembered_volume};
@@ -26,8 +28,6 @@ pub enum ApplyResult {
         from_uid: Option<String>,
         to_uid: String,
         device_name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        monitor_name: Option<String>,
         source: RoutingTargetSource,
         also_set_system_output: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,8 +36,6 @@ pub enum ApplyResult {
     NoChange {
         uid: String,
         device_name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        monitor_name: Option<String>,
         reason: String,
     },
 }
@@ -70,7 +68,6 @@ pub fn switch_output(
         from_uid: current,
         to_uid: target.uid.clone(),
         device_name: target.name.clone(),
-        monitor_name: target.monitor_name.clone(),
         source: target.source.clone(),
         also_set_system_output: options.also_set_system_output,
         volume,
@@ -89,8 +86,9 @@ pub fn apply_policy(
     remember_active_non_preferred(hal, &list.devices, preferred_uid.as_deref(), &target.uid)?;
     let volume = volume_for_target(config, &target, &preferred_uid);
 
-    let eqmac = ensure_eqmac_for_target(&list.devices, &target.uid)?;
-    for line in format_ensure_messages(eqmac) {
+    let volume_control =
+        ensure_hdmi_displayport_volume_control_for_target(&list.devices, &target.uid)?;
+    for line in format_ensure_messages(volume_control) {
         eprintln!("{line}");
     }
 
@@ -133,7 +131,6 @@ fn no_change_result(target: &RoutingTarget, reason: &str) -> ApplyResult {
     ApplyResult::NoChange {
         uid: target.uid.clone(),
         device_name: target.name.clone(),
-        monitor_name: target.monitor_name.clone(),
         reason: reason.into(),
     }
 }
@@ -159,12 +156,11 @@ pub fn print_text(result: &ApplyResult, list: &DeviceList) {
             from_uid,
             to_uid: _,
             device_name,
-            monitor_name,
             source,
             also_set_system_output,
             volume,
         } => {
-            let to = friendly_label(device_name, monitor_name.as_deref());
+            let to = friendly_label(device_name);
             let from = from_uid
                 .as_deref()
                 .map(|uid| label_for_uid(list, uid))
@@ -211,10 +207,9 @@ pub fn print_text(result: &ApplyResult, list: &DeviceList) {
         ApplyResult::NoChange {
             uid: _,
             device_name,
-            monitor_name,
             reason,
         } => {
-            let label = friendly_label(device_name, monitor_name.as_deref());
+            let label = friendly_label(device_name);
             println!("No change: {reason}");
             println!("  device: {label}");
         }
@@ -222,12 +217,8 @@ pub fn print_text(result: &ApplyResult, list: &DeviceList) {
 }
 
 #[must_use]
-fn friendly_label(name: &str, monitor_name: Option<&str>) -> String {
-    if let Some(monitor) = monitor_name {
-        format!("{name} ({monitor})")
-    } else {
-        name.to_string()
-    }
+fn friendly_label(name: &str) -> String {
+    name.to_string()
 }
 
 #[cfg(test)]
@@ -239,7 +230,7 @@ mod tests {
     use crate::system_default::DeviceList;
     use crate::transport::TransportKind;
 
-    fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
+    fn hdmi_device(uid: &str, _monitor: &str) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -248,11 +239,10 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: Some(monitor.into()),
         }
     }
 
-    fn test_config(monitor: &str) -> Config {
+    fn test_config(uid: &str) -> Config {
         Config {
             version: 1,
             auto_switch: true,
@@ -261,8 +251,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
-                uid: None,
-                monitor_name: Some(monitor.into()),
+                name: None,
+                uid: Some(uid.into()),
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -280,7 +270,7 @@ mod tests {
         ])
         .with_default("builtin");
 
-        let (result, _list) = apply_policy(&hal, &test_config("DELL U3219Q")).unwrap();
+        let (result, _list) = apply_policy(&hal, &test_config("hdmi-1")).unwrap();
         assert!(matches!(result, ApplyResult::Switched { .. }));
         assert_eq!(hal.set_calls().len(), 1);
         assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
@@ -294,7 +284,7 @@ mod tests {
         ])
         .with_default("builtin");
 
-        let mut config = test_config("DELL U3219Q");
+        let mut config = test_config("hdmi-1");
         config.volume = Some(42);
 
         let (result, _list) = apply_policy(&hal, &config).unwrap();
@@ -318,7 +308,7 @@ mod tests {
     #[test]
     fn test_apply_no_volume_when_already_default() {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
-        let mut config = test_config("DELL U3219Q");
+        let mut config = test_config("hdmi-1");
         config.volume = Some(42);
 
         let (result, _list) = apply_policy(&hal, &config).unwrap();
@@ -329,18 +319,18 @@ mod tests {
     #[test]
     fn test_apply_no_change_when_already_default() {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
-        let (result, _list) = apply_policy(&hal, &test_config("DELL U3219Q")).unwrap();
+        let (result, _list) = apply_policy(&hal, &test_config("hdmi-1")).unwrap();
         assert!(matches!(result, ApplyResult::NoChange { .. }));
         assert!(hal.set_calls().is_empty());
     }
 
     #[test]
-    fn test_label_for_uid_uses_monitor_name() {
+    fn test_label_for_uid_uses_device_name() {
         let list = DeviceList {
             devices: vec![hdmi_device("hdmi-1", "DELL U3219Q")],
             system_default: None,
         };
-        assert_eq!(label_for_uid(&list, "hdmi-1"), "HDMI (DELL U3219Q)");
+        assert_eq!(label_for_uid(&list, "hdmi-1"), "HDMI");
     }
 
     #[test]

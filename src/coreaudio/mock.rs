@@ -159,7 +159,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: true,
-            monitor_name: None,
         }]);
         assert_eq!(hal.list_outputs().unwrap().devices.len(), 1);
     }
@@ -174,7 +173,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         }]);
         hal.set_default_output("hdmi", true).unwrap();
         assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi"));

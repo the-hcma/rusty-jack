@@ -680,7 +680,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         }
     }
 
@@ -693,8 +692,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
+                name: None,
                 uid: Some(uid.into()),
-                monitor_name: None,
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -707,8 +706,8 @@ mod tests {
                 port: 10_000,
                 path: protocol_path(),
                 mac_output: DeviceSelectorConfig {
+                    name: None,
                     uid: Some(uid.into()),
-                    monitor_name: None,
                 },
                 triggers: vec![OUTPUT_SELECTED_TRIGGER.into()],
                 wake_debounce_ms: 30_000,

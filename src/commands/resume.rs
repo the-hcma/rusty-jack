@@ -78,8 +78,8 @@ mod tests {
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
             preferred_device: DeviceSelectorConfig {
+                name: None,
                 uid: Some("hdmi".into()),
-                monitor_name: None,
             },
             preferred_device_uid: None,
             fallback_uids: vec![],
@@ -98,7 +98,6 @@ mod tests {
             is_alive: true,
             is_default: active,
             is_active: active,
-            monitor_name: None,
         }
     }
 

@@ -5,7 +5,6 @@ use crate::system_default::{DeviceList, SystemDefaultInfo};
 use anyhow::Result;
 use std::io::{self, IsTerminal, Write};
 
-const NO_MONITOR: &str = "-";
 pub const ANSI_GREEN: &str = "\x1b[32m";
 pub const ANSI_CYAN: &str = "\x1b[36m";
 pub const ANSI_DIM: &str = "\x1b[2m";
@@ -13,7 +12,7 @@ pub const ANSI_RESET: &str = "\x1b[0m";
 const COL_GAP: &str = "  ";
 
 struct TableWidths {
-    cols: [usize; 7],
+    cols: [usize; 6],
 }
 
 fn display_width(s: &str) -> usize {
@@ -39,7 +38,6 @@ fn compute_widths(devices: &[OutputDevice]) -> TableWidths {
         display_width("ALIVE"),
         display_width("TRANSPORT"),
         display_width("DEVICE"),
-        display_width("MONITOR"),
         display_width("UID"),
     ];
 
@@ -49,10 +47,7 @@ fn compute_widths(devices: &[OutputDevice]) -> TableWidths {
         cols[2] = cols[2].max(display_width(if d.is_alive { "yes" } else { "no" }));
         cols[3] = cols[3].max(display_width(&d.transport.to_string()));
         cols[4] = cols[4].max(display_width(&d.name));
-        cols[5] = cols[5].max(display_width(
-            d.monitor_name.as_deref().unwrap_or(NO_MONITOR),
-        ));
-        cols[6] = cols[6].max(display_width(&d.uid));
+        cols[5] = cols[5].max(display_width(&d.uid));
     }
 
     cols[0] = cols[0].max(3);
@@ -66,7 +61,7 @@ fn compute_widths(devices: &[OutputDevice]) -> TableWidths {
 #[allow(dead_code)] // used by alignment tests
 fn column_starts(widths: &TableWidths) -> Vec<usize> {
     let gap = COL_GAP.len();
-    let mut starts = Vec::with_capacity(7);
+    let mut starts = Vec::with_capacity(6);
     let mut pos = 0;
     for (i, &width) in widths.cols.iter().enumerate() {
         starts.push(pos);
@@ -78,7 +73,7 @@ fn column_starts(widths: &TableWidths) -> Vec<usize> {
     starts
 }
 
-fn render_cells(cells: [&str; 7], widths: &TableWidths) -> String {
+fn render_cells(cells: [&str; 6], widths: &TableWidths) -> String {
     let mut out = String::new();
     for (i, cell) in cells.iter().enumerate() {
         if i > 0 {
@@ -87,10 +82,6 @@ fn render_cells(cells: [&str; 7], widths: &TableWidths) -> String {
         out.push_str(&pad_cell(cell, widths.cols[i]));
     }
     out
-}
-
-fn monitor_label(device: &OutputDevice) -> &str {
-    device.monitor_name.as_deref().unwrap_or(NO_MONITOR)
 }
 
 fn active_marker(device: &OutputDevice) -> &str {
@@ -102,18 +93,7 @@ fn active_marker(device: &OutputDevice) -> &str {
 }
 
 fn format_header(w: &TableWidths) -> String {
-    render_cells(
-        [
-            "IDX",
-            "ACT",
-            "ALIVE",
-            "TRANSPORT",
-            "DEVICE",
-            "MONITOR",
-            "UID",
-        ],
-        w,
-    )
+    render_cells(["IDX", "ACT", "ALIVE", "TRANSPORT", "DEVICE", "UID"], w)
 }
 
 fn format_row(index: usize, device: &OutputDevice, w: &TableWidths) -> String {
@@ -124,7 +104,6 @@ fn format_row(index: usize, device: &OutputDevice, w: &TableWidths) -> String {
             if device.is_alive { "yes" } else { "no" },
             &device.transport.to_string(),
             &device.name,
-            monitor_label(device),
             &device.uid,
         ],
         w,
@@ -314,7 +293,6 @@ mod tests {
                 is_alive: true,
                 is_default: false,
                 is_active: false,
-                monitor_name: None,
             },
             OutputDevice {
                 id: 2,
@@ -324,7 +302,6 @@ mod tests {
                 is_alive: true,
                 is_default: false,
                 is_active: true,
-                monitor_name: Some("DELL U3219Q".into()),
             },
             OutputDevice {
                 id: 3,
@@ -334,7 +311,6 @@ mod tests {
                 is_alive: true,
                 is_default: false,
                 is_active: false,
-                monitor_name: Some("DELL U3223QE".into()),
             },
         ]
     }
@@ -387,12 +363,12 @@ mod tests {
 
         let header = split_cells(lines[0], &w);
         assert_eq!(header[0], "IDX");
-        assert_eq!(header[6], "UID");
+        assert_eq!(header[5], "UID");
 
         let hdmi = split_cells(lines[2], &w);
         assert_eq!(hdmi[1], ">");
         assert_eq!(hdmi[3], "hdmi");
-        assert_eq!(hdmi[5], "DELL U3219Q");
+        assert_eq!(hdmi[4], "HDMI");
     }
 
     #[test]
@@ -406,7 +382,6 @@ mod tests {
             is_alive: true,
             is_default: false,
             is_active: false,
-            monitor_name: None,
         });
         let table = format_table_with_color(&devices, true);
         let zoom_line = table.lines().last().unwrap();
@@ -490,7 +465,6 @@ mod tests {
                 is_alive: true,
                 is_default: false,
                 is_active: true,
-                monitor_name: Some("LG TV".into()),
             }],
             system_default: None,
         };

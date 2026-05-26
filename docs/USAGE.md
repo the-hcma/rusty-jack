@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration for HDMI/DisplayPort keyboard volume-key control, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and ScalarWebAPI-compatible device wake support. Native HDMI/DP volume without eqMac remains future driver work.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, eqMac compatibility fallback when eqMac is already installed, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and ScalarWebAPI-compatible device wake support.
 
 ## Global options
 
@@ -19,6 +19,7 @@ Environment:
 | Variable | Description |
 |----------|-------------|
 | `RUSTY_JACK_CONFIG` | Path to config file |
+| `RUSTY_JACK_DRIVER_BUNDLE` | Optional path to a `RustyJack.driver` bundle when testing or installing from a source checkout |
 | `HDMI_SOUND_CONTROLLER_CONFIG` | Legacy alias for `RUSTY_JACK_CONFIG` |
 | `NO_COLOR` | Disable ANSI colors in tables and picker |
 
@@ -26,7 +27,7 @@ Environment:
 
 ## `apply`
 
-One-shot apply of config policy: resolve preferred device (or fallback), ensure eqMac if HDMI-class, switch default output.
+One-shot apply of config policy: resolve preferred device (or fallback), ensure HDMI/DisplayPort volume control if the target is an HDMI/DP output, switch default output.
 
 ```bash
 rusty-jack apply
@@ -42,7 +43,7 @@ Requires valid config. Results:
 
 **Volume:** For this one-shot command, if `volume` is set in config, it is applied only when a switch occurs (not on `no_change`).
 
-**eqMac:** Started automatically when the target is HDMI-class and eqMac is installed but not running.
+**HDMI/DisplayPort volume control:** Rusty Jack prefers its native driver when installed. If not, it starts eqMac only when the target is HDMI/DisplayPort and eqMac is already installed.
 
 ---
 
@@ -55,7 +56,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes eqMac-routed HDMI/DisplayPort, where the raw CoreAudio default may be the virtual eqMac device while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes, startup/resume and idle-to-active ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi_device.wake_debounce_ms`.
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup/resume and idle-to-active ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi_device.wake_debounce_ms`.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -113,18 +114,42 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when it is missing. In an interactive terminal it prompts for the preferred output and an optional explicit fallback output. If no explicit fallback is configured, the daemon still uses the Mac's built-in output automatically when available. In `--json` mode it avoids prompts and uses deterministic defaults from the live device list. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
+`install` creates `~/.config/rusty-jack/config.json` when it is missing. If the config already exists, Rusty Jack preserves it as the basis, updates readable `name` labels for known UIDs, and offers additive changes such as choosing a missing preferred output or adding an explicit fallback. It does not recreate the file or drop custom settings like `scalar_webapi_device`. In `--json` mode it avoids prompts and applies only non-interactive migrations. If a connected HDMI/DisplayPort output is visible, `install` also offers to install the Rusty Jack native audio driver. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
+
+### Native HDMI/DisplayPort Driver
+
+The native driver is the preferred volume-key path for connected HDMI/DisplayPort outputs. Rusty Jack installs it only when a live HDMI/DP output is present; USB microphones, built-in outputs, Bluetooth, and virtual devices do not trigger the offer.
+
+Interactive install:
+
+```bash
+rusty-jack install
+```
+
+When prompted, accept the native driver install. Rusty Jack looks for `RustyJack.driver` in this order:
+
+1. `RUSTY_JACK_DRIVER_BUNDLE`
+2. next to the running `rusty-jack` binary
+3. `../share/rusty-jack/RustyJack.driver` relative to the binary prefix, which is the Homebrew-style layout
+
+The driver is installed to:
+
+```text
+~/Library/Audio/Plug-Ins/HAL/RustyJack.driver
+```
+
+After installing, restart audio apps if they do not immediately see the virtual device. `rusty-jack status` reports whether the driver is installed and where.
 
 ### Pause, Resume, Uninstall
 
 ```bash
 rusty-jack pause      # stop auto-routing; keep plist installed
 rusty-jack resume     # re-enable and start the plist
-rusty-jack uninstall  # stop, disable, remove plist, offer config cleanup
+rusty-jack uninstall  # stop, disable, remove plist, offer driver/config cleanup
 rusty-jack uninstall --remove-config  # also remove default config without prompting
 ```
 
-`resume` applies the configured route and volume synchronously, then starts the daemon. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the default config in interactive mode; `--keep-config` keeps it without prompting. Neither command deletes log files.
+`resume` applies the configured route and volume synchronously, then starts the daemon. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--keep-config` keeps config without prompting. Neither command deletes log files.
 
 ### Update
 
@@ -135,7 +160,7 @@ git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It rewrites the plist to point at the current `rusty-jack` executable, reports the before/after version and commit, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade`. The CLI `upgrade` command itself does not download source or build a new binary. It checks the bundled native driver against the installed driver and only offers a driver upgrade when the bundled driver has a material change. It rewrites the plist to point at the current `rusty-jack` executable, reports the before/after version and commit, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it.
 
 ---
 
@@ -154,7 +179,7 @@ rusty-jack list --json
 | `--hdmi` | Only HDMI, DisplayPort, Thunderbolt, USB |
 | `--json` | `DeviceList` JSON |
 
-Table columns: **IDX**, **ACT** (`>` = active route), **ALIVE**, **TRANSPORT**, **DEVICE**, **MONITOR**, **UID**.
+Table columns: **IDX**, **ACT** (`>` = active route), **ALIVE**, **TRANSPORT**, **DEVICE**, **UID**.
 
 Non-selectable devices (aggregates, some virtual apps) may appear dimmed when color is enabled.
 
@@ -202,7 +227,7 @@ Press **p** to switch directly to the configured preferred device. Press **Esc**
 
 ## `status`
 
-Snapshot of devices, virtual system default (eqMac footer when applicable), policy evaluation, and per-user LaunchAgent state.
+Snapshot of devices, virtual system default, policy evaluation, HDMI/DisplayPort volume-control status, and per-user LaunchAgent state.
 
 ```bash
 rusty-jack status
@@ -212,9 +237,11 @@ rusty-jack status --config ~/.config/rusty-jack/config.json
 
 Policy block fields (aligned columns):
 
-- `configured`, `config`, `monitor`, `preferred`, `active`, `matches`, `auto_switch`
+- `configured`, `config`, `device`, `preferred`, `active`, `matches`, `auto_switch`
 - `config volume`, `volume` (current effective %)
 - `note` (human-readable policy message)
+
+HDMI/DisplayPort Volume Control block fields include whether a connected HDMI/DP output is detected, whether the Rusty Jack native driver is installed, whether the driver is recommended for the current hardware, whether eqMac fallback is installed, and a recommendation when a connected HDMI/DP route needs volume control.
 
 Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, and PID when available. State values:
 
@@ -240,7 +267,8 @@ Path resolution order:
 {
   "version": 1,
   "preferred_device": {
-    "monitor_name": "DELL U3219Q"
+    "name": "HDMI",
+    "uid": "PASTE-UID-FROM-rusty-jack-list"
   },
   "also_set_system_output": true,
   "volume": 13
@@ -249,12 +277,10 @@ Path resolution order:
 
 ### `preferred_device`
 
-Use `monitor_name`, or use `uid` plus `monitor_name` when setup can record both:
+Use `uid` as the stable selector. Keep `name` as the human-readable CoreAudio device label:
 
-- `monitor_name` — product name from `list` MONITOR column (must be unique among connected devices)
-- `uid` — stable CoreAudio UID from `list`
-
-When both fields are present, the connected device with `uid` must still report the configured `monitor_name`. This keeps stale UIDs from silently routing to the wrong display after hardware changes.
+- `name` — device name from the `list` DEVICE column, emitted for readability
+- `uid` — stable CoreAudio UID from `list`, used for routing
 
 ### `fallback_uids`
 
@@ -272,11 +298,11 @@ Array of UIDs tried in order when preferred is missing or not alive. Leave it em
 
 ### `volume`
 
-Integer 0–100. Created automatically from the preferred route's current effective volume when `install` can read it. This config value is authoritative for the configured preferred output. Other outputs use per-device remembered volume stored in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back. Scheduled no-op polls do not keep forcing volume, so manual volume changes are not fought every poll. Uses retry + readback for eqMac compatibility.
+Integer 0–100. Created automatically from the preferred route's current effective volume when `install` can read it. This config value is authoritative for the configured preferred output. Other outputs use per-device remembered volume stored in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back. Scheduled no-op polls do not keep forcing volume, so manual volume changes are not fought every poll. Uses retry + readback for HDMI/DisplayPort volume-control compatibility.
 
 ### `scalar_webapi_device`
 
-Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `mac_output` may be any Mac output connected to the external device; eqMac is only involved when that output is HDMI/DisplayPort and needs the software volume layer. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
+Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `mac_output` may be any Mac output connected to the external device; HDMI/DisplayPort volume control is only involved when that output is an HDMI/DP route. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
 
 | Field | Default | Description |
 |-------|---------|-------------|

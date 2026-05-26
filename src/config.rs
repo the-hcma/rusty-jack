@@ -12,21 +12,20 @@ const ENV_CONFIG_LEGACY: &str = "HDMI_SOUND_CONTROLLER_CONFIG";
 const DEFAULT_SCALAR_WEBAPI_DEVICE_PORT: u16 = 10000;
 const DEFAULT_SCALAR_WEBAPI_DEVICE_PATH: &str = concat!("so", "ny");
 
-/// Pick a device by monitor product name and/or CoreAudio UID.
+/// Pick a device by CoreAudio UID, with an optional human-readable device name.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct DeviceSelectorConfig {
+    /// Human-readable device label. This is emitted for readability; `uid` is
+    /// the stable selector.
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(default)]
     pub uid: Option<String>,
-    #[serde(default)]
-    pub monitor_name: Option<String>,
 }
 
 impl From<DeviceSelectorConfig> for DeviceSelector {
     fn from(value: DeviceSelectorConfig) -> Self {
-        Self {
-            uid: value.uid,
-            monitor_name: value.monitor_name,
-        }
+        Self { uid: value.uid }
     }
 }
 
@@ -164,11 +163,6 @@ impl Config {
             .uid
             .as_deref()
             .is_none_or(is_placeholder_uid)
-            || self
-                .preferred_device
-                .monitor_name
-                .as_deref()
-                .is_some_and(|n| !n.trim().is_empty())
         {
             return self.preferred_device.clone().into();
         }
@@ -176,7 +170,6 @@ impl Config {
         if let Some(uid) = &self.preferred_device_uid {
             return DeviceSelector {
                 uid: Some(uid.clone()),
-                monitor_name: None,
             };
         }
 
@@ -304,8 +297,7 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
 
     if !config.preferred_is_set() {
         return Err(RustyJackError::Config(
-            "set preferred_device.monitor_name or preferred_device.uid (see config.example.json)"
-                .into(),
+            "set preferred_device.uid (see config.example.json)".into(),
         ));
     }
 
@@ -325,13 +317,7 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
                     "scalar_webapi_device.enabled is true but host is not set".into(),
                 ));
             }
-            if api.mac_output.uid.as_deref().is_none_or(is_placeholder_uid)
-                && api
-                    .mac_output
-                    .monitor_name
-                    .as_deref()
-                    .is_none_or(|n| n.trim().is_empty())
-            {
+            if api.mac_output.uid.as_deref().is_none_or(is_placeholder_uid) {
                 return Err(RustyJackError::Config(
                     "scalar_webapi_device.enabled is true but mac_output is not set".into(),
                 ));
@@ -372,21 +358,25 @@ mod tests {
     }
 
     #[test]
-    fn test_load_config_by_monitor_name() {
+    fn test_load_config_by_device_name_and_uid() {
         let mut file = NamedTempFile::new().unwrap();
         write!(
             file,
             r#"{{
   "version": 1,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+  "preferred_device": {{ "name": "External Headphones", "uid": "BuiltInHeadphoneOutputDevice" }}
 }}"#
         )
         .unwrap();
 
         let config = load_config(file.path()).unwrap();
         assert_eq!(
-            config.preferred_selector().monitor_name.as_deref(),
-            Some("DELL U3219Q")
+            config.preferred_device.name.as_deref(),
+            Some("External Headphones")
+        );
+        assert_eq!(
+            config.preferred_selector().uid.as_deref(),
+            Some("BuiltInHeadphoneOutputDevice")
         );
         assert_eq!(config.poll_interval_ms, 3_000);
         assert_eq!(config.switch_delay_ms, 500);
@@ -436,7 +426,7 @@ mod tests {
             file,
             r#"{{
   "version": 1,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }},
   "scalar_webapi_device": {{ "enabled": false }}
 }}"#
         )
@@ -451,8 +441,8 @@ mod tests {
             file,
             r#"{{
   "version": 1,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
-  "scalar_webapi_device": {{ "enabled": true, "mac_output": {{ "monitor_name": "Built-in" }} }}
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }},
+  "scalar_webapi_device": {{ "enabled": true, "mac_output": {{ "name": "Built-in" }} }}
 }}"#
         )
         .unwrap();
@@ -466,7 +456,7 @@ mod tests {
             file,
             r#"{{
   "version": 1,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }},
   "volume": 101
 }}"#
         )
@@ -481,7 +471,7 @@ mod tests {
             file,
             r#"{{
   "version": 1,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }},
   "volume": 13
 }}"#
         )
@@ -589,7 +579,7 @@ mod tests {
             r#"{{
   "version": 1,
   "poll_interval_ms": 0,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }}
 }}"#
         )
         .unwrap();
@@ -604,7 +594,7 @@ mod tests {
             r#"{{
   "version": 1,
   "activity_poll_interval_ms": 0,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }}
 }}"#
         )
         .unwrap();
@@ -619,7 +609,7 @@ mod tests {
             r#"{{
   "version": 1,
   "activity_idle_threshold_ms": 0,
-  "preferred_device": {{ "monitor_name": "DELL U3219Q" }}
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }}
 }}"#
         )
         .unwrap();

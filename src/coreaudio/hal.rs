@@ -10,7 +10,6 @@ use crate::coreaudio::system_default::build_system_default_info;
 use crate::coreaudio::traits::AudioHal;
 #[cfg(target_os = "macos")]
 use crate::coreaudio::volume;
-use crate::display;
 use crate::output_device::OutputDevice;
 use crate::system_default::DeviceList;
 use crate::transport::TransportKind;
@@ -57,12 +56,6 @@ impl AudioHal for CoreAudioHal {
             let transport_code = device_transport_type(id).unwrap_or(0);
             let transport = TransportKind::from_fourcc(transport_code);
             let is_alive = device_is_alive(id).unwrap_or(false);
-            let monitor_name = if transport.is_hdmi_class() {
-                display::monitor_name_for_audio_uid(&uid)
-            } else {
-                None
-            };
-
             out.push(OutputDevice {
                 id,
                 uid,
@@ -71,7 +64,6 @@ impl AudioHal for CoreAudioHal {
                 is_alive,
                 is_default: false,
                 is_active: false,
-                monitor_name,
             });
         }
 

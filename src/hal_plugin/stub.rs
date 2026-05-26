@@ -1,6 +1,12 @@
 //! Non-macOS stub for HAL plugin scanning.
 
 use crate::system_default::HalDriverInfo;
+use std::path::Path;
+
+#[must_use]
+pub fn driver_bundle_info(_path: &Path) -> Option<HalDriverInfo> {
+    None
+}
 
 #[must_use]
 pub fn installed_hal_drivers() -> &'static [HalDriverInfo] {

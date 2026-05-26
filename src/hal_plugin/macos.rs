@@ -16,7 +16,7 @@ fn hal_plugin_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn parse_driver_bundle(path: &Path) -> Option<HalDriverInfo> {
+pub fn driver_bundle_info(path: &Path) -> Option<HalDriverInfo> {
     let plist = path.join("Contents/Info.plist");
     if !plist.is_file() {
         return None;
@@ -67,7 +67,7 @@ fn scan_hal_plugins() -> Vec<HalDriverInfo> {
             if path.extension().and_then(|s| s.to_str()) != Some("driver") {
                 continue;
             }
-            if let Some(info) = parse_driver_bundle(&path) {
+            if let Some(info) = driver_bundle_info(&path) {
                 drivers.push(info);
             }
         }
@@ -97,6 +97,21 @@ pub fn match_hal_driver(
         if let Some(driver) = drivers.iter().find(|d| d.bundle_id == bundle_id) {
             return Some(driver.clone());
         }
+    }
+
+    if uid.contains("RustyJack")
+        || name.contains("Rusty Jack")
+        || manufacturer.is_some_and(|m| m.contains("Rusty Jack") || m.contains("the-hcma"))
+    {
+        let driver_name =
+            crate::hdmi_displayport_volume_control::RUSTY_JACK_DRIVER_NAME.to_ascii_lowercase();
+        return drivers
+            .iter()
+            .find(|d| {
+                d.bundle_id == crate::hdmi_displayport_volume_control::RUSTY_JACK_DRIVER_BUNDLE_ID
+                    || d.name.to_ascii_lowercase().contains(&driver_name)
+            })
+            .cloned();
     }
 
     if uid.contains("EQM")
