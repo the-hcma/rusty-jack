@@ -18,6 +18,7 @@ jobs:
   release:
     name: Release and update Homebrew tap
     runs-on: ubuntu-latest
+    environment: release
 
     steps:
       - name: Resolve tag
