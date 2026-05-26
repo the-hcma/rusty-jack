@@ -51,23 +51,40 @@ pub fn routing_needs_eqmac(devices: &[OutputDevice], uid: &str) -> bool {
         .is_some_and(|d| d.transport.is_hdmi_class())
 }
 
-/// Detect whether eqMac app or HAL driver is installed.
+/// Detect whether the eqMac app is installed.
 #[must_use]
 pub fn eqmac_install_state() -> EqMacInstallState {
-    if eqmac_install_path().is_some() {
+    if eqmac_app_path().is_some() {
         EqMacInstallState::Installed
     } else {
         EqMacInstallState::NotInstalled
     }
 }
 
-/// Path that proves eqMac is installed, preferring the app bundle when present.
+/// Path to the eqMac app bundle when present.
 #[must_use]
-pub fn eqmac_install_path() -> Option<String> {
-    [EQMAC_APP_PATH, EQMAC_HAL_DRIVER_PATH]
-        .into_iter()
-        .find(|path| Path::new(path).exists())
-        .map(str::to_string)
+pub fn eqmac_app_path() -> Option<String> {
+    Path::new(EQMAC_APP_PATH)
+        .exists()
+        .then(|| EQMAC_APP_PATH.to_string())
+}
+
+/// Path to the eqMac HAL driver when present.
+#[must_use]
+pub fn eqmac_hal_driver_path() -> Option<String> {
+    Path::new(EQMAC_HAL_DRIVER_PATH)
+        .exists()
+        .then(|| EQMAC_HAL_DRIVER_PATH.to_string())
+}
+
+/// A leftover eqMac HAL driver without the app bundle is not a usable fallback.
+#[must_use]
+pub fn orphaned_eqmac_hal_driver_path() -> Option<String> {
+    if eqmac_app_path().is_none() {
+        eqmac_hal_driver_path()
+    } else {
+        None
+    }
 }
 
 /// True when the eqMac application process is running.

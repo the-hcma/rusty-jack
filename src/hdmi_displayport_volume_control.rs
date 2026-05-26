@@ -46,7 +46,11 @@ pub struct HdmiDisplayPortVolumeControlStatus {
     pub native_driver: Option<HalDriverInfo>,
     pub eqmac_installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub eqmac_install_path: Option<String>,
+    pub eqmac_app_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eqmac_hal_driver_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphaned_eqmac_hal_driver_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommendation: Option<String>,
 }
@@ -168,8 +172,10 @@ pub fn hdmi_displayport_volume_control_status(
     let native_driver_install_path = native_driver
         .as_ref()
         .map(|driver| driver.install_path.clone());
-    let eqmac_install_path = eqmac::eqmac_install_path();
-    let eqmac_installed = eqmac_install_path.is_some();
+    let eqmac_app_path = eqmac::eqmac_app_path();
+    let eqmac_hal_driver_path = eqmac::eqmac_hal_driver_path();
+    let orphaned_eqmac_hal_driver_path = eqmac::orphaned_eqmac_hal_driver_path();
+    let eqmac_installed = eqmac_app_path.is_some();
     let recommendation = if native_driver_recommended {
         Some(driver_offer_message(eqmac_installed))
     } else {
@@ -183,7 +189,9 @@ pub fn hdmi_displayport_volume_control_status(
         native_driver_install_path,
         native_driver,
         eqmac_installed,
-        eqmac_install_path,
+        eqmac_app_path,
+        eqmac_hal_driver_path,
+        orphaned_eqmac_hal_driver_path,
         recommendation,
     }
 }

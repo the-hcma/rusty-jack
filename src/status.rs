@@ -113,13 +113,22 @@ fn format_hdmi_displayport_volume_control_block(
         ),
         (
             "eqMac fallback",
-            if let Some(path) = &status.eqmac_install_path {
+            if let Some(path) = &status.eqmac_app_path {
                 format!("installed at {path}")
             } else {
                 "not installed".into()
             },
         ),
     ];
+    if let Some(path) = &status.orphaned_eqmac_hal_driver_path {
+        rows.push(("eqMac driver", format!("orphaned at {path}")));
+        rows.push((
+            "cleanup",
+            format!("remove stale eqMac driver with `sudo rm -rf {path}`"),
+        ));
+    } else if let Some(path) = &status.eqmac_hal_driver_path {
+        rows.push(("eqMac driver", format!("installed at {path}")));
+    }
     if let Some(recommendation) = &status.recommendation {
         rows.push(("note", recommendation.clone()));
     }
