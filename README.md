@@ -6,7 +6,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/the-hcma/rusty-jack?sort=semver)](https://github.com/the-hcma/rusty-jack/releases)
 [![Homebrew tap](https://img.shields.io/badge/homebrew-the--hcma%2Ftap-blue?logo=homebrew)](https://github.com/the-hcma/homebrew-tap)
 
-macOS CLI that keeps audio on your chosen **HDMI, DisplayPort, USB-C dock, or line-out** output, helps keyboard volume keys work with fixed-volume HDMI/DisplayPort devices through an eqMac-style software volume layer, and wakes Sony-like Songpal / ScalarWebAPI speakers when their Mac output is selected.
+macOS CLI that keeps audio on your chosen **HDMI, DisplayPort, USB-C dock, or line-out** output, helps keyboard volume keys work with fixed-volume HDMI/DisplayPort devices through an eqMac-style software volume layer, and wakes ScalarWebAPI-compatible speakers when their Mac output is selected.
 
 > *Your preferred output, on deck — without a menu bar app.*
 
@@ -27,7 +27,7 @@ rusty-jack install   # pick preferred + optional fallback outputs; starts the da
 rusty-jack status
 ```
 
-For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — Rusty Jack routes audio to the right external device, starts eqMac automatically when needed, and warns with the download URL when it is missing. For **Sony-like speakers**, configure `sony_speaker` so Rusty Jack can wake the speaker when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#sony_speaker).
+For **HDMI/DP volume keys**, install [eqMac](https://eqmac.app) — Rusty Jack routes audio to the right external device, starts eqMac automatically when needed, and warns with the download URL when it is missing. For **ScalarWebAPI-compatible speakers**, configure `scalar_webapi_device` so Rusty Jack can wake the device when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#scalar_webapi_device).
 
 Full command reference: [docs/USAGE.md](./docs/USAGE.md). Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
@@ -51,7 +51,7 @@ Built-in speakers and most Bluetooth headsets expose **software-controllable vol
 | Start eqMac for HDMI-class routes when available; warn when missing | automatic during `apply` / `picker` / `daemon` |
 | Run a background auto-switch supervisor | `daemon` |
 | Pause, resume, or uninstall the per-user LaunchAgent | `pause`, `resume`, `disable` |
-| Wake Sony Songpal / ScalarWebAPI speakers on output selection or idle-to-active daemon triggers | `sony_speaker` |
+| Wake ScalarWebAPI-compatible devices on output selection or idle-to-active daemon triggers | `scalar_webapi_device` |
 
 Switching the default output to a **physical HDMI device alone does not fix volume keys**. Rusty Jack solves the routing and daemon automation side; until it has its own virtual HAL driver, use **eqMac** as the software volume layer that the keyboard volume keys can control.
 
@@ -155,7 +155,7 @@ Default path: `~/.config/rusty-jack/config.json`. Copy from [`config.example.jso
 | `switch_delay_ms` | Delay after daemon switch before wake hooks (default `500`) |
 | `activity_idle_threshold_ms` | Idle time that counts as away before an idle-to-active trigger (default `60000`) |
 | `activity_poll_interval_ms` | Daemon idle-state sampling interval (default `1000`) |
-| `sony_speaker` | Wake SRS-ZR5 on `apply`, `picker`, daemon output switches, and daemon idle-to-active triggers using discovered ScalarWebAPI endpoint |
+| `scalar_webapi_device` | Wake ScalarWebAPI device on `apply`, `picker`, daemon output switches, and daemon idle-to-active triggers using discovered ScalarWebAPI endpoint |
 
 Minimal example:
 
@@ -171,7 +171,9 @@ Minimal example:
 
 `match`, `exclude`, and `logging` in `config.example.json` are reserved for future behavior and currently ignored by the loader.
 
-Sony ZR5 example: [`config.example.sony.json`](./config.example.sony.json). Other Sony Songpal / ScalarWebAPI speakers may also work; Rusty Jack discovers the advertised ScalarWebAPI endpoint and uses `system.getPowerStatus` / `system.setPowerStatus`. If you confirm another model, please consider contributing device info to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal) using the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/).
+ScalarWebAPI device example: [`config.example.scalar-webapi-device.json`](./config.example.scalar-webapi-device.json). Other devices should work if they expose the same ScalarWebAPI service; Rusty Jack discovers the advertised endpoint and uses `system.getPowerStatus` / `system.setPowerStatus`.
+
+Expected compatible Sony devices include Sony `SRS-ZR5` (the model this integration has been tested with), `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`. This list is not exhaustive; compatibility depends on the device advertising a ScalarWebAPI endpoint on the local network.
 
 ---
 
@@ -312,7 +314,7 @@ See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 | Area | Status |
 |------|--------|
 | Routing CLI, eqMac integration, volume retries, daemon polling | Implemented |
-| Sony speaker wake via ScalarWebAPI + daemon idle polling | Implemented |
+| ScalarWebAPI device wake via ScalarWebAPI + daemon idle polling | Implemented |
 | LaunchAgent install, upgrade, uninstall, and status helper | Implemented |
 | Native event listener refinements for activity detection | Planned |
 | Own virtual driver + software volume | Planned |

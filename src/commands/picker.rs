@@ -32,7 +32,7 @@ pub fn run(
     let picker_notes = if index.is_none() && !json {
         config
             .as_ref()
-            .map(|config| crate::sony::picker_power_notes(config, &list.devices))
+            .map(|config| crate::scalar_webapi_device::picker_power_notes(config, &list.devices))
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -47,7 +47,9 @@ pub fn run(
             || {
                 config
                     .as_ref()
-                    .map(|config| crate::sony::picker_power_notes(config, &list.devices))
+                    .map(|config| {
+                        crate::scalar_webapi_device::picker_power_notes(config, &list.devices)
+                    })
                     .unwrap_or_default()
             },
         )
@@ -110,7 +112,11 @@ pub fn run(
             )
             .map_err(anyhow::Error::new)?;
             if let Some(config) = config.as_ref() {
-                crate::sony::warn_on_output_selected(config, &list.devices, &device.uid);
+                crate::scalar_webapi_device::warn_on_output_selected(
+                    config,
+                    &list.devices,
+                    &device.uid,
+                );
             }
 
             if json {

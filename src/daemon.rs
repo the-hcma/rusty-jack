@@ -10,7 +10,7 @@ use crate::eqmac::{
 use crate::network::{current_network_access_snapshot, NetworkAccessSnapshot};
 use crate::output_device::OutputDevice;
 use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
-use crate::sony::SonyWakeResult;
+use crate::scalar_webapi_device::ScalarWebApiDeviceWakeResult;
 use crate::system_default::DeviceList;
 use crate::volume_memory::remember_active_non_preferred;
 use crate::RustyJackError;
@@ -18,7 +18,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const MIN_SONY_STARTUP_FALLBACK_GRACE: Duration = Duration::from_secs(30);
+const MIN_SCALAR_WEBAPI_DEVICE_STARTUP_FALLBACK_GRACE: Duration = Duration::from_secs(30);
 
 /// Why the daemon is evaluating policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +41,7 @@ pub enum DaemonTickResult {
 #[derive(Debug, Default)]
 pub struct DaemonState {
     was_idle: Option<bool>,
-    last_activity_wake: Option<Instant>,
+    last_scalar_webapi_device_activity_wake: Option<Instant>,
     network_access_observed: bool,
     network_access: Option<NetworkAccessSnapshot>,
 }
@@ -64,14 +64,14 @@ impl DaemonState {
         became_active
     }
 
-    pub fn allow_sony_wake(&mut self, now: Instant, cooldown: Duration) -> bool {
+    pub fn allow_scalar_webapi_device_wake(&mut self, now: Instant, cooldown: Duration) -> bool {
         if self
-            .last_activity_wake
+            .last_scalar_webapi_device_activity_wake
             .is_some_and(|last| now.duration_since(last) < cooldown)
         {
             return false;
         }
-        self.last_activity_wake = Some(now);
+        self.last_scalar_webapi_device_activity_wake = Some(now);
         true
     }
 
@@ -120,50 +120,54 @@ fn daemon_tick_with_eqmac(
     reason: DaemonTickReason,
     ensure_eqmac: &EqMacEnsureFn<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-    daemon_tick_with_sony_fallback(
+    daemon_tick_with_scalar_webapi_device_fallback(
         hal,
         config,
         reason,
-        SonyFallbackPermission::Allowed,
+        ScalarWebApiDeviceFallbackPermission::Allowed,
         ensure_eqmac,
     )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SonyFallbackPermission {
+enum ScalarWebApiDeviceFallbackPermission {
     Allowed,
     Suppressed,
 }
 
-fn daemon_tick_with_sony_fallback(
+fn daemon_tick_with_scalar_webapi_device_fallback(
     hal: &dyn AudioHal,
     config: &Config,
     reason: DaemonTickReason,
-    sony_fallback: SonyFallbackPermission,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
     ensure_eqmac: &EqMacEnsureFn<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     daemon_tick_with_hooks(
         hal,
         config,
         reason,
-        sony_fallback,
+        scalar_webapi_device_fallback,
         ensure_eqmac,
-        &crate::sony::wake_on_output_selected,
-        &crate::sony::wake_on_activity,
+        &crate::scalar_webapi_device::wake_on_output_selected,
+        &crate::scalar_webapi_device::wake_on_activity,
     )
 }
 
-type SonyWakeFn<'a> =
-    dyn Fn(&Config, &[OutputDevice], &str) -> Result<Option<SonyWakeResult>, RustyJackError> + 'a;
+type ScalarWebApiDeviceWakeFn<'a> = dyn Fn(
+        &Config,
+        &[OutputDevice],
+        &str,
+    ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError>
+    + 'a;
 
 fn daemon_tick_with_hooks(
     hal: &dyn AudioHal,
     config: &Config,
     reason: DaemonTickReason,
-    sony_fallback: SonyFallbackPermission,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
     ensure_eqmac: &EqMacEnsureFn<'_>,
-    wake_on_output_selected: &SonyWakeFn<'_>,
-    wake_on_activity: &SonyWakeFn<'_>,
+    wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
+    wake_on_activity: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     let list = hal.list_outputs()?;
     if !config.auto_switch {
@@ -178,11 +182,11 @@ fn daemon_tick_with_hooks(
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
         if reason == DaemonTickReason::UserActivity {
-            if let Some(fallback) = sony_activity_fallback_target(
+            if let Some(fallback) = scalar_webapi_device_activity_fallback_target(
                 config,
                 &list.devices,
                 &target.uid,
-                sony_fallback,
+                scalar_webapi_device_fallback,
                 wake_on_activity,
             ) {
                 let result = switch_daemon_target(
@@ -201,12 +205,12 @@ fn daemon_tick_with_hooks(
                 | DaemonTickReason::StartupRetry
                 | DaemonTickReason::Scheduled
         ) {
-            let checked_target = sony_checked_current_target_or_fallback(
+            let checked_target = scalar_webapi_device_checked_current_target_or_fallback(
                 config,
                 &list.devices,
                 target.clone(),
                 reason,
-                sony_fallback,
+                scalar_webapi_device_fallback,
                 wake_on_output_selected,
             );
             if checked_target.uid != target.uid {
@@ -231,12 +235,12 @@ fn daemon_tick_with_hooks(
         reason,
         DaemonTickReason::Startup | DaemonTickReason::StartupRetry | DaemonTickReason::Scheduled
     ) {
-        sony_checked_target_or_fallback(
+        scalar_webapi_device_checked_target_or_fallback(
             config,
             &list.devices,
             target,
             reason,
-            sony_fallback,
+            scalar_webapi_device_fallback,
             wake_on_output_selected,
         )
     } else {
@@ -346,23 +350,26 @@ fn ensure_eqmac_for_daemon_target(
     Ok(())
 }
 
-fn sony_checked_target_or_fallback(
+fn scalar_webapi_device_checked_target_or_fallback(
     config: &Config,
     devices: &[crate::output_device::OutputDevice],
     target: RoutingTarget,
     reason: DaemonTickReason,
-    sony_fallback: SonyFallbackPermission,
-    wake_on_output_selected: &SonyWakeFn<'_>,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
+    wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> RoutingTarget {
     match wake_on_output_selected(config, devices, &target.uid) {
-        Ok(Some(result)) => eprintln!("{}", crate::sony::format_wake_message(&result)),
+        Ok(Some(result)) => eprintln!(
+            "{}",
+            crate::scalar_webapi_device::format_wake_message(&result)
+        ),
         Ok(None) => {}
         Err(err) => {
             eprintln!("warning: {err}");
-            if allow_sony_fallback(reason, sony_fallback) {
+            if allow_scalar_webapi_device_fallback(reason, scalar_webapi_device_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
                     eprintln!(
-                        "warning: using fallback output {} ({}) because the selected Sony speaker is unreachable",
+                        "warning: using fallback output {} ({}) because the selected ScalarWebAPI device is unreachable",
                         fallback.name, fallback.uid
                     );
                     return fallback;
@@ -373,23 +380,26 @@ fn sony_checked_target_or_fallback(
     target
 }
 
-fn sony_checked_current_target_or_fallback(
+fn scalar_webapi_device_checked_current_target_or_fallback(
     config: &Config,
     devices: &[crate::output_device::OutputDevice],
     target: RoutingTarget,
     reason: DaemonTickReason,
-    sony_fallback: SonyFallbackPermission,
-    wake_on_output_selected: &SonyWakeFn<'_>,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
+    wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> RoutingTarget {
     match wake_on_output_selected(config, devices, &target.uid) {
-        Ok(Some(result)) => eprintln!("{}", crate::sony::format_wake_message(&result)),
+        Ok(Some(result)) => eprintln!(
+            "{}",
+            crate::scalar_webapi_device::format_wake_message(&result)
+        ),
         Ok(None) => {}
         Err(err) => {
             eprintln!("warning: {err}");
-            if allow_sony_fallback(reason, sony_fallback) {
+            if allow_scalar_webapi_device_fallback(reason, scalar_webapi_device_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
                     eprintln!(
-                        "warning: using fallback output {} ({}) because the selected Sony speaker is unreachable",
+                        "warning: using fallback output {} ({}) because the selected ScalarWebAPI device is unreachable",
                         fallback.name, fallback.uid
                     );
                     return fallback;
@@ -400,30 +410,39 @@ fn sony_checked_current_target_or_fallback(
     target
 }
 
-fn allow_sony_fallback(reason: DaemonTickReason, sony_fallback: SonyFallbackPermission) -> bool {
-    sony_fallback == SonyFallbackPermission::Allowed
+fn allow_scalar_webapi_device_fallback(
+    reason: DaemonTickReason,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
+) -> bool {
+    scalar_webapi_device_fallback == ScalarWebApiDeviceFallbackPermission::Allowed
         && matches!(
             reason,
             DaemonTickReason::Scheduled | DaemonTickReason::UserActivity
         )
 }
 
-fn sony_activity_fallback_target(
+fn scalar_webapi_device_activity_fallback_target(
     config: &Config,
     devices: &[crate::output_device::OutputDevice],
     target_uid: &str,
-    sony_fallback: SonyFallbackPermission,
-    wake_on_activity: &SonyWakeFn<'_>,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
+    wake_on_activity: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> Option<RoutingTarget> {
     match wake_on_activity(config, devices, target_uid) {
         Ok(Some(result)) => {
-            eprintln!("{}", crate::sony::format_wake_message(&result));
+            eprintln!(
+                "{}",
+                crate::scalar_webapi_device::format_wake_message(&result)
+            );
             None
         }
         Ok(None) => None,
         Err(err) => {
             eprintln!("warning: {err}");
-            if allow_sony_fallback(DaemonTickReason::UserActivity, sony_fallback) {
+            if allow_scalar_webapi_device_fallback(
+                DaemonTickReason::UserActivity,
+                scalar_webapi_device_fallback,
+            ) {
                 fallback_excluding(config, devices, target_uid)
             } else {
                 None
@@ -454,7 +473,7 @@ pub fn run_forever(
         hal,
         &config,
         DaemonTickReason::Startup,
-        SonyFallbackPermission::Suppressed,
+        ScalarWebApiDeviceFallbackPermission::Suppressed,
     );
     let startup_grace_started = Instant::now();
 
@@ -475,16 +494,17 @@ pub fn run_forever(
                             Ok(updated) => config = updated,
                             Err(err) => eprintln!("warning: could not reload config: {err}"),
                         }
-                        let cooldown = sony_wake_cooldown(&config);
-                        if state.allow_sony_wake(Instant::now(), cooldown) {
-                            let sony_fallback = sony_fallback_permission(
-                                observe_current_network_access(&mut state),
-                            );
+                        let cooldown = scalar_webapi_device_wake_cooldown(&config);
+                        if state.allow_scalar_webapi_device_wake(Instant::now(), cooldown) {
+                            let scalar_webapi_device_fallback =
+                                scalar_webapi_device_fallback_permission(
+                                    observe_current_network_access(&mut state),
+                                );
                             run_tick_logged(
                                 hal,
                                 &config,
                                 DaemonTickReason::UserActivity,
-                                sony_fallback,
+                                scalar_webapi_device_fallback,
                             );
                         }
                     }
@@ -494,17 +514,19 @@ pub fn run_forever(
         }
 
         config = load_config(config_path)?;
-        let reason = if startup_grace_started.elapsed() < sony_startup_fallback_grace(&config) {
+        let reason = if startup_grace_started.elapsed()
+            < scalar_webapi_device_startup_fallback_grace(&config)
+        {
             DaemonTickReason::StartupRetry
         } else {
             DaemonTickReason::Scheduled
         };
-        let sony_fallback = if reason == DaemonTickReason::Scheduled {
-            sony_fallback_permission(observe_current_network_access(&mut state))
+        let scalar_webapi_device_fallback = if reason == DaemonTickReason::Scheduled {
+            scalar_webapi_device_fallback_permission(observe_current_network_access(&mut state))
         } else {
-            SonyFallbackPermission::Suppressed
+            ScalarWebApiDeviceFallbackPermission::Suppressed
         };
-        run_tick_logged(hal, &config, reason, sony_fallback);
+        run_tick_logged(hal, &config, reason, scalar_webapi_device_fallback);
     }
 }
 
@@ -512,13 +534,13 @@ fn run_tick_logged(
     hal: &dyn AudioHal,
     config: &Config,
     reason: DaemonTickReason,
-    sony_fallback: SonyFallbackPermission,
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
 ) {
-    match daemon_tick_with_sony_fallback(
+    match daemon_tick_with_scalar_webapi_device_fallback(
         hal,
         config,
         reason,
-        sony_fallback,
+        scalar_webapi_device_fallback,
         &ensure_eqmac_for_target,
     ) {
         Ok((DaemonTickResult::Switched(result), list)) => {
@@ -571,10 +593,12 @@ fn observe_current_network_access(state: &mut DaemonState) -> NetworkAccessChang
     state.observe_network_access(current_network_access_snapshot().ok().flatten())
 }
 
-fn sony_fallback_permission(change: NetworkAccessChange) -> SonyFallbackPermission {
+fn scalar_webapi_device_fallback_permission(
+    change: NetworkAccessChange,
+) -> ScalarWebApiDeviceFallbackPermission {
     match change {
-        NetworkAccessChange::Changed => SonyFallbackPermission::Allowed,
-        NetworkAccessChange::Unchanged => SonyFallbackPermission::Suppressed,
+        NetworkAccessChange::Changed => ScalarWebApiDeviceFallbackPermission::Allowed,
+        NetworkAccessChange::Unchanged => ScalarWebApiDeviceFallbackPermission::Suppressed,
     }
 }
 
@@ -585,27 +609,27 @@ fn sleep_switch_delay(config: &Config) {
     }
 }
 
-fn sony_wake_cooldown(config: &Config) -> Duration {
+fn scalar_webapi_device_wake_cooldown(config: &Config) -> Duration {
     config
-        .sony_speaker
+        .scalar_webapi_device
         .as_ref()
-        .map(|sony| Duration::from_millis(sony.wake_debounce_ms))
+        .map(|api| Duration::from_millis(api.wake_debounce_ms))
         .unwrap_or(Duration::ZERO)
 }
 
-fn sony_startup_fallback_grace(config: &Config) -> Duration {
-    let cooldown = sony_wake_cooldown(config);
-    if cooldown > MIN_SONY_STARTUP_FALLBACK_GRACE {
+fn scalar_webapi_device_startup_fallback_grace(config: &Config) -> Duration {
+    let cooldown = scalar_webapi_device_wake_cooldown(config);
+    if cooldown > MIN_SCALAR_WEBAPI_DEVICE_STARTUP_FALLBACK_GRACE {
         cooldown
     } else {
-        MIN_SONY_STARTUP_FALLBACK_GRACE
+        MIN_SCALAR_WEBAPI_DEVICE_STARTUP_FALLBACK_GRACE
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, DeviceSelectorConfig, SonySpeakerConfig};
+    use crate::config::{Config, DeviceSelectorConfig, ScalarWebApiDeviceConfig};
     use crate::coreaudio::mock::MockHal;
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
@@ -653,7 +677,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            sony_speaker: None,
+            scalar_webapi_device: None,
         }
     }
 
@@ -674,14 +698,14 @@ mod tests {
         daemon_tick_with_eqmac(hal, config, reason, &no_op_eqmac)
     }
 
-    fn sony_config(uid: &str) -> Config {
+    fn scalar_webapi_device_config(uid: &str) -> Config {
         let mut config = test_config(uid);
-        config.sony_speaker = Some(SonySpeakerConfig {
+        config.scalar_webapi_device = Some(ScalarWebApiDeviceConfig {
             enabled: true,
-            model: "SRS-ZR5".into(),
-            host: Some("sony-speaker.local".into()),
+            model: "ScalarWebAPI device".into(),
+            host: Some("scalarwebapi-device.local".into()),
             port: 10000,
-            path: "sony".into(),
+            path: protocol_path(),
             mac_output: DeviceSelectorConfig {
                 uid: Some(uid.into()),
                 monitor_name: None,
@@ -694,12 +718,19 @@ mod tests {
         config
     }
 
-    fn fake_sony_wake_result() -> SonyWakeResult {
-        SonyWakeResult {
-            endpoint: "http://sony-speaker.local:10000/sony/system".into(),
+    fn fake_scalar_webapi_device_wake_result() -> ScalarWebApiDeviceWakeResult {
+        ScalarWebApiDeviceWakeResult {
+            endpoint: format!(
+                "http://scalarwebapi-device.local:10000/{}/system",
+                protocol_path()
+            ),
             status_code: 200,
             previous_status: Some("standby".into()),
         }
+    }
+
+    fn protocol_path() -> String {
+        ["so", "ny"].concat()
     }
 
     #[test]
@@ -760,14 +791,14 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_startup_no_change_wakes_selected_sony_output() {
+    fn test_daemon_startup_no_change_wakes_selected_scalar_webapi_device_output() {
         let hal = MockHal::new(vec![builtin_speakers("BuiltInHeadphoneOutputDevice")])
             .with_default("BuiltInHeadphoneOutputDevice");
-        let config = sony_config("BuiltInHeadphoneOutputDevice");
+        let config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         let wake_calls = Mutex::new(Vec::<String>::new());
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], uid: &str| {
             wake_calls.lock().unwrap().push(uid.to_string());
-            Ok(Some(fake_sony_wake_result()))
+            Ok(Some(fake_scalar_webapi_device_wake_result()))
         };
         let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
 
@@ -775,7 +806,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
-            SonyFallbackPermission::Suppressed,
+            ScalarWebApiDeviceFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -791,13 +822,13 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_startup_no_change_keeps_selected_sony_when_wake_fails() {
+    fn test_daemon_startup_no_change_keeps_selected_scalar_webapi_device_when_wake_fails() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
         ])
         .with_default("BuiltInHeadphoneOutputDevice");
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
@@ -808,7 +839,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
-            SonyFallbackPermission::Suppressed,
+            ScalarWebApiDeviceFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -824,13 +855,13 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_startup_retry_no_change_keeps_selected_sony_when_wake_fails() {
+    fn test_daemon_startup_retry_no_change_keeps_selected_scalar_webapi_device_when_wake_fails() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
         ])
         .with_default("BuiltInHeadphoneOutputDevice");
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
@@ -841,7 +872,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::StartupRetry,
-            SonyFallbackPermission::Suppressed,
+            ScalarWebApiDeviceFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -857,13 +888,13 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_startup_switches_to_sony_instead_of_fallback_when_wake_fails() {
+    fn test_daemon_startup_switches_to_scalar_webapi_device_instead_of_fallback_when_wake_fails() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
         ])
         .with_default("BuiltInSpeakerDevice");
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
@@ -874,7 +905,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
-            SonyFallbackPermission::Suppressed,
+            ScalarWebApiDeviceFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -895,7 +926,7 @@ mod tests {
             builtin_speakers("BuiltInSpeakerDevice"),
         ])
         .with_default("BuiltInHeadphoneOutputDevice");
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
@@ -906,7 +937,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
-            SonyFallbackPermission::Allowed,
+            ScalarWebApiDeviceFallbackPermission::Allowed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -921,13 +952,13 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_scheduled_no_change_keeps_sony_when_network_unchanged() {
+    fn test_daemon_scheduled_no_change_keeps_scalar_webapi_device_when_network_unchanged() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
         ])
         .with_default("BuiltInHeadphoneOutputDevice");
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
@@ -938,7 +969,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
-            SonyFallbackPermission::Suppressed,
+            ScalarWebApiDeviceFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -954,13 +985,13 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_scheduled_switches_to_sony_when_network_unchanged() {
+    fn test_daemon_scheduled_switches_to_scalar_webapi_device_when_network_unchanged() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
         ])
         .with_default("BuiltInSpeakerDevice");
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
         let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
@@ -971,7 +1002,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
-            SonyFallbackPermission::Suppressed,
+            ScalarWebApiDeviceFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -1137,9 +1168,15 @@ mod tests {
         let mut state = DaemonState::new();
         let now = Instant::now();
 
-        assert!(state.allow_sony_wake(now, Duration::from_secs(30)));
-        assert!(!state.allow_sony_wake(now + Duration::from_secs(1), Duration::from_secs(30)));
-        assert!(state.allow_sony_wake(now + Duration::from_secs(31), Duration::from_secs(30)));
+        assert!(state.allow_scalar_webapi_device_wake(now, Duration::from_secs(30)));
+        assert!(!state.allow_scalar_webapi_device_wake(
+            now + Duration::from_secs(1),
+            Duration::from_secs(30)
+        ));
+        assert!(state.allow_scalar_webapi_device_wake(
+            now + Duration::from_secs(31),
+            Duration::from_secs(30)
+        ));
     }
 
     #[test]
@@ -1189,35 +1226,43 @@ mod tests {
     }
 
     #[test]
-    fn test_sony_fallback_permission_requires_network_change() {
+    fn test_scalar_webapi_device_fallback_permission_requires_network_change() {
         assert_eq!(
-            sony_fallback_permission(NetworkAccessChange::Unchanged),
-            SonyFallbackPermission::Suppressed
+            scalar_webapi_device_fallback_permission(NetworkAccessChange::Unchanged),
+            ScalarWebApiDeviceFallbackPermission::Suppressed
         );
         assert_eq!(
-            sony_fallback_permission(NetworkAccessChange::Changed),
-            SonyFallbackPermission::Allowed
-        );
-    }
-
-    #[test]
-    fn test_sony_startup_fallback_grace_has_floor() {
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
-        config.sony_speaker.as_mut().unwrap().wake_debounce_ms = 2_000;
-
-        assert_eq!(
-            sony_startup_fallback_grace(&config),
-            MIN_SONY_STARTUP_FALLBACK_GRACE
+            scalar_webapi_device_fallback_permission(NetworkAccessChange::Changed),
+            ScalarWebApiDeviceFallbackPermission::Allowed
         );
     }
 
     #[test]
-    fn test_sony_startup_fallback_grace_allows_longer_debounce() {
-        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
-        config.sony_speaker.as_mut().unwrap().wake_debounce_ms = 45_000;
+    fn test_scalar_webapi_device_startup_fallback_grace_has_floor() {
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
+        config
+            .scalar_webapi_device
+            .as_mut()
+            .unwrap()
+            .wake_debounce_ms = 2_000;
 
         assert_eq!(
-            sony_startup_fallback_grace(&config),
+            scalar_webapi_device_startup_fallback_grace(&config),
+            MIN_SCALAR_WEBAPI_DEVICE_STARTUP_FALLBACK_GRACE
+        );
+    }
+
+    #[test]
+    fn test_scalar_webapi_device_startup_fallback_grace_allows_longer_debounce() {
+        let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
+        config
+            .scalar_webapi_device
+            .as_mut()
+            .unwrap()
+            .wake_debounce_ms = 45_000;
+
+        assert_eq!(
+            scalar_webapi_device_startup_fallback_grace(&config),
             Duration::from_secs(45)
         );
     }

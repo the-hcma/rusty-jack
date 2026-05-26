@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration for HDMI/DisplayPort keyboard volume-key control, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and Sony-like ScalarWebAPI speaker wake support. Native HDMI/DP volume without eqMac remains future driver work.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, eqMac integration for HDMI/DisplayPort keyboard volume-key control, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and ScalarWebAPI-compatible device wake support. Native HDMI/DP volume without eqMac remains future driver work.
 
 ## Global options
 
@@ -55,7 +55,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes eqMac-routed HDMI/DisplayPort, where the raw CoreAudio default may be the virtual eqMac device while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred Sony-backed output and sends a wake command when that output is selected. During the initial startup grace window, retry ticks keep trying Sony wake without falling back so the network and speaker discovery have time to settle; the grace window is at least 30 seconds and grows with `sony_speaker.wake_debounce_ms` if configured longer. Later scheduled polls check Sony reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a Sony API timeout is treated as transient and the daemon keeps the Sony-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured Sony output is already selected, it sends a wake command subject to `sony_speaker.wake_debounce_ms`.
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes eqMac-routed HDMI/DisplayPort, where the raw CoreAudio default may be the virtual eqMac device while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi_device.wake_debounce_ms`.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -179,7 +179,7 @@ Config is optional. When present:
 
 - `also_set_system_output` from config (default `true` if no config)
 - `volume` applied only when you pick the **configured preferred** device and a switch happens
-- Sony power-state notes refresh while the interactive picker is open.
+- ScalarWebAPI power-state notes refresh while the interactive picker is open.
 
 When the daemon is running and you pick a device other than the configured preferred output, `picker` asks for confirmation, pauses auto-routing, and records the override reason. The confirmation defaults to yes and shows `Continue` on its own colored prompt line. You must run `rusty-jack resume` to re-enable the daemon. Non-interactive picker calls cannot confirm this pause; pause the daemon first or rerun picker interactively.
 
@@ -272,24 +272,24 @@ Array of UIDs tried in order when preferred is missing or not alive. Leave it em
 
 Integer 0–100. Created automatically from the preferred route's current effective volume when `install` can read it. This config value is authoritative for the configured preferred output. Other outputs use per-device remembered volume stored in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back. Scheduled no-op polls do not keep forcing volume, so manual volume changes are not fought every poll. Uses retry + readback for eqMac compatibility.
 
-### `sony_speaker`
+### `scalar_webapi_device`
 
-Optional block for waking a Sony SRS-ZR5 or similar Songpal / ScalarWebAPI speaker. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the speaker's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `sony_speaker.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the speaker on idle-to-active transitions if that Mac output is already selected. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.sony.json`.
+Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `false` | Enables Sony wake integration. |
-| `model` | `SRS-ZR5` | Human-readable model hint for docs/logging. |
+| `enabled` | `false` | Enables ScalarWebAPI wake integration. |
+| `model` | `ScalarWebAPI device` | Human-readable model hint for docs/logging. |
 | `host` | none | Hostname, FQDN, or IP used for discovery fallback and configured endpoint construction. Required when enabled. |
 | `port` | `10000` | Fallback ScalarWebAPI port when SSDP discovery is unavailable. |
-| `path` | `sony` | ScalarWebAPI base path. |
-| `mac_output` | none | Device selector for the Mac output connected to the speaker. Required when enabled. |
+| `path` | protocol default | ScalarWebAPI base path. Usually omit this unless discovery is unavailable and your device needs an override. |
+| `mac_output` | none | Device selector for the Mac output connected to the device. Required when enabled. |
 | `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or daemon idle-to-active activity. |
 | `wake_debounce_ms` | `30000` | Minimum time between activity-triggered wake attempts. |
-| `request_timeout_ms` | `3000` | Network timeout for speaker requests. |
-| `require_quick_start` | `true` | Documents the expectation that Sony Quick Start-Up is enabled for standby wake. |
+| `request_timeout_ms` | `3000` | Network timeout for device requests. |
+| `require_quick_start` | `true` | Documents the expectation that the device has its network standby/wake option enabled. |
 
-Other Sony speakers may also work if they expose the same ScalarWebAPI. If you verify another model, please consider contributing a device info file to [python-songpal on GitHub](https://github.com/rytilahti/python-songpal); the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) provides the `songpal dump-devinfo` helper.
+Other devices should work if they expose the same ScalarWebAPI service.
 
 ### Reserved example keys
 

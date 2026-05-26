@@ -273,7 +273,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            sony_speaker: None,
+            scalar_webapi_device: None,
         };
         let mut config = config;
         config.volume = Some(13);

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Common issues when using Rusty Jack on macOS with HDMI/DP monitors, eqMac, launchd, and Sony speaker wake support.
+Common issues when using Rusty Jack on macOS with HDMI/DP monitors, eqMac, launchd, and ScalarWebAPI device wake support.
 
 ## Volume keys do nothing on the monitor
 
@@ -94,22 +94,22 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.stdout.log"
 
 ---
 
-## Sony speaker does not wake
+## ScalarWebAPI device does not wake
 
-1. Confirm the selected Mac output matches `sony_speaker.mac_output`.
-2. Confirm the speaker is reachable by hostname/IP and has Quick Start-Up enabled.
-3. Run `rusty-jack picker` and look for the Sony power-state note on the configured output.
-4. Check daemon logs for `speaker wake error` or discovery warnings.
+1. Confirm the selected Mac output matches `scalar_webapi_device.mac_output`.
+2. Confirm the device is reachable by hostname/IP and has its network standby/wake option enabled.
+3. Run `rusty-jack picker` and look for the ScalarWebAPI power-state note on the configured output.
+4. Check daemon logs for wake errors or discovery warnings.
 
-Rusty Jack uses Sony ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
+Rusty Jack uses ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
 
 ---
 
-## Audio briefly falls back from Sony to internal speakers
+## Audio briefly falls back from ScalarWebAPI to internal speakers
 
-The daemon only treats Sony API failures as a reason to use fallback output when the Mac's network access fingerprint changed: active default interface, default gateway, or interface IP address. If that fingerprint is stable, the daemon keeps the Sony-backed Mac output selected and treats the failed Sony wake/status request as transient.
+The daemon only treats ScalarWebAPI failures as a reason to use fallback output when the Mac's network access fingerprint changed: active default interface, default gateway, or interface IP address. If that fingerprint is stable, the daemon keeps the ScalarWebAPI-backed Mac output selected and treats the failed ScalarWebAPI wake/status request as transient.
 
-Check daemon logs for `selected Sony speaker is unreachable`. If those messages appear without a matching Wi-Fi/Ethernet or IP change, update Rusty Jack before tuning fallback configuration.
+Check daemon logs for `selected ScalarWebAPI device is unreachable`. If those messages appear without a matching Wi-Fi/Ethernet or IP change, update Rusty Jack before tuning fallback configuration.
 
 ---
 
