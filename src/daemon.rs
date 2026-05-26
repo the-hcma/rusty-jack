@@ -109,13 +109,7 @@ pub fn daemon_tick(
     config: &Config,
     reason: DaemonTickReason,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-    daemon_tick_with_eqmac(
-        hal,
-        config,
-        reason,
-        &ensure_eqmac_for_target,
-        &restart_eqmac_for_target,
-    )
+    daemon_tick_with_hooks(hal, config, reason, &daemon_hooks())
 }
 
 type EqMacEnsureFn<'a> =
@@ -128,48 +122,10 @@ struct EqMacHooks<'a> {
     recover: &'a EqMacRecoverFn<'a>,
 }
 
-fn daemon_tick_with_eqmac(
-    hal: &dyn AudioHal,
-    config: &Config,
-    reason: DaemonTickReason,
-    ensure_eqmac: &EqMacEnsureFn<'_>,
-    recover_eqmac: &EqMacRecoverFn<'_>,
-) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-    let eqmac_hooks = EqMacHooks {
-        ensure: ensure_eqmac,
-        recover: recover_eqmac,
-    };
-    daemon_tick_with_scalar_webapi_device_fallback(
-        hal,
-        config,
-        reason,
-        ScalarWebApiDeviceFallbackPermission::Allowed,
-        &eqmac_hooks,
-    )
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScalarWebApiDeviceFallbackPermission {
     Allowed,
     Suppressed,
-}
-
-fn daemon_tick_with_scalar_webapi_device_fallback(
-    hal: &dyn AudioHal,
-    config: &Config,
-    reason: DaemonTickReason,
-    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
-    eqmac_hooks: &EqMacHooks<'_>,
-) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-    daemon_tick_with_hooks(
-        hal,
-        config,
-        reason,
-        scalar_webapi_device_fallback,
-        eqmac_hooks,
-        &crate::scalar_webapi_device::wake_on_output_selected,
-        &crate::scalar_webapi_device::wake_on_activity,
-    )
 }
 
 type ScalarWebApiDeviceWakeFn<'a> = dyn Fn(
@@ -179,14 +135,39 @@ type ScalarWebApiDeviceWakeFn<'a> = dyn Fn(
     ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError>
     + 'a;
 
+struct ScalarWebApiDeviceHooks<'a> {
+    fallback: ScalarWebApiDeviceFallbackPermission,
+    wake_on_output_selected: &'a ScalarWebApiDeviceWakeFn<'a>,
+    wake_on_activity: &'a ScalarWebApiDeviceWakeFn<'a>,
+}
+
+struct DaemonHooks<'a> {
+    /// eqMac is transport-specific: these hooks no-op unless the target output is HDMI/DP.
+    eqmac: EqMacHooks<'a>,
+    /// ScalarWebAPI is device-specific: these hooks wake the configured external device
+    /// attached to the selected Mac output, regardless of whether that output needs eqMac.
+    scalar_webapi_device: ScalarWebApiDeviceHooks<'a>,
+}
+
+fn daemon_hooks<'a>() -> DaemonHooks<'a> {
+    DaemonHooks {
+        eqmac: EqMacHooks {
+            ensure: &ensure_eqmac_for_target,
+            recover: &restart_eqmac_for_target,
+        },
+        scalar_webapi_device: ScalarWebApiDeviceHooks {
+            fallback: ScalarWebApiDeviceFallbackPermission::Allowed,
+            wake_on_output_selected: &crate::scalar_webapi_device::wake_on_output_selected,
+            wake_on_activity: &crate::scalar_webapi_device::wake_on_activity,
+        },
+    }
+}
+
 fn daemon_tick_with_hooks(
     hal: &dyn AudioHal,
     config: &Config,
     reason: DaemonTickReason,
-    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
-    eqmac_hooks: &EqMacHooks<'_>,
-    wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
-    wake_on_activity: &ScalarWebApiDeviceWakeFn<'_>,
+    hooks: &DaemonHooks<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     let list = hal.list_outputs()?;
     if !config.auto_switch {
@@ -205,8 +186,8 @@ fn daemon_tick_with_hooks(
                 config,
                 &list.devices,
                 &target.uid,
-                scalar_webapi_device_fallback,
-                wake_on_activity,
+                hooks.scalar_webapi_device.fallback,
+                hooks.scalar_webapi_device.wake_on_activity,
             ) {
                 let result = switch_daemon_target(
                     hal,
@@ -214,7 +195,7 @@ fn daemon_tick_with_hooks(
                     &list,
                     &fallback,
                     preferred_uid.as_deref(),
-                    eqmac_hooks.ensure,
+                    hooks.eqmac.ensure,
                 )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
@@ -229,8 +210,8 @@ fn daemon_tick_with_hooks(
                 &list.devices,
                 target.clone(),
                 reason,
-                scalar_webapi_device_fallback,
-                wake_on_output_selected,
+                hooks.scalar_webapi_device.fallback,
+                hooks.scalar_webapi_device.wake_on_output_selected,
             );
             if checked_target.uid != target.uid {
                 let result = switch_daemon_target(
@@ -239,7 +220,7 @@ fn daemon_tick_with_hooks(
                     &list,
                     &checked_target,
                     preferred_uid.as_deref(),
-                    eqmac_hooks.ensure,
+                    hooks.eqmac.ensure,
                 )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
@@ -251,7 +232,7 @@ fn daemon_tick_with_hooks(
             &target,
             preferred_uid.as_deref(),
             reason,
-            eqmac_hooks,
+            &hooks.eqmac,
         )? {
             return Ok((DaemonTickResult::Switched(result), list));
         }
@@ -269,8 +250,8 @@ fn daemon_tick_with_hooks(
             &list.devices,
             target,
             reason,
-            scalar_webapi_device_fallback,
-            wake_on_output_selected,
+            hooks.scalar_webapi_device.fallback,
+            hooks.scalar_webapi_device.wake_on_output_selected,
         )
     } else {
         target
@@ -284,7 +265,7 @@ fn daemon_tick_with_hooks(
             &target,
             preferred_uid.as_deref(),
             reason,
-            eqmac_hooks,
+            &hooks.eqmac,
         )? {
             return Ok((DaemonTickResult::Switched(result), list));
         }
@@ -299,7 +280,7 @@ fn daemon_tick_with_hooks(
         &list,
         &target,
         preferred_uid.as_deref(),
-        eqmac_hooks.ensure,
+        hooks.eqmac.ensure,
     )?;
 
     Ok((DaemonTickResult::Switched(result), list))
@@ -611,16 +592,18 @@ fn run_tick_logged(
     reason: DaemonTickReason,
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
 ) {
-    match daemon_tick_with_scalar_webapi_device_fallback(
-        hal,
-        config,
-        reason,
-        scalar_webapi_device_fallback,
-        &EqMacHooks {
+    let hooks = DaemonHooks {
+        eqmac: EqMacHooks {
             ensure: &ensure_eqmac_for_target,
             recover: &restart_eqmac_for_target,
         },
-    ) {
+        scalar_webapi_device: ScalarWebApiDeviceHooks {
+            fallback: scalar_webapi_device_fallback,
+            wake_on_output_selected: &crate::scalar_webapi_device::wake_on_output_selected,
+            wake_on_activity: &crate::scalar_webapi_device::wake_on_activity,
+        },
+    };
+    match daemon_tick_with_hooks(hal, config, reason, &hooks) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
         }
@@ -782,13 +765,62 @@ mod tests {
         config: &Config,
         reason: DaemonTickReason,
     ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-        daemon_tick_with_eqmac(hal, config, reason, &no_op_eqmac, &no_op_eqmac_recovery)
+        let hooks = no_op_daemon_hooks(ScalarWebApiDeviceFallbackPermission::Allowed);
+        daemon_tick_with_hooks(hal, config, reason, &hooks)
     }
 
     fn no_op_eqmac_hooks() -> EqMacHooks<'static> {
         EqMacHooks {
             ensure: &no_op_eqmac,
             recover: &no_op_eqmac_recovery,
+        }
+    }
+
+    fn no_op_scalar_webapi_device_wake(
+        _config: &Config,
+        _devices: &[OutputDevice],
+        _uid: &str,
+    ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
+        Ok(None)
+    }
+
+    fn no_op_daemon_hooks(fallback: ScalarWebApiDeviceFallbackPermission) -> DaemonHooks<'static> {
+        DaemonHooks {
+            eqmac: no_op_eqmac_hooks(),
+            scalar_webapi_device: ScalarWebApiDeviceHooks {
+                fallback,
+                wake_on_output_selected: &no_op_scalar_webapi_device_wake,
+                wake_on_activity: &no_op_scalar_webapi_device_wake,
+            },
+        }
+    }
+
+    fn test_hooks<'a>(
+        fallback: ScalarWebApiDeviceFallbackPermission,
+        wake_on_output_selected: &'a ScalarWebApiDeviceWakeFn<'a>,
+        wake_on_activity: &'a ScalarWebApiDeviceWakeFn<'a>,
+    ) -> DaemonHooks<'a> {
+        DaemonHooks {
+            eqmac: no_op_eqmac_hooks(),
+            scalar_webapi_device: ScalarWebApiDeviceHooks {
+                fallback,
+                wake_on_output_selected,
+                wake_on_activity,
+            },
+        }
+    }
+
+    fn daemon_hooks_with_eqmac<'a>(
+        ensure: &'a EqMacEnsureFn<'a>,
+        recover: &'a EqMacRecoverFn<'a>,
+    ) -> DaemonHooks<'a> {
+        DaemonHooks {
+            eqmac: EqMacHooks { ensure, recover },
+            scalar_webapi_device: ScalarWebApiDeviceHooks {
+                fallback: ScalarWebApiDeviceFallbackPermission::Allowed,
+                wake_on_output_selected: &no_op_scalar_webapi_device_wake,
+                wake_on_activity: &no_op_scalar_webapi_device_wake,
+            },
         }
     }
 
@@ -900,10 +932,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
-            ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Suppressed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -933,10 +966,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
-            ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Suppressed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -966,10 +1000,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::StartupRetry,
-            ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Suppressed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -999,10 +1034,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
-            ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Suppressed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -1031,10 +1067,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
-            ScalarWebApiDeviceFallbackPermission::Allowed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Allowed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -1063,10 +1100,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
-            ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Suppressed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -1096,10 +1134,11 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
-            ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac_hooks(),
-            &wake_on_output_selected,
-            &wake_on_activity,
+            &test_hooks(
+                ScalarWebApiDeviceFallbackPermission::Suppressed,
+                &wake_on_output_selected,
+                &wake_on_activity,
+            ),
         )
         .unwrap();
 
@@ -1122,12 +1161,11 @@ mod tests {
             })
         };
 
-        let (result, _list) = daemon_tick_with_eqmac(
+        let (result, _list) = daemon_tick_with_hooks(
             &hal,
             &test_config("hdmi-1"),
             DaemonTickReason::Scheduled,
-            &ensure_eqmac,
-            &no_op_eqmac_recovery,
+            &daemon_hooks_with_eqmac(&ensure_eqmac, &no_op_eqmac_recovery),
         )
         .unwrap();
 
@@ -1156,12 +1194,11 @@ mod tests {
             })
         };
 
-        let (result, _list) = daemon_tick_with_eqmac(
+        let (result, _list) = daemon_tick_with_hooks(
             &hal,
             &test_config("hdmi-1"),
             DaemonTickReason::Startup,
-            &ensure_eqmac,
-            &recover_eqmac,
+            &daemon_hooks_with_eqmac(&ensure_eqmac, &recover_eqmac),
         )
         .unwrap();
 
@@ -1186,12 +1223,11 @@ mod tests {
             })
         };
 
-        let (result, _list) = daemon_tick_with_eqmac(
+        let (result, _list) = daemon_tick_with_hooks(
             &hal,
             &test_config("hdmi-1"),
             DaemonTickReason::UserActivity,
-            &ensure_eqmac,
-            &recover_eqmac,
+            &daemon_hooks_with_eqmac(&ensure_eqmac, &recover_eqmac),
         )
         .unwrap();
 
