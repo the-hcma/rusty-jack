@@ -1,6 +1,6 @@
 //! First-run setup helpers for config creation and cleanup.
 
-use crate::config::default_config_path;
+use crate::config::{default_config_path, render_lexicographic_json};
 use crate::coreaudio::AudioHal;
 use crate::output_device::OutputDevice;
 use crate::RustyJackError;
@@ -319,9 +319,7 @@ pub(crate) fn render_config_json(
     if let Some(volume) = volume {
         value["volume"] = serde_json::json!(volume);
     }
-    serde_json::to_string_pretty(&value)
-        .map(|json| format!("{json}\n"))
-        .map_err(|err| RustyJackError::Config(format!("could not render config: {err}")))
+    render_lexicographic_json(&value)
 }
 
 fn default_config_path_or_err() -> Result<PathBuf, RustyJackError> {
@@ -407,6 +405,7 @@ mod tests {
         assert!(json.contains("\"uid\": \"hdmi\""));
         assert!(json.contains("\"speakers\""));
         assert!(json.contains("\"volume\": 13"));
+        assert!(json.starts_with("{\n  \"activity_idle_threshold_ms\""));
         assert!(json.ends_with('\n'));
     }
 
