@@ -37,10 +37,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - name: install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin
+          rustup default stable
 
       - uses: Swatinem/rust-cache@v2
 
@@ -64,9 +69,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
+      - name: install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --target aarch64-apple-darwin
+          rustup default stable
 
       - uses: Swatinem/rust-cache@v2
 
@@ -81,9 +89,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin
+      - name: install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --target x86_64-apple-darwin
+          rustup default stable
 
       - uses: Swatinem/rust-cache@v2
 
