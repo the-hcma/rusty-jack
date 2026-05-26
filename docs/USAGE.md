@@ -143,8 +143,7 @@ After installing, restart audio apps if they do not immediately see the virtual 
 Packages include the bundle at `share/rusty-jack/RustyJack.driver`. Source installs can build the same layout with `make install`, or just validate the packaged bundle with:
 
 ```bash
-./scripts/build-driver-bundle
-./scripts/validate-driver-bundle
+make validate-driver-bundle
 ```
 
 The current bundle exposes a minimal virtual HAL output named **Rusty Jack**, with a stereo output stream plus volume and mute controls. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle. The device is still a null output until the passthrough software-volume pipeline is wired up, so Rusty Jack does not automatically route audio through it yet.
@@ -345,7 +344,8 @@ make test
 make fmt        # check formatting (CI)
 make clippy     # lint (CI)
 make universal  # fat binary
-make install    # cargo install --path .
+make driver-bundle  # build target/share/rusty-jack/RustyJack.driver
+make install    # cargo install --path . and install the bundled driver under ~/.cargo/share
 make upgrade    # install once, then restart LaunchAgent
 make uninstall  # remove LaunchAgent and cargo-installed binary
 ```

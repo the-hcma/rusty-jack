@@ -4,13 +4,26 @@
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
 
-.PHONY: all build release test fmt clippy universal driver-bundle validate-driver-bundle clean install uninstall upgrade check-cargo
+.PHONY: all build check-cargo clean clippy driver-bundle fmt install list list-hdmi package release test uninstall universal upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 export CARGO_BUILD_JOBS ?= $(shell sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
 
 CARGO ?= cargo
+DRIVER_BUNDLE_OUTPUT ?= target/share/rusty-jack
+DRIVER_BUNDLE := $(DRIVER_BUNDLE_OUTPUT)/RustyJack.driver
+DRIVER_BUNDLE_STAMP := $(DRIVER_BUNDLE)/.built
+DRIVER_BUNDLE_SOURCES := \
+	Cargo.toml \
+	driver/RustyJack/Info.plist.in \
+	driver/RustyJack/RustyJackAudioServerPlugIn.c \
+	scripts/build-driver-bundle
+
+all: test build
+
+build: check-cargo
+	$(CARGO) build
 
 check-cargo:
 	@command -v $(CARGO) >/dev/null 2>&1 || { \
@@ -21,10 +34,32 @@ check-cargo:
 		exit 1; \
 	}
 
-all: test build
+clean: check-cargo
+	$(CARGO) clean
 
-build: check-cargo
-	$(CARGO) build
+clippy: check-cargo
+	$(CARGO) clippy --all-targets -- -D warnings
+
+driver-bundle: $(DRIVER_BUNDLE_STAMP)
+
+$(DRIVER_BUNDLE_STAMP): $(DRIVER_BUNDLE_SOURCES)
+	./scripts/build-driver-bundle "$(DRIVER_BUNDLE_OUTPUT)"
+	@touch "$@"
+
+fmt: check-cargo
+	$(CARGO) fmt --all
+
+install: check-cargo
+	$(CARGO) install --path . --force --locked --target-dir target
+	$(MAKE) driver-bundle DRIVER_BUNDLE_OUTPUT="$$HOME/.cargo/share/rusty-jack"
+
+list: build
+	$(CARGO) run -- list
+
+list-hdmi: build
+	$(CARGO) run -- list --hdmi
+
+package: driver-bundle release
 
 release: check-cargo
 	$(CARGO) build --release
@@ -32,37 +67,15 @@ release: check-cargo
 test: check-cargo
 	$(CARGO) test --all-targets
 
-fmt: check-cargo
-	$(CARGO) fmt --all
-
-clippy: check-cargo
-	$(CARGO) clippy --all-targets -- -D warnings
-
-universal: check-cargo
-	./scripts/build-universal
-
-driver-bundle:
-	./scripts/build-driver-bundle
-
-validate-driver-bundle: driver-bundle
-	./scripts/validate-driver-bundle
-
-install: check-cargo
-	$(CARGO) install --path . --force --locked --target-dir target
-	./scripts/build-driver-bundle "$$HOME/.cargo/share/rusty-jack"
-
-upgrade: install
-	rusty-jack upgrade
-
 uninstall: check-cargo
 	-@command -v rusty-jack >/dev/null 2>&1 && rusty-jack uninstall || true
 	$(CARGO) uninstall rusty-jack || true
 
-clean: check-cargo
-	$(CARGO) clean
+universal: check-cargo
+	./scripts/build-universal
 
-list: build
-	$(CARGO) run -- list
+upgrade: install
+	rusty-jack upgrade
 
-list-hdmi: build
-	$(CARGO) run -- list --hdmi
+validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
+	./scripts/validate-driver-bundle "$(DRIVER_BUNDLE)"
