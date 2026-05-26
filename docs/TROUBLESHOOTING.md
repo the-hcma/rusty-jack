@@ -105,6 +105,14 @@ Rusty Jack uses Sony ScalarWebAPI directly. `port` is only a fallback; SSDP disc
 
 ---
 
+## Audio briefly falls back from Sony to internal speakers
+
+The daemon only treats Sony API failures as a reason to use fallback output when the Mac's network access fingerprint changed: active default interface, default gateway, or interface IP address. If that fingerprint is stable, the daemon keeps the Sony-backed Mac output selected and treats the failed Sony wake/status request as transient.
+
+Check daemon logs for `selected Sony speaker is unreachable`. If those messages appear without a matching Wi-Fi/Ethernet or IP change, update Rusty Jack before tuning fallback configuration.
+
+---
+
 ## `disable` vs `pause`
 
 | Command | Use when |

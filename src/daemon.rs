@@ -7,6 +7,7 @@ use crate::coreaudio::AudioHal;
 use crate::eqmac::{
     ensure_eqmac_for_target, format_ensure_messages, EqMacEnsureAction, EqMacEnsureResult,
 };
+use crate::network::{current_network_access_snapshot, NetworkAccessSnapshot};
 use crate::output_device::OutputDevice;
 use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
 use crate::sony::SonyWakeResult;
@@ -41,6 +42,8 @@ pub enum DaemonTickResult {
 pub struct DaemonState {
     was_idle: Option<bool>,
     last_activity_wake: Option<Instant>,
+    network_access_observed: bool,
+    network_access: Option<NetworkAccessSnapshot>,
 }
 
 impl DaemonState {
@@ -71,6 +74,32 @@ impl DaemonState {
         self.last_activity_wake = Some(now);
         true
     }
+
+    pub fn observe_network_access(
+        &mut self,
+        snapshot: Option<NetworkAccessSnapshot>,
+    ) -> NetworkAccessChange {
+        let changed = self.network_access_observed
+            && match (&self.network_access, &snapshot) {
+                (Some(previous), Some(current)) => previous != current,
+                (Some(_), None) | (None, Some(_)) => true,
+                (None, None) => false,
+            };
+        self.network_access_observed = true;
+        self.network_access = snapshot;
+
+        if changed {
+            NetworkAccessChange::Changed
+        } else {
+            NetworkAccessChange::Unchanged
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkAccessChange {
+    Unchanged,
+    Changed,
 }
 
 /// Evaluate policy once for the daemon.
@@ -91,10 +120,33 @@ fn daemon_tick_with_eqmac(
     reason: DaemonTickReason,
     ensure_eqmac: &EqMacEnsureFn<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
+    daemon_tick_with_sony_fallback(
+        hal,
+        config,
+        reason,
+        SonyFallbackPermission::Allowed,
+        ensure_eqmac,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SonyFallbackPermission {
+    Allowed,
+    Suppressed,
+}
+
+fn daemon_tick_with_sony_fallback(
+    hal: &dyn AudioHal,
+    config: &Config,
+    reason: DaemonTickReason,
+    sony_fallback: SonyFallbackPermission,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
+) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     daemon_tick_with_hooks(
         hal,
         config,
         reason,
+        sony_fallback,
         ensure_eqmac,
         &crate::sony::wake_on_output_selected,
         &crate::sony::wake_on_activity,
@@ -108,6 +160,7 @@ fn daemon_tick_with_hooks(
     hal: &dyn AudioHal,
     config: &Config,
     reason: DaemonTickReason,
+    sony_fallback: SonyFallbackPermission,
     ensure_eqmac: &EqMacEnsureFn<'_>,
     wake_on_output_selected: &SonyWakeFn<'_>,
     wake_on_activity: &SonyWakeFn<'_>,
@@ -125,9 +178,13 @@ fn daemon_tick_with_hooks(
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
         if reason == DaemonTickReason::UserActivity {
-            if let Some(fallback) =
-                sony_activity_fallback_target(config, &list.devices, &target.uid, wake_on_activity)
-            {
+            if let Some(fallback) = sony_activity_fallback_target(
+                config,
+                &list.devices,
+                &target.uid,
+                sony_fallback,
+                wake_on_activity,
+            ) {
                 let result = switch_daemon_target(
                     hal,
                     config,
@@ -149,6 +206,7 @@ fn daemon_tick_with_hooks(
                 &list.devices,
                 target.clone(),
                 reason,
+                sony_fallback,
                 wake_on_output_selected,
             );
             if checked_target.uid != target.uid {
@@ -178,6 +236,7 @@ fn daemon_tick_with_hooks(
             &list.devices,
             target,
             reason,
+            sony_fallback,
             wake_on_output_selected,
         )
     } else {
@@ -292,6 +351,7 @@ fn sony_checked_target_or_fallback(
     devices: &[crate::output_device::OutputDevice],
     target: RoutingTarget,
     reason: DaemonTickReason,
+    sony_fallback: SonyFallbackPermission,
     wake_on_output_selected: &SonyWakeFn<'_>,
 ) -> RoutingTarget {
     match wake_on_output_selected(config, devices, &target.uid) {
@@ -299,7 +359,7 @@ fn sony_checked_target_or_fallback(
         Ok(None) => {}
         Err(err) => {
             eprintln!("warning: {err}");
-            if allow_sony_fallback(reason) {
+            if allow_sony_fallback(reason, sony_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
                     eprintln!(
                         "warning: using fallback output {} ({}) because the selected Sony speaker is unreachable",
@@ -318,6 +378,7 @@ fn sony_checked_current_target_or_fallback(
     devices: &[crate::output_device::OutputDevice],
     target: RoutingTarget,
     reason: DaemonTickReason,
+    sony_fallback: SonyFallbackPermission,
     wake_on_output_selected: &SonyWakeFn<'_>,
 ) -> RoutingTarget {
     match wake_on_output_selected(config, devices, &target.uid) {
@@ -325,7 +386,7 @@ fn sony_checked_current_target_or_fallback(
         Ok(None) => {}
         Err(err) => {
             eprintln!("warning: {err}");
-            if allow_sony_fallback(reason) {
+            if allow_sony_fallback(reason, sony_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
                     eprintln!(
                         "warning: using fallback output {} ({}) because the selected Sony speaker is unreachable",
@@ -339,14 +400,19 @@ fn sony_checked_current_target_or_fallback(
     target
 }
 
-fn allow_sony_fallback(reason: DaemonTickReason) -> bool {
-    reason == DaemonTickReason::Scheduled
+fn allow_sony_fallback(reason: DaemonTickReason, sony_fallback: SonyFallbackPermission) -> bool {
+    sony_fallback == SonyFallbackPermission::Allowed
+        && matches!(
+            reason,
+            DaemonTickReason::Scheduled | DaemonTickReason::UserActivity
+        )
 }
 
 fn sony_activity_fallback_target(
     config: &Config,
     devices: &[crate::output_device::OutputDevice],
     target_uid: &str,
+    sony_fallback: SonyFallbackPermission,
     wake_on_activity: &SonyWakeFn<'_>,
 ) -> Option<RoutingTarget> {
     match wake_on_activity(config, devices, target_uid) {
@@ -357,7 +423,11 @@ fn sony_activity_fallback_target(
         Ok(None) => None,
         Err(err) => {
             eprintln!("warning: {err}");
-            fallback_excluding(config, devices, target_uid)
+            if allow_sony_fallback(DaemonTickReason::UserActivity, sony_fallback) {
+                fallback_excluding(config, devices, target_uid)
+            } else {
+                None
+            }
         }
     }
 }
@@ -379,7 +449,13 @@ pub fn run_forever(
     let mut config = load_config(config_path)?;
     let mut state = DaemonState::new();
     seed_activity_state(activity, &mut state, &config);
-    run_tick_logged(hal, &config, DaemonTickReason::Startup);
+    seed_network_state(&mut state);
+    run_tick_logged(
+        hal,
+        &config,
+        DaemonTickReason::Startup,
+        SonyFallbackPermission::Suppressed,
+    );
     let startup_grace_started = Instant::now();
 
     loop {
@@ -401,7 +477,15 @@ pub fn run_forever(
                         }
                         let cooldown = sony_wake_cooldown(&config);
                         if state.allow_sony_wake(Instant::now(), cooldown) {
-                            run_tick_logged(hal, &config, DaemonTickReason::UserActivity);
+                            let sony_fallback = sony_fallback_permission(
+                                observe_current_network_access(&mut state),
+                            );
+                            run_tick_logged(
+                                hal,
+                                &config,
+                                DaemonTickReason::UserActivity,
+                                sony_fallback,
+                            );
                         }
                     }
                 }
@@ -415,12 +499,28 @@ pub fn run_forever(
         } else {
             DaemonTickReason::Scheduled
         };
-        run_tick_logged(hal, &config, reason);
+        let sony_fallback = if reason == DaemonTickReason::Scheduled {
+            sony_fallback_permission(observe_current_network_access(&mut state))
+        } else {
+            SonyFallbackPermission::Suppressed
+        };
+        run_tick_logged(hal, &config, reason, sony_fallback);
     }
 }
 
-fn run_tick_logged(hal: &dyn AudioHal, config: &Config, reason: DaemonTickReason) {
-    match daemon_tick(hal, config, reason) {
+fn run_tick_logged(
+    hal: &dyn AudioHal,
+    config: &Config,
+    reason: DaemonTickReason,
+    sony_fallback: SonyFallbackPermission,
+) {
+    match daemon_tick_with_sony_fallback(
+        hal,
+        config,
+        reason,
+        sony_fallback,
+        &ensure_eqmac_for_target,
+    ) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
         }
@@ -460,6 +560,21 @@ fn seed_activity_state(activity: &dyn ActivityMonitor, state: &mut DaemonState, 
     if let Ok(idle_duration) = activity.idle_duration() {
         let threshold = Duration::from_millis(config.activity_idle_threshold_ms);
         let _ = state.observe_idle_duration(idle_duration, threshold);
+    }
+}
+
+fn seed_network_state(state: &mut DaemonState) {
+    let _ = state.observe_network_access(current_network_access_snapshot().ok().flatten());
+}
+
+fn observe_current_network_access(state: &mut DaemonState) -> NetworkAccessChange {
+    state.observe_network_access(current_network_access_snapshot().ok().flatten())
+}
+
+fn sony_fallback_permission(change: NetworkAccessChange) -> SonyFallbackPermission {
+    match change {
+        NetworkAccessChange::Changed => SonyFallbackPermission::Allowed,
+        NetworkAccessChange::Unchanged => SonyFallbackPermission::Suppressed,
     }
 }
 
@@ -660,6 +775,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
+            SonyFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -692,6 +808,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
+            SonyFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -724,6 +841,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::StartupRetry,
+            SonyFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -756,6 +874,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Startup,
+            SonyFallbackPermission::Suppressed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -770,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_scheduled_no_change_falls_back_when_selected_sony_unreachable() {
+    fn test_daemon_scheduled_no_change_falls_back_when_network_changed() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
@@ -787,6 +906,7 @@ mod tests {
             &hal,
             &config,
             DaemonTickReason::Scheduled,
+            SonyFallbackPermission::Allowed,
             &no_op_eqmac,
             &wake_on_output_selected,
             &wake_on_activity,
@@ -797,6 +917,71 @@ mod tests {
         assert_eq!(
             hal.default_output_uid().unwrap().as_deref(),
             Some("BuiltInSpeakerDevice")
+        );
+    }
+
+    #[test]
+    fn test_daemon_scheduled_no_change_keeps_sony_when_network_unchanged() {
+        let hal = MockHal::new(vec![
+            builtin_speakers("BuiltInHeadphoneOutputDevice"),
+            builtin_speakers("BuiltInSpeakerDevice"),
+        ])
+        .with_default("BuiltInHeadphoneOutputDevice");
+        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+            Err(RustyJackError::Speaker("speaker unreachable".into()))
+        };
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+
+        let (result, _list) = daemon_tick_with_hooks(
+            &hal,
+            &config,
+            DaemonTickReason::Scheduled,
+            SonyFallbackPermission::Suppressed,
+            &no_op_eqmac,
+            &wake_on_output_selected,
+            &wake_on_activity,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert!(hal.set_calls().is_empty());
+        assert_eq!(
+            hal.default_output_uid().unwrap().as_deref(),
+            Some("BuiltInHeadphoneOutputDevice")
+        );
+    }
+
+    #[test]
+    fn test_daemon_scheduled_switches_to_sony_when_network_unchanged() {
+        let hal = MockHal::new(vec![
+            builtin_speakers("BuiltInHeadphoneOutputDevice"),
+            builtin_speakers("BuiltInSpeakerDevice"),
+        ])
+        .with_default("BuiltInSpeakerDevice");
+        let mut config = sony_config("BuiltInHeadphoneOutputDevice");
+        config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+            Err(RustyJackError::Speaker("speaker unreachable".into()))
+        };
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+
+        let (result, _list) = daemon_tick_with_hooks(
+            &hal,
+            &config,
+            DaemonTickReason::Scheduled,
+            SonyFallbackPermission::Suppressed,
+            &no_op_eqmac,
+            &wake_on_output_selected,
+            &wake_on_activity,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert_eq!(
+            hal.default_output_uid().unwrap().as_deref(),
+            Some("BuiltInHeadphoneOutputDevice")
         );
     }
 
@@ -955,6 +1140,64 @@ mod tests {
         assert!(state.allow_sony_wake(now, Duration::from_secs(30)));
         assert!(!state.allow_sony_wake(now + Duration::from_secs(1), Duration::from_secs(30)));
         assert!(state.allow_sony_wake(now + Duration::from_secs(31), Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_network_access_change_detects_interface_gateway_or_ip_changes() {
+        let mut state = DaemonState::new();
+        let initial = NetworkAccessSnapshot {
+            interface: "en0".into(),
+            gateway: Some("192.168.86.1".into()),
+            ip_address: Some("192.168.86.100".into()),
+        };
+        let changed = NetworkAccessSnapshot {
+            ip_address: Some("192.168.86.101".into()),
+            ..initial.clone()
+        };
+
+        assert_eq!(
+            state.observe_network_access(Some(initial.clone())),
+            NetworkAccessChange::Unchanged
+        );
+        assert_eq!(
+            state.observe_network_access(Some(initial)),
+            NetworkAccessChange::Unchanged
+        );
+        assert_eq!(
+            state.observe_network_access(Some(changed)),
+            NetworkAccessChange::Changed
+        );
+    }
+
+    #[test]
+    fn test_network_access_change_detects_lost_default_route() {
+        let mut state = DaemonState::new();
+        let initial = NetworkAccessSnapshot {
+            interface: "en0".into(),
+            gateway: Some("192.168.86.1".into()),
+            ip_address: Some("192.168.86.100".into()),
+        };
+
+        assert_eq!(
+            state.observe_network_access(Some(initial)),
+            NetworkAccessChange::Unchanged
+        );
+        assert_eq!(
+            state.observe_network_access(None),
+            NetworkAccessChange::Changed
+        );
+    }
+
+    #[test]
+    fn test_sony_fallback_permission_requires_network_change() {
+        assert_eq!(
+            sony_fallback_permission(NetworkAccessChange::Unchanged),
+            SonyFallbackPermission::Suppressed
+        );
+        assert_eq!(
+            sony_fallback_permission(NetworkAccessChange::Changed),
+            SonyFallbackPermission::Allowed
+        );
     }
 
     #[test]

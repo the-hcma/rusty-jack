@@ -14,6 +14,7 @@ pub mod error;
 pub mod hal_plugin;
 pub mod launchd;
 pub mod list_fmt;
+pub mod network;
 pub mod output_device;
 pub mod picker;
 pub mod policy;
