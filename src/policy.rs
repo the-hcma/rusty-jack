@@ -250,7 +250,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            scalar_webapi: None,
+            scalar_webapi_device: None,
         }
     }
 
@@ -270,7 +270,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            scalar_webapi: None,
+            scalar_webapi_device: None,
         }
     }
 
@@ -290,7 +290,7 @@ mod tests {
             fallback_uids: vec![fallback_uid.into()],
             also_set_system_output: true,
             volume: None,
-            scalar_webapi: None,
+            scalar_webapi_device: None,
         }
     }
 

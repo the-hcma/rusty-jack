@@ -1,6 +1,6 @@
 //! ScalarWebAPI wake support for line-out attached speakers.
 
-use crate::config::{Config, ScalarWebApiConfig};
+use crate::config::{Config, ScalarWebApiDeviceConfig};
 use crate::device_select::resolve_device_selector;
 use crate::output_device::OutputDevice;
 use crate::RustyJackError;
@@ -18,20 +18,20 @@ const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScalarWebApiWakeResult {
+pub struct ScalarWebApiDeviceWakeResult {
     pub endpoint: String,
     pub status_code: u16,
     pub previous_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScalarWebApiEndpoint {
+struct ScalarWebApiDeviceEndpoint {
     host: String,
     port: u16,
     path: String,
 }
 
-impl ScalarWebApiEndpoint {
+impl ScalarWebApiDeviceEndpoint {
     fn base_url(&self) -> String {
         let path = self.path.trim_end_matches('/');
         if path.is_empty() {
@@ -60,8 +60,8 @@ pub fn wake_on_output_selected(
     config: &Config,
     devices: &[OutputDevice],
     selected_uid: &str,
-) -> Result<Option<ScalarWebApiWakeResult>, RustyJackError> {
-    let Some(api) = config.scalar_webapi.as_ref() else {
+) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
+    let Some(api) = config.scalar_webapi_device.as_ref() else {
         return Ok(None);
     };
     if !api.enabled || !trigger_enabled(api, OUTPUT_SELECTED_TRIGGER) {
@@ -70,7 +70,7 @@ pub fn wake_on_output_selected(
 
     let selector = api.mac_output.clone().into();
     let api_output_uid = resolve_device_selector(&selector, devices)
-        .map_err(|err| RustyJackError::Config(format!("scalar_webapi.mac_output: {err}")))?;
+        .map_err(|err| RustyJackError::Config(format!("scalar_webapi_device.mac_output: {err}")))?;
     if api_output_uid != selected_uid {
         return Ok(None);
     }
@@ -101,8 +101,8 @@ pub fn wake_on_activity(
     config: &Config,
     devices: &[OutputDevice],
     active_uid: &str,
-) -> Result<Option<ScalarWebApiWakeResult>, RustyJackError> {
-    let Some(api) = config.scalar_webapi.as_ref() else {
+) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
+    let Some(api) = config.scalar_webapi_device.as_ref() else {
         return Ok(None);
     };
     if !api.enabled || !activity_trigger_enabled(api) {
@@ -111,7 +111,7 @@ pub fn wake_on_activity(
 
     let selector = api.mac_output.clone().into();
     let api_output_uid = resolve_device_selector(&selector, devices)
-        .map_err(|err| RustyJackError::Config(format!("scalar_webapi.mac_output: {err}")))?;
+        .map_err(|err| RustyJackError::Config(format!("scalar_webapi_device.mac_output: {err}")))?;
     if api_output_uid != active_uid {
         return Ok(None);
     }
@@ -138,7 +138,7 @@ pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &
 }
 
 #[must_use]
-pub fn format_wake_message(result: &ScalarWebApiWakeResult) -> String {
+pub fn format_wake_message(result: &ScalarWebApiDeviceWakeResult) -> String {
     if result
         .previous_status
         .as_deref()
@@ -156,7 +156,7 @@ pub fn format_wake_message(result: &ScalarWebApiWakeResult) -> String {
 /// Picker row annotations for configured ScalarWebAPI device outputs.
 #[must_use]
 pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(String, String)> {
-    let Some(api) = config.scalar_webapi.as_ref() else {
+    let Some(api) = config.scalar_webapi_device.as_ref() else {
         return vec![];
     };
     if !api.enabled {
@@ -167,7 +167,7 @@ pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(Str
     let uid = match resolve_device_selector(&selector, devices) {
         Ok(uid) => uid,
         Err(err) => {
-            eprintln!("warning: scalar_webapi.mac_output: {err}");
+            eprintln!("warning: scalar_webapi_device.mac_output: {err}");
             return vec![];
         }
     };
@@ -182,18 +182,18 @@ pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(Str
     vec![(uid, note)]
 }
 
-fn trigger_enabled(api: &ScalarWebApiConfig, trigger: &str) -> bool {
+fn trigger_enabled(api: &ScalarWebApiDeviceConfig, trigger: &str) -> bool {
     api.triggers
         .iter()
         .any(|value| value.eq_ignore_ascii_case(trigger))
 }
 
-fn activity_trigger_enabled(api: &ScalarWebApiConfig) -> bool {
+fn activity_trigger_enabled(api: &ScalarWebApiDeviceConfig) -> bool {
     trigger_enabled(api, KEYBOARD_TRIGGER) || trigger_enabled(api, MOUSE_TRIGGER)
 }
 
-fn current_power_status(api: &ScalarWebApiConfig) -> Result<String, RustyJackError> {
-    let endpoint = match discover_scalar_webapi_endpoint(api)? {
+fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, RustyJackError> {
+    let endpoint = match discover_scalar_webapi_device_endpoint(api)? {
         Some(endpoint) => endpoint,
         None => configured_endpoint(api)?,
     };
@@ -223,8 +223,10 @@ fn current_power_status(api: &ScalarWebApiConfig) -> Result<String, RustyJackErr
     power_status_from_response(&response)
 }
 
-fn send_wake_command(api: &ScalarWebApiConfig) -> Result<ScalarWebApiWakeResult, RustyJackError> {
-    let discovered = match discover_scalar_webapi_endpoint(api) {
+fn send_wake_command(
+    api: &ScalarWebApiDeviceConfig,
+) -> Result<ScalarWebApiDeviceWakeResult, RustyJackError> {
+    let discovered = match discover_scalar_webapi_device_endpoint(api) {
         Ok(endpoint) => endpoint,
         Err(err) => {
             eprintln!("warning: ScalarWebAPI endpoint discovery failed: {err}");
@@ -243,12 +245,12 @@ fn send_wake_command(api: &ScalarWebApiConfig) -> Result<ScalarWebApiWakeResult,
 }
 
 fn send_wake_command_to(
-    api: &ScalarWebApiConfig,
-    api_endpoint: &ScalarWebApiEndpoint,
-) -> Result<ScalarWebApiWakeResult, RustyJackError> {
+    api: &ScalarWebApiDeviceConfig,
+    api_endpoint: &ScalarWebApiDeviceEndpoint,
+) -> Result<ScalarWebApiDeviceWakeResult, RustyJackError> {
     let endpoint = api_endpoint.service_endpoint(SYSTEM_SERVICE);
     let path = api_endpoint.service_path(SYSTEM_SERVICE);
-    let wake_id = prime_scalar_webapi_services(api, api_endpoint)?;
+    let wake_id = prime_scalar_webapi_device_services(api, api_endpoint)?;
     let payload = wake_payload(wake_id);
 
     let response = websocket_json(
@@ -277,16 +279,16 @@ fn send_wake_command_to(
         )));
     }
 
-    Ok(ScalarWebApiWakeResult {
+    Ok(ScalarWebApiDeviceWakeResult {
         endpoint,
         status_code,
         previous_status: None,
     })
 }
 
-fn prime_scalar_webapi_services(
-    api: &ScalarWebApiConfig,
-    api_endpoint: &ScalarWebApiEndpoint,
+fn prime_scalar_webapi_device_services(
+    api: &ScalarWebApiDeviceConfig,
+    api_endpoint: &ScalarWebApiDeviceEndpoint,
 ) -> Result<u64, RustyJackError> {
     let mut id = 1_u64;
     let guide_payload = serde_json::json!({
@@ -342,30 +344,32 @@ fn wake_payload(id: u64) -> String {
     .to_string()
 }
 
-fn scalar_webapi_host(api: &ScalarWebApiConfig) -> Result<&str, RustyJackError> {
+fn scalar_webapi_device_host(api: &ScalarWebApiDeviceConfig) -> Result<&str, RustyJackError> {
     api.host
         .as_deref()
         .map(str::trim)
         .filter(|host| !host.is_empty())
-        .ok_or_else(|| RustyJackError::Config("scalar_webapi.host is not set".into()))
+        .ok_or_else(|| RustyJackError::Config("scalar_webapi_device.host is not set".into()))
 }
 
-fn configured_endpoint(api: &ScalarWebApiConfig) -> Result<ScalarWebApiEndpoint, RustyJackError> {
-    let host = scalar_webapi_host(api)?.to_string();
+fn configured_endpoint(
+    api: &ScalarWebApiDeviceConfig,
+) -> Result<ScalarWebApiDeviceEndpoint, RustyJackError> {
+    let host = scalar_webapi_device_host(api)?.to_string();
     let path = format!("/{}", api.path.trim().trim_matches('/'))
         .trim_end_matches('/')
         .to_string();
-    Ok(ScalarWebApiEndpoint {
+    Ok(ScalarWebApiDeviceEndpoint {
         host,
         port: api.port,
         path,
     })
 }
 
-fn discover_scalar_webapi_endpoint(
-    api: &ScalarWebApiConfig,
-) -> Result<Option<ScalarWebApiEndpoint>, RustyJackError> {
-    let host = scalar_webapi_host(api)?;
+fn discover_scalar_webapi_device_endpoint(
+    api: &ScalarWebApiDeviceConfig,
+) -> Result<Option<ScalarWebApiDeviceEndpoint>, RustyJackError> {
+    let host = scalar_webapi_device_host(api)?;
     let target_ips = resolve_host_ips(host)?;
     if target_ips.is_empty() {
         return Ok(None);
@@ -636,7 +640,7 @@ fn parse_http_status(response: &str) -> Result<u16, RustyJackError> {
         })
 }
 
-fn parse_http_url(url: &str) -> Result<ScalarWebApiEndpoint, RustyJackError> {
+fn parse_http_url(url: &str) -> Result<ScalarWebApiDeviceEndpoint, RustyJackError> {
     let rest = url.strip_prefix("http://").ok_or_else(|| {
         RustyJackError::Speaker(format!("unsupported ScalarWebAPI endpoint URL: {url}"))
     })?;
@@ -654,7 +658,7 @@ fn parse_http_url(url: &str) -> Result<ScalarWebApiEndpoint, RustyJackError> {
             "invalid ScalarWebAPI endpoint URL: {url}"
         )));
     }
-    Ok(ScalarWebApiEndpoint {
+    Ok(ScalarWebApiDeviceEndpoint {
         host: host.to_string(),
         port,
         path: format!("/{path}").trim_end_matches('/').to_string(),
@@ -696,7 +700,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            scalar_webapi: Some(ScalarWebApiConfig {
+            scalar_webapi_device: Some(ScalarWebApiDeviceConfig {
                 enabled: true,
                 model: "ScalarWebAPI device".into(),
                 host: Some("scalarwebapi-device.local".into()),
@@ -721,7 +725,7 @@ mod tests {
     #[test]
     fn test_configured_endpoint_uses_slash_path() {
         let config = config_for("line-out");
-        let api = config.scalar_webapi.as_ref().unwrap();
+        let api = config.scalar_webapi_device.as_ref().unwrap();
         let endpoint = configured_endpoint(api).unwrap();
         let expected_path = protocol_path();
         assert_eq!(
@@ -776,7 +780,7 @@ mod tests {
     #[test]
     fn test_trigger_matching_is_case_insensitive() {
         let mut config = config_for("line-out");
-        let api = config.scalar_webapi.as_mut().unwrap();
+        let api = config.scalar_webapi_device.as_mut().unwrap();
         api.triggers = vec!["Output_Selected".into()];
         assert!(trigger_enabled(api, OUTPUT_SELECTED_TRIGGER));
     }
@@ -798,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_format_wake_message_mentions_waking_from_standby() {
-        let message = format_wake_message(&ScalarWebApiWakeResult {
+        let message = format_wake_message(&ScalarWebApiDeviceWakeResult {
             endpoint: format!("http://speaker/{}/system", protocol_path()),
             status_code: 200,
             previous_status: Some("standby".into()),
@@ -809,7 +813,7 @@ mod tests {
 
     #[test]
     fn test_format_wake_message_generic_when_status_unknown() {
-        let message = format_wake_message(&ScalarWebApiWakeResult {
+        let message = format_wake_message(&ScalarWebApiDeviceWakeResult {
             endpoint: format!("http://speaker/{}/system", protocol_path()),
             status_code: 200,
             previous_status: None,
@@ -818,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn test_selection_filter_skips_non_scalar_webapi_output_before_network() {
+    fn test_selection_filter_skips_non_scalar_webapi_device_output_before_network() {
         let config = config_for("line-out");
         let devices = vec![device("line-out"), device("hdmi")];
         assert_eq!(
@@ -830,7 +834,7 @@ mod tests {
     #[test]
     fn test_disabled_config_skips_wake() {
         let mut config = config_for("line-out");
-        config.scalar_webapi.as_mut().unwrap().enabled = false;
+        config.scalar_webapi_device.as_mut().unwrap().enabled = false;
         let devices = vec![device("line-out")];
         assert_eq!(
             wake_on_output_selected(&config, &devices, "line-out").unwrap(),

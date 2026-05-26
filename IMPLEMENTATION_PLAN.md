@@ -90,7 +90,7 @@ A Mac’s **headphone / line-out jack** may be cabled to a **ScalarWebAPI device
 
 1. User configures rusty-jack with:
    - **`preferred_device_uid`** (or equivalent) = the Mac **Built-in Output / line-out** CoreAudio device that feeds the ScalarWebAPI device.
-   - **`scalar_webapi`** block = ScalarWebAPI endpoint + model hint for the ScalarWebAPI device on the LAN.
+   - **`scalar_webapi_device`** block = ScalarWebAPI endpoint + model hint for the ScalarWebAPI device on the LAN.
 2. Daemon samples macOS HID idle time and treats idle-to-active transitions as user activity. Native event taps remain a possible refinement.
 3. When **both** are true:
    - active or preferred output is the configured line-out UID (or policy has just switched to it), **and**
@@ -143,7 +143,7 @@ curl -s -X POST "http://192.168.1.42:10000/<base-path>/system" \
 ##### Rust module layout (current)
 
 ```text
-src/scalar_webapi/mod.rs    # discovery, service priming, power status, wake command
+src/scalar_webapi_device/mod.rs    # discovery, service priming, power status, wake command
 src/activity.rs    # macOS HID idle-time sampling abstraction
 src/daemon.rs      # scheduled policy ticks and idle-to-active wake trigger
 ```
@@ -173,10 +173,10 @@ flowchart LR
 
 **Permissions:** Current idle-time polling does not require Accessibility permission. If a future native event tap is added, it should observe event types only for wake gating — not keystroke logging or screen recording.
 
-#### Configuration sketch (see `config.example.scalarwebapi.json`)
+#### Configuration sketch (see `config.example.scalar-webapi-device.json`)
 
 ```json
-"scalar_webapi": {
+"scalar_webapi_device": {
   "enabled": true,
   "model": "ScalarWebAPI device",
   "host": "scalarwebapi-device.local",
@@ -191,7 +191,7 @@ flowchart LR
 
 - **`host`** — hostname, FQDN, or IP address (e.g. `scalarwebapi-device.local` or `192.168.1.42`); ScalarWebAPI URL is built from `host`, `port`, and the protocol base path.
 - **`mac_output`** — same shape as `preferred_device` (`monitor_name` and/or `uid`) for the Mac line-out feeding the ScalarWebAPI device.
-- Omit `scalar_webapi` entirely when the feature is not used on this Mac.
+- Omit `scalar_webapi_device` entirely when the feature is not used on this Mac.
 - **`request_timeout_ms`** — HTTP timeout for ScalarWebAPI calls.
 
 #### Non-goals for this feature
@@ -202,7 +202,7 @@ flowchart LR
 
 #### Status
 
-Implemented with daemon idle polling and output-selection hooks. Native event taps and a dedicated `scalarwebapi discover` helper remain optional refinements.
+Implemented with daemon idle polling and output-selection hooks. Native event taps and a dedicated `scalar-webapi-device discover` helper remain optional refinements.
 
 ### Non-goals (for v1)
 
@@ -356,7 +356,7 @@ rusty-jack/
 │   │   listener.rs                # property listeners + run loop integration
 │   │   sys.rs                     # unsafe FFI wrappers (thin)
 │   ├── policy.rs                  # “should switch?” + target selection
-│   ├── scalarwebapi.rs                    # ScalarWebAPI client and wake commands
+│   ├── scalar_webapi_device/mod.rs                    # ScalarWebAPI client and wake commands
 │   ├── activity.rs                # HID idle-time activity monitor
 │   ├── daemon.rs                  # main loop, poll, wake handling
 │   ├── launchd.rs                 # install/pause/resume/uninstall/upgrade LaunchAgent helpers
@@ -504,15 +504,15 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `poll_interval_ms` | Polling interval; `0` disables poll (listeners only — not recommended) |
 | `switch_delay_ms` | Debounce after device list change before applying (eqMac uses 500–1000 ms) |
 | `also_set_system_output` | Mirror alerts/sound effects device |
-| `scalar_webapi` | Optional — omit on Macs without a networked ScalarWebAPI device |
-| `scalar_webapi.enabled` | Master switch for ScalarWebAPI device / ScalarWebAPI wake logic |
-| `scalar_webapi.host` | Hostname, FQDN, or IP (e.g. `scalarwebapi-device.local`) |
-| `scalar_webapi.port` / `path` | ScalarWebAPI URL pieces; `path` usually stays omitted so the protocol default is used |
-| `scalar_webapi.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
-| `scalar_webapi.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
-| `scalar_webapi.wake_debounce_ms` | Minimum interval between wake commands |
-| `scalar_webapi.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
-| `scalar_webapi.require_quick_start` | Documents that the device network standby/wake option should be enabled |
+| `scalar_webapi_device` | Optional — omit on Macs without a networked ScalarWebAPI device |
+| `scalar_webapi_device.enabled` | Master switch for ScalarWebAPI device / ScalarWebAPI wake logic |
+| `scalar_webapi_device.host` | Hostname, FQDN, or IP (e.g. `scalarwebapi-device.local`) |
+| `scalar_webapi_device.port` / `path` | ScalarWebAPI URL pieces; `path` usually stays omitted so the protocol default is used |
+| `scalar_webapi_device.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
+| `scalar_webapi_device.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
+| `scalar_webapi_device.wake_debounce_ms` | Minimum interval between wake commands |
+| `scalar_webapi_device.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
+| `scalar_webapi_device.require_quick_start` | Documents that the device network standby/wake option should be enabled |
 
 ### 4.3 Config discovery
 
@@ -522,7 +522,7 @@ Resolution order:
 2. `$HDMI_SOUND_CONTROLLER_CONFIG`
 3. `~/.config/rusty-jack/config.json`
 
-Starter configs currently live in `config.example.json` and `config.example.scalarwebapi.json`.
+Starter configs currently live in `config.example.json` and `config.example.scalar-webapi-device.json`.
 
 ---
 
@@ -971,7 +971,7 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
 Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and the user shows **presence at the Mac** (mouse or keyboard activity). **Native Rust ScalarWebAPI client** — no Python.
 
-- [x] Config block `scalar_webapi` (§4.1) + validation
+- [x] Config block `scalar_webapi_device` (§4.1) + validation
 - [x] SSDP/UPnP endpoint discovery and configured endpoint fallback
 - [x] WebSocket ScalarWebAPI calls with HTTP POST fallback
 - [x] `getPowerStatus`, `setPowerStatus(status: active)`, service priming
@@ -980,7 +980,7 @@ Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and th
 - [x] Idle-to-active daemon trigger with `wake_debounce_ms`
 - [x] **Tests:** parsing, endpoint construction, trigger matching, selection filtering, wake message formatting
 - [ ] Native event tap refinement for lower-latency keyboard/mouse event detection
-- [ ] Optional `rusty-jack scalarwebapi discover` helper
+- [ ] Optional `rusty-jack scalar-webapi-device discover` helper
 
 **Current definition of done:** Line-out configured as preferred; daemon observes idle-to-active transition while ScalarWebAPI device is in standby → Rust client calls `setPowerStatus` → device wakes; no Python installed; no wake when output is not the configured ScalarWebAPI output; network standby/wake documented.
 

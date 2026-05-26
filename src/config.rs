@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 const ENV_CONFIG: &str = "RUSTY_JACK_CONFIG";
 const ENV_CONFIG_LEGACY: &str = "HDMI_SOUND_CONTROLLER_CONFIG";
 
-const DEFAULT_SCALAR_WEBAPI_PORT: u16 = 10000;
-const DEFAULT_SCALAR_WEBAPI_PATH: &str = concat!("so", "ny");
+const DEFAULT_SCALAR_WEBAPI_DEVICE_PORT: u16 = 10000;
+const DEFAULT_SCALAR_WEBAPI_DEVICE_PATH: &str = concat!("so", "ny");
 
 /// Pick a device by monitor product name and/or CoreAudio UID.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -32,21 +32,21 @@ impl From<DeviceSelectorConfig> for DeviceSelector {
 
 /// ScalarWebAPI wake-on-activity settings. Omit when not used.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ScalarWebApiConfig {
+pub struct ScalarWebApiDeviceConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_scalar_webapi_model")]
+    #[serde(default = "default_scalar_webapi_device_model")]
     pub model: String,
     /// Hostname, FQDN, or IP address (e.g. `scalarwebapi-device.local` or `192.168.1.42`).
     #[serde(default)]
     pub host: Option<String>,
-    #[serde(default = "default_scalar_webapi_port")]
+    #[serde(default = "default_scalar_webapi_device_port")]
     pub port: u16,
-    #[serde(default = "default_scalar_webapi_path")]
+    #[serde(default = "default_scalar_webapi_device_path")]
     pub path: String,
     #[serde(default)]
     pub mac_output: DeviceSelectorConfig,
-    #[serde(default = "default_scalar_webapi_triggers")]
+    #[serde(default = "default_scalar_webapi_device_triggers")]
     pub triggers: Vec<String>,
     #[serde(default = "default_wake_debounce_ms")]
     pub wake_debounce_ms: u64,
@@ -56,19 +56,19 @@ pub struct ScalarWebApiConfig {
     pub require_quick_start: bool,
 }
 
-fn default_scalar_webapi_model() -> String {
+fn default_scalar_webapi_device_model() -> String {
     "ScalarWebAPI device".into()
 }
 
-fn default_scalar_webapi_port() -> u16 {
-    DEFAULT_SCALAR_WEBAPI_PORT
+fn default_scalar_webapi_device_port() -> u16 {
+    DEFAULT_SCALAR_WEBAPI_DEVICE_PORT
 }
 
-fn default_scalar_webapi_path() -> String {
-    DEFAULT_SCALAR_WEBAPI_PATH.into()
+fn default_scalar_webapi_device_path() -> String {
+    DEFAULT_SCALAR_WEBAPI_DEVICE_PATH.into()
 }
 
-fn default_scalar_webapi_triggers() -> Vec<String> {
+fn default_scalar_webapi_device_triggers() -> Vec<String> {
     vec!["keyboard".into(), "mouse".into(), "output_selected".into()]
 }
 
@@ -84,7 +84,7 @@ fn default_require_quick_start() -> bool {
     true
 }
 
-impl ScalarWebApiConfig {
+impl ScalarWebApiDeviceConfig {
     /// ScalarWebAPI base URL built from host, port, and path.
     #[must_use]
     pub fn endpoint_url(&self) -> Option<String> {
@@ -128,7 +128,7 @@ pub struct Config {
     #[serde(default)]
     pub volume: Option<u8>,
     #[serde(default)]
-    pub scalar_webapi: Option<ScalarWebApiConfig>,
+    pub scalar_webapi_device: Option<ScalarWebApiDeviceConfig>,
 }
 
 fn default_also_set_system_output() -> bool {
@@ -317,12 +317,12 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
         }
     }
 
-    if let Some(api) = &config.scalar_webapi {
+    if let Some(api) = &config.scalar_webapi_device {
         if api.enabled {
             let host = api.host.as_deref().unwrap_or("").trim();
             if host.is_empty() {
                 return Err(RustyJackError::Config(
-                    "scalar_webapi.enabled is true but host is not set".into(),
+                    "scalar_webapi_device.enabled is true but host is not set".into(),
                 ));
             }
             if api.mac_output.uid.as_deref().is_none_or(is_placeholder_uid)
@@ -333,7 +333,7 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
                     .is_none_or(|n| n.trim().is_empty())
             {
                 return Err(RustyJackError::Config(
-                    "scalar_webapi.enabled is true but mac_output is not set".into(),
+                    "scalar_webapi_device.enabled is true but mac_output is not set".into(),
                 ));
             }
         }
@@ -411,16 +411,16 @@ mod tests {
     }
 
     #[test]
-    fn test_scalar_webapi_endpoint_url_from_hostname() {
-        let protocol_path = default_scalar_webapi_path();
-        let api = ScalarWebApiConfig {
+    fn test_scalar_webapi_device_endpoint_url_from_hostname() {
+        let protocol_path = default_scalar_webapi_device_path();
+        let api = ScalarWebApiDeviceConfig {
             enabled: true,
             model: "ScalarWebAPI device".into(),
             host: Some("scalarwebapi-device.local".into()),
             port: 10_000,
             path: protocol_path.clone(),
             mac_output: DeviceSelectorConfig::default(),
-            triggers: default_scalar_webapi_triggers(),
+            triggers: default_scalar_webapi_device_triggers(),
             wake_debounce_ms: 30_000,
             request_timeout_ms: 3_000,
             require_quick_start: true,
@@ -430,14 +430,14 @@ mod tests {
     }
 
     #[test]
-    fn test_scalar_webapi_disabled_without_host_ok() {
+    fn test_scalar_webapi_device_disabled_without_host_ok() {
         let mut file = NamedTempFile::new().unwrap();
         write!(
             file,
             r#"{{
   "version": 1,
   "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
-  "scalar_webapi": {{ "enabled": false }}
+  "scalar_webapi_device": {{ "enabled": false }}
 }}"#
         )
         .unwrap();
@@ -445,14 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn test_scalar_webapi_enabled_requires_host() {
+    fn test_scalar_webapi_device_enabled_requires_host() {
         let mut file = NamedTempFile::new().unwrap();
         write!(
             file,
             r#"{{
   "version": 1,
   "preferred_device": {{ "monitor_name": "DELL U3219Q" }},
-  "scalar_webapi": {{ "enabled": true, "mac_output": {{ "monitor_name": "Built-in" }} }}
+  "scalar_webapi_device": {{ "enabled": true, "mac_output": {{ "monitor_name": "Built-in" }} }}
 }}"#
         )
         .unwrap();
@@ -493,13 +493,13 @@ mod tests {
     #[test]
     fn test_load_config_rewrites_keys_lexicographically() {
         let mut file = NamedTempFile::new().unwrap();
-        let protocol_path = default_scalar_webapi_path();
+        let protocol_path = default_scalar_webapi_device_path();
         write!(
             file,
             r#"{{
   "version": 1,
   "volume": 80,
-  "scalar_webapi": {{
+  "scalar_webapi_device": {{
     "wake_debounce_ms": 2000,
     "triggers": ["output_selected"],
     "request_timeout_ms": 3000,
@@ -533,7 +533,7 @@ mod tests {
   "preferred_device": {{
     "uid": "BuiltInHeadphoneOutputDevice"
   }},
-  "scalar_webapi": {{
+  "scalar_webapi_device": {{
     "enabled": true,
     "host": "scalarwebapi-device.local",
     "mac_output": {{

@@ -96,7 +96,7 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.stdout.log"
 
 ## ScalarWebAPI device does not wake
 
-1. Confirm the selected Mac output matches `scalar_webapi.mac_output`.
+1. Confirm the selected Mac output matches `scalar_webapi_device.mac_output`.
 2. Confirm the device is reachable by hostname/IP and has its network standby/wake option enabled.
 3. Run `rusty-jack picker` and look for the ScalarWebAPI power-state note on the configured output.
 4. Check daemon logs for wake errors or discovery warnings.

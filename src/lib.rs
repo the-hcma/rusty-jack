@@ -18,7 +18,7 @@ pub mod network;
 pub mod output_device;
 pub mod picker;
 pub mod policy;
-pub mod scalar_webapi;
+pub mod scalar_webapi_device;
 pub mod setup;
 pub mod status;
 pub mod system_default;

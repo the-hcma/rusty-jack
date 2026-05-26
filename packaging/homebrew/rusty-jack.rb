@@ -19,7 +19,7 @@ class RustyJack < Formula
   def install
     ENV["MACOSX_DEPLOYMENT_TARGET"] = "12.0"
     system "cargo", "install", *std_cargo_args, "--locked"
-    pkgshare.install "config.example.json", "config.example.scalarwebapi.json", "launchd"
+    pkgshare.install "config.example.json", "config.example.scalar-webapi-device.json", "launchd"
   end
 
   def caveats

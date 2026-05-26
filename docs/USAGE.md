@@ -55,7 +55,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes eqMac-routed HDMI/DisplayPort, where the raw CoreAudio default may be the virtual eqMac device while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi.wake_debounce_ms`.
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes eqMac-routed HDMI/DisplayPort, where the raw CoreAudio default may be the virtual eqMac device while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi_device.wake_debounce_ms`.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -272,9 +272,9 @@ Array of UIDs tried in order when preferred is missing or not alive. Leave it em
 
 Integer 0–100. Created automatically from the preferred route's current effective volume when `install` can read it. This config value is authoritative for the configured preferred output. Other outputs use per-device remembered volume stored in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back. Scheduled no-op polls do not keep forcing volume, so manual volume changes are not fought every poll. Uses retry + readback for eqMac compatibility.
 
-### `scalar_webapi`
+### `scalar_webapi_device`
 
-Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalarwebapi.json`.
+Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -286,7 +286,7 @@ Optional block for waking a ScalarWebAPI-compatible device. When enabled and `tr
 | `mac_output` | none | Device selector for the Mac output connected to the device. Required when enabled. |
 | `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or daemon idle-to-active activity. |
 | `wake_debounce_ms` | `30000` | Minimum time between activity-triggered wake attempts. |
-| `request_timeout_ms` | `3000` | Network timeout for speaker requests. |
+| `request_timeout_ms` | `3000` | Network timeout for device requests. |
 | `require_quick_start` | `true` | Documents the expectation that the device has its network standby/wake option enabled. |
 
 Other devices should work if they expose the same ScalarWebAPI service.

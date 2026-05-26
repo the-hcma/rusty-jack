@@ -6,7 +6,7 @@
   "preferred_device": {
     "monitor_name": "DELL U3219Q"
   },
-  "scalar_webapi": {
+  "scalar_webapi_device": {
     "enabled": true,
     "host": "scalarwebapi-device.local",
     "mac_output": {
