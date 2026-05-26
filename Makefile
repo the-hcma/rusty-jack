@@ -4,7 +4,7 @@
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
 
-.PHONY: all build release test fmt clippy universal clean install uninstall upgrade check-cargo
+.PHONY: all build release test fmt clippy universal driver-bundle validate-driver-bundle clean install uninstall upgrade check-cargo
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -41,8 +41,15 @@ clippy: check-cargo
 universal: check-cargo
 	./scripts/build-universal
 
+driver-bundle:
+	./scripts/build-driver-bundle
+
+validate-driver-bundle: driver-bundle
+	./scripts/validate-driver-bundle
+
 install: check-cargo
 	$(CARGO) install --path . --force --locked --target-dir target
+	./scripts/build-driver-bundle "$$HOME/.cargo/share/rusty-jack"
 
 upgrade: install
 	rusty-jack upgrade

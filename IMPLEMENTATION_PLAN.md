@@ -1,6 +1,6 @@
 # Rusty Jack — Implementation Plan
 
-**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the software volume layer; the native virtual driver described below remains future work.
+**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the functional software volume layer when eqMac is already installed. Rusty Jack now packages its own loadable HAL driver skeleton; the virtual output and passthrough software-volume pipeline remain the next native-driver phase.
 
 This plan is based on investigation of the open-source [eqMac v1.3.2](https://github.com/bitgapp/eqMac) tree (`native/app`, `native/driver`, `native/shared`) and comparable tools ([audio-priority-cli](https://github.com/mateusbadalotti/audio-priority-cli-macos), [audioswitch](https://github.com/retrography/audioswitch)).
 
@@ -15,12 +15,12 @@ This document mixes shipped architecture and roadmap notes. For the exact user-f
 | Device listing and policy status | Implemented: `list`, `list --hdmi`, `status` |
 | One-shot routing | Implemented: `apply` with preferred/fallback selection |
 | Manual selection | Implemented: `picker`, `picker --index N`, ScalarWebAPI power notes |
-| eqMac integration | Implemented: launch when installed, warn with https://eqmac.app when missing |
+| eqMac integration | Implemented: launch only when installed, report app/driver/orphaned-driver state |
 | Config volume | Implemented on real switches with retry/readback |
 | Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
-| LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`; status helper remains planned |
+| LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, status reporting |
 | ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
-| Native HDMI/DP software volume without eqMac | Planned: virtual AudioServerPlugIn + passthrough |
+| Native HDMI/DP software volume without eqMac | In progress: packaged loadable AudioServerPlugIn skeleton; virtual output + passthrough planned |
 
 ---
 
@@ -56,7 +56,7 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | **No GUI, launchd-friendly, JSON config** | Deliberate simplification vs eqMac |
 | **No EQ, booster, or per-app mixer in v1** | Out of scope unless explicitly added later |
 
-**Phased delivery:** Enumeration, routing, config, daemon polling, LaunchAgent controls, eqMac integration, and ScalarWebAPI wake support are implemented. A future phase adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can eventually provide HDMI/DP volume-key support without eqMac.
+**Phased delivery:** Enumeration, routing, config migration, daemon polling, LaunchAgent controls, eqMac fallback, Native driver lifecycle/package detection, and ScalarWebAPI wake support are implemented. The active driver phase adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can provide HDMI/DP volume-key support without eqMac.
 
 ---
 
@@ -66,13 +66,13 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 
 | Requirement | Approach |
 |-------------|----------|
-| **Volume keys work on HDMI/DP output** | Today: eqMac integration. Future: Rusty Jack virtual HAL device as system default + **software volume** in daemon (eqMac-style passthrough); see §0 and Phase 7 |
+| **Volume keys work on HDMI/DP output** | Today: eqMac integration when already installed. Native path in progress: Rusty Jack virtual HAL device as system default + **software volume** in daemon (eqMac-style passthrough); see §0 and Phase 7 |
 | Redirect system sound to HDMI/DP | Set macOS **default output device** via CoreAudio HAL (`kAudioHardwarePropertyDefaultOutputDevice`); virtual device becomes default once driver exists |
 | List HDMI outputs | Enumerate output devices; filter by **transport type** and/or UID/name rules |
-| launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, and `upgrade`; status helper remains planned |
+| launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, and status reporting |
 | Periodic inspection + auto-switch | Shipped polling daemon with config reload; property listeners remain future refinement |
 | JSON configuration | `~/.config/rusty-jack/config.json` (path overridable) |
-| Homebrew distribution | Planned; current install path is `make install` |
+| Homebrew distribution | Implemented through the tap workflow/formula; source install path is `make install` |
 | **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent and removes the plist; config/log purge is future work |
 | **Intel + Apple Silicon** | Cross-compile both targets; release **universal** binary + per-arch Homebrew bottles |
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
@@ -1134,6 +1134,6 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 
 ---
 
-*Document version: 1.7 — current routing daemon, eqMac integration, LaunchAgent controls, and ScalarWebAPI wake support; native HDMI/DP virtual driver remains future work.*
+*Document version: 1.8 — current routing daemon, eqMac fallback, LaunchAgent controls, ScalarWebAPI wake support, and packaged HAL driver skeleton; native HDMI/DP virtual output and passthrough remain future work.*
 
 Copyright (c) 2026 Henrique Andrade / thehcma.

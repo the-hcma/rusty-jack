@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Validate the packaged Rusty Jack CoreAudio HAL driver bundle layout.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+BUNDLE="${1:-target/share/rusty-jack/RustyJack.driver}"
+INFO="${BUNDLE}/Contents/Info.plist"
+EXECUTABLE="${BUNDLE}/Contents/MacOS/RustyJack"
+EXPECTED_VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+
+if [[ ! -d "$BUNDLE" ]]; then
+  echo "error: missing bundle: $BUNDLE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$INFO" ]]; then
+  echo "error: missing Info.plist: $INFO" >&2
+  exit 1
+fi
+
+if [[ ! -x "$EXECUTABLE" ]]; then
+  echo "error: missing executable: $EXECUTABLE" >&2
+  exit 1
+fi
+
+plutil -lint "$INFO" >/dev/null
+
+assert_plist_value() {
+  local key="$1"
+  local expected="$2"
+  local actual
+  actual="$(plutil -extract "$key" raw -o - "$INFO")"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "error: $key is '$actual', expected '$expected'" >&2
+    exit 1
+  fi
+}
+
+assert_plist_value CFBundleIdentifier com.the-hcma.rusty-jack.driver
+assert_plist_value CFBundleExecutable RustyJack
+assert_plist_value CFBundlePackageType BNDL
+assert_plist_value CFBundleShortVersionString "$EXPECTED_VERSION"
+assert_plist_value CFBundleVersion "$EXPECTED_VERSION"
+
+if ! plutil -extract CFPlugInFactories raw -o - "$INFO" >/dev/null; then
+  echo "error: missing CFPlugInFactories" >&2
+  exit 1
+fi
+
+if ! plutil -extract CFPlugInTypes raw -o - "$INFO" >/dev/null; then
+  echo "error: missing CFPlugInTypes" >&2
+  exit 1
+fi
+
+if ! nm -gU "$EXECUTABLE" | awk '{ print $3 }' | grep -qx _RustyJackDriverFactory; then
+  echo "error: RustyJackDriverFactory is not exported by $EXECUTABLE" >&2
+  exit 1
+fi
+
+echo "RustyJack.driver bundle is valid: $BUNDLE"

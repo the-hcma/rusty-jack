@@ -140,6 +140,15 @@ The driver is installed to:
 
 After installing, restart audio apps if they do not immediately see the virtual device. `rusty-jack status` reports whether the driver is installed and where.
 
+Packages include the bundle at `share/rusty-jack/RustyJack.driver`. Source installs can build the same layout with `make install`, or just validate the packaged bundle with:
+
+```bash
+./scripts/build-driver-bundle
+./scripts/validate-driver-bundle
+```
+
+The current bundle is a loadable HAL skeleton. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle; the virtual output device and passthrough software-volume pipeline are the next driver milestone.
+
 ### Pause, Resume, Uninstall
 
 ```bash
