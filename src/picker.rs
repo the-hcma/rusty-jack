@@ -426,6 +426,12 @@ pub fn volume_for_preferred_pick(
     (preferred_uid == picked_uid).then_some(volume)
 }
 
+/// True when a picker selection is an intentional override of daemon policy.
+#[must_use]
+pub fn selection_overrides_preferred(preferred_uid: Option<&str>, picked_uid: &str) -> bool {
+    preferred_uid.is_some_and(|preferred_uid| preferred_uid != picked_uid)
+}
+
 /// Switch to the chosen list index.
 pub fn pick_and_switch(
     hal: &dyn AudioHal,
@@ -682,6 +688,13 @@ mod tests {
     }
 
     #[test]
+    fn test_selection_overrides_preferred() {
+        assert!(selection_overrides_preferred(Some("hdmi"), "builtin"));
+        assert!(!selection_overrides_preferred(Some("hdmi"), "hdmi"));
+        assert!(!selection_overrides_preferred(None, "builtin"));
+    }
+
+    #[test]
     fn test_pick_and_switch_sets_volume_for_preferred() {
         let hal = MockHal::new(vec![
             hdmi_device("builtin", "Built-in"),
@@ -699,10 +712,16 @@ mod tests {
         .unwrap();
         assert_eq!(
             hal.volume_calls(),
-            vec![crate::coreaudio::mock::SetVolumeCall {
-                uid: "hdmi-1".into(),
-                percent: 42,
-            }]
+            vec![
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi-1".into(),
+                    percent: 42,
+                },
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi-1".into(),
+                    percent: 42,
+                }
+            ]
         );
     }
 }

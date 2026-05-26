@@ -3,11 +3,19 @@
 use crate::apply::print_text;
 use crate::config::{load_config_optional, resolve_config_path, Config};
 use crate::coreaudio::AudioHal;
+use crate::launchd::{
+    daemon_status, pause_daemon_with_reason, DaemonPauseReason, DaemonStatus, PauseResult,
+};
+use crate::list_fmt::{terminal_supports_color, ANSI_CYAN, ANSI_RESET};
+use crate::output_device::OutputDevice;
 use crate::picker::{
     pick_and_switch, pick_device_index_with_notes, pick_device_index_with_refreshed_notes,
-    preferred_uid_from_config, volume_for_preferred_pick, PickSelection, PickerCancelled,
+    preferred_uid_from_config, selection_overrides_preferred, volume_for_preferred_pick,
+    PickSelection, PickerCancelled,
 };
+use crate::volume_memory::{remember_active_non_preferred, remembered_volume};
 use anyhow::Result;
+use dialoguer::Confirm;
 use std::path::Path;
 
 /// Show devices and switch to the user's choice.
@@ -69,7 +77,29 @@ pub fn run(
                 .as_ref()
                 .map(|c| c.also_set_system_output)
                 .unwrap_or(true);
-            let volume = volume_for_preferred_pick(config.as_ref(), &list.devices, &device.uid);
+            let volume = volume_for_preferred_pick(config.as_ref(), &list.devices, &device.uid)
+                .or_else(|| remembered_volume(&device.uid))
+                .or_else(|| volume_for_manual_pick(hal, &list.devices, &device.uid));
+            let pause_reason =
+                match maybe_pause_daemon_for_override(json, preferred_uid.as_deref(), device)? {
+                    PickerOverridePause::Continue(reason) => reason,
+                    PickerOverridePause::Cancelled => {
+                        if json {
+                            let value = serde_json::to_string_pretty(&PickerCancelled::new())?;
+                            println!("{value}");
+                        } else {
+                            println!("Cancelled. Daemon is still running.");
+                        }
+                        return Ok(());
+                    }
+                };
+            remember_active_non_preferred(
+                hal,
+                &list.devices,
+                preferred_uid.as_deref(),
+                &device.uid,
+            )
+            .map_err(anyhow::Error::new)?;
 
             let result = pick_and_switch(
                 hal,
@@ -88,6 +118,10 @@ pub fn run(
                 println!("{value}");
             } else {
                 print_text(&result, &list);
+                if let Some(reason) = pause_reason {
+                    println!();
+                    println!("{}", reason.message());
+                }
             }
         }
     }
@@ -101,6 +135,79 @@ fn load_picker_config(config_path: Option<&Path>) -> Result<Option<Config>> {
     };
     let explicit = config_path.is_some();
     Ok(load_config_optional(&path, explicit)?)
+}
+
+fn volume_for_manual_pick(
+    hal: &dyn AudioHal,
+    devices: &[OutputDevice],
+    picked_uid: &str,
+) -> Option<u8> {
+    let active_uid = devices
+        .iter()
+        .find(|device| device.is_active)
+        .map(|device| device.uid.as_str())?;
+    if active_uid == picked_uid {
+        return None;
+    }
+
+    hal.output_volume_percent(active_uid)
+}
+
+enum PickerOverridePause {
+    Continue(Option<DaemonPauseReason>),
+    Cancelled,
+}
+
+fn maybe_pause_daemon_for_override(
+    json: bool,
+    preferred_uid: Option<&str>,
+    device: &OutputDevice,
+) -> Result<PickerOverridePause> {
+    if !selection_overrides_preferred(preferred_uid, &device.uid) {
+        return Ok(PickerOverridePause::Continue(None));
+    }
+
+    if !matches!(
+        daemon_status().map_err(anyhow::Error::new)?,
+        DaemonStatus::Running { .. }
+    ) {
+        return Ok(PickerOverridePause::Continue(None));
+    }
+
+    if json || !crate::setup::terminal_is_interactive() {
+        anyhow::bail!(
+            "picker selected `{}` while the daemon is running; rerun interactively to confirm pausing auto-routing, or run `rusty-jack pause` first",
+            device.friendly_label()
+        );
+    }
+
+    let label = device.friendly_label();
+    println!(
+        "The daemon is running. Picking {label} instead of the configured preferred output will pause auto-routing until you run `rusty-jack resume`."
+    );
+    let prompt = if terminal_supports_color() {
+        format!("{ANSI_CYAN}Continue{ANSI_RESET}")
+    } else {
+        "Continue".into()
+    };
+    let confirmed = Confirm::new()
+        .with_prompt(prompt)
+        .default(true)
+        .interact()?;
+
+    if !confirmed {
+        return Ok(PickerOverridePause::Cancelled);
+    }
+
+    let reason = DaemonPauseReason::picker_override(
+        device.uid.clone(),
+        label,
+        preferred_uid.map(str::to_string),
+    );
+    match pause_daemon_with_reason(Some(reason.clone())).map_err(anyhow::Error::new)? {
+        PauseResult::Paused { .. } => Ok(PickerOverridePause::Continue(Some(reason))),
+        PauseResult::NotInstalled { .. } => Ok(PickerOverridePause::Continue(None)),
+    }
 }
 
 #[cfg(test)]
@@ -144,6 +251,38 @@ mod tests {
     }
 
     #[test]
+    fn test_run_picker_preserves_volume_for_manual_pick() {
+        let hal = MockHal::new(vec![
+            device("builtin", "Built-in Output", true),
+            OutputDevice {
+                transport: TransportKind::Hdmi,
+                monitor_name: Some("TV".into()),
+                uid: "hdmi".into(),
+                name: "HDMI".into(),
+                ..device("hdmi", "HDMI", false)
+            },
+        ])
+        .with_default("builtin")
+        .with_output_volume(33);
+
+        run(&hal, true, Some(1), None).unwrap();
+
+        assert_eq!(
+            hal.volume_calls(),
+            vec![
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi".into(),
+                    percent: 33,
+                },
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi".into(),
+                    percent: 33,
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn test_run_picker_no_change_json() {
         let hal =
             MockHal::new(vec![device("builtin", "Built-in Output", true)]).with_default("builtin");
@@ -180,10 +319,16 @@ mod tests {
         run(&hal, true, Some(1), Some(file.path())).unwrap();
         assert_eq!(
             hal.volume_calls(),
-            vec![crate::coreaudio::mock::SetVolumeCall {
-                uid: "hdmi".into(),
-                percent: 25,
-            }]
+            vec![
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi".into(),
+                    percent: 25,
+                },
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi".into(),
+                    percent: 25,
+                }
+            ]
         );
     }
 

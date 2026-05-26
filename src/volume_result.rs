@@ -25,7 +25,7 @@ impl Default for VolumeEnsureOptions {
     fn default() -> Self {
         Self {
             max_attempts: 10,
-            initial_delay: Duration::from_millis(100),
+            initial_delay: Duration::ZERO,
             retry_delay: Duration::from_millis(200),
             tolerance: 1,
         }

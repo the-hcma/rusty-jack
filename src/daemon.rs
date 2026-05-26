@@ -1,12 +1,16 @@
 //! Background supervisor loop for `rusty-jack daemon`.
 
 use crate::activity::ActivityMonitor;
-use crate::apply::{switch_output, ApplyResult, SwitchOptions};
+use crate::apply::{preferred_uid, switch_output, volume_for_target, ApplyResult, SwitchOptions};
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
-use crate::eqmac::{ensure_eqmac_for_target, format_ensure_messages};
+use crate::eqmac::{
+    ensure_eqmac_for_target, format_ensure_messages, EqMacEnsureAction, EqMacEnsureResult,
+};
+use crate::output_device::OutputDevice;
 use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
 use crate::system_default::DeviceList;
+use crate::volume_memory::remember_active_non_preferred;
 use crate::RustyJackError;
 use std::path::Path;
 use std::thread;
@@ -71,6 +75,18 @@ pub fn daemon_tick(
     config: &Config,
     reason: DaemonTickReason,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
+    daemon_tick_with_eqmac(hal, config, reason, &ensure_eqmac_for_target)
+}
+
+type EqMacEnsureFn<'a> =
+    dyn Fn(&[OutputDevice], &str) -> Result<EqMacEnsureResult, RustyJackError> + 'a;
+
+fn daemon_tick_with_eqmac(
+    hal: &dyn AudioHal,
+    config: &Config,
+    reason: DaemonTickReason,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
+) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     let list = hal.list_outputs()?;
     if !config.auto_switch {
         return Ok((DaemonTickResult::AutoSwitchDisabled, list));
@@ -78,14 +94,29 @@ pub fn daemon_tick(
 
     let target = select_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
-    let current = hal.default_output_uid()?;
-    if preserve_current_output_on_startup(reason, current.as_deref(), &target.uid) {
-        let result = ApplyResult::NoChange {
-            uid: target.uid,
-            device_name: target.name,
-            monitor_name: target.monitor_name,
-            reason: "default output already on target".into(),
-        };
+    let preferred_uid = preferred_uid(config, &list.devices);
+    let default_uid = hal.default_output_uid()?;
+    let current_uid = current_routed_output_uid(&list, default_uid.as_deref());
+
+    if current_uid.as_deref() == Some(target.uid.as_str()) {
+        if reason == DaemonTickReason::UserActivity {
+            if let Some(fallback) =
+                sony_activity_fallback_target(config, &list.devices, &target.uid)
+            {
+                let result = switch_daemon_target(
+                    hal,
+                    config,
+                    &list,
+                    &fallback,
+                    preferred_uid.as_deref(),
+                    ensure_eqmac,
+                )?;
+                return Ok((DaemonTickResult::Switched(result), list));
+            }
+        }
+        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, ensure_eqmac)?;
+        ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
+        let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
 
@@ -98,35 +129,56 @@ pub fn daemon_tick(
         target
     };
 
-    if current.as_deref() == Some(target.uid.as_str()) {
-        if reason == DaemonTickReason::UserActivity {
-            if let Some(fallback) =
-                sony_activity_fallback_target(config, &list.devices, &target.uid)
-            {
-                let result = switch_daemon_target(hal, config, &list, &fallback)?;
-                return Ok((DaemonTickResult::Switched(result), list));
-            }
-        }
-        let result = ApplyResult::NoChange {
-            uid: target.uid,
-            device_name: target.name,
-            monitor_name: target.monitor_name,
-            reason: "default output already on target".into(),
-        };
+    if current_uid.as_deref() == Some(target.uid.as_str()) {
+        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, ensure_eqmac)?;
+        ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
+        let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
 
-    let result = switch_daemon_target(hal, config, &list, &target)?;
+    let result = switch_daemon_target(
+        hal,
+        config,
+        &list,
+        &target,
+        preferred_uid.as_deref(),
+        ensure_eqmac,
+    )?;
 
     Ok((DaemonTickResult::Switched(result), list))
 }
 
-fn preserve_current_output_on_startup(
+fn no_change_result(target: &RoutingTarget) -> ApplyResult {
+    ApplyResult::NoChange {
+        uid: target.uid.clone(),
+        device_name: target.name.clone(),
+        monitor_name: target.monitor_name.clone(),
+        reason: "active output already on target".into(),
+    }
+}
+
+fn current_routed_output_uid(list: &DeviceList, default_uid: Option<&str>) -> Option<String> {
+    list.devices
+        .iter()
+        .find(|device| device.is_active)
+        .map(|device| device.uid.clone())
+        .or_else(|| default_uid.map(str::to_string))
+}
+
+fn ensure_startup_volume(
+    hal: &dyn AudioHal,
+    config: &Config,
     reason: DaemonTickReason,
-    current_uid: Option<&str>,
-    target_uid: &str,
-) -> bool {
-    reason == DaemonTickReason::Startup && current_uid == Some(target_uid)
+    target: &RoutingTarget,
+    preferred_uid: &Option<String>,
+) -> Result<(), RustyJackError> {
+    if reason != DaemonTickReason::Startup {
+        return Ok(());
+    }
+    if let Some(volume) = volume_for_target(config, target, preferred_uid) {
+        let _ = hal.set_output_volume(&target.uid, volume)?;
+    }
+    Ok(())
 }
 
 fn switch_daemon_target(
@@ -134,18 +186,24 @@ fn switch_daemon_target(
     config: &Config,
     list: &DeviceList,
     target: &RoutingTarget,
+    preferred_uid: Option<&str>,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
 ) -> Result<ApplyResult, RustyJackError> {
-    let eqmac = ensure_eqmac_for_target(&list.devices, &target.uid)?;
+    let eqmac = ensure_eqmac(&list.devices, &target.uid)?;
     for line in format_ensure_messages(eqmac) {
         eprintln!("{line}");
     }
+
+    remember_active_non_preferred(hal, &list.devices, preferred_uid, &target.uid)?;
+    let preferred_uid = preferred_uid.map(str::to_string);
+    let volume = volume_for_target(config, target, &preferred_uid);
 
     let result = switch_output(
         hal,
         target,
         &SwitchOptions {
             also_set_system_output: config.also_set_system_output,
-            volume: config.volume,
+            volume,
         },
     )?;
 
@@ -154,6 +212,24 @@ fn switch_daemon_target(
     }
 
     Ok(result)
+}
+
+fn ensure_eqmac_for_daemon_target(
+    devices: &[OutputDevice],
+    target_uid: &str,
+    reason: DaemonTickReason,
+    ensure_eqmac: &EqMacEnsureFn<'_>,
+) -> Result<(), RustyJackError> {
+    let eqmac = ensure_eqmac(devices, target_uid)?;
+    let should_log = matches!(eqmac.action, EqMacEnsureAction::Launched)
+        || (reason == DaemonTickReason::Startup
+            && matches!(eqmac.action, EqMacEnsureAction::NotInstalled));
+    if should_log {
+        for line in format_ensure_messages(eqmac) {
+            eprintln!("{line}");
+        }
+    }
+    Ok(())
 }
 
 fn sony_checked_target_or_fallback(
@@ -360,6 +436,23 @@ mod tests {
         }
     }
 
+    fn no_op_eqmac(
+        _devices: &[OutputDevice],
+        _target_uid: &str,
+    ) -> Result<EqMacEnsureResult, RustyJackError> {
+        Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotNeeded,
+        })
+    }
+
+    fn daemon_tick_no_eqmac(
+        hal: &dyn AudioHal,
+        config: &Config,
+        reason: DaemonTickReason,
+    ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
+        daemon_tick_with_eqmac(hal, config, reason, &no_op_eqmac)
+    }
+
     #[test]
     fn test_daemon_tick_switches_when_needed() {
         let hal = MockHal::new(vec![
@@ -369,7 +462,8 @@ mod tests {
         .with_default("builtin");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
@@ -380,7 +474,8 @@ mod tests {
         let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
@@ -395,29 +490,127 @@ mod tests {
         .with_default("hdmi-1");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Startup).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Startup).unwrap();
 
         assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert!(hal.set_calls().is_empty());
     }
 
     #[test]
-    fn test_preserve_current_output_only_on_startup_match() {
-        assert!(preserve_current_output_on_startup(
-            DaemonTickReason::Startup,
-            Some("hdmi-1"),
-            "hdmi-1"
-        ));
-        assert!(!preserve_current_output_on_startup(
+    fn test_daemon_tick_no_change_when_virtual_default_routes_to_target() {
+        let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
+        hdmi.is_active = true;
+        let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
+
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert!(hal.set_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_no_change_checks_eqmac_health_for_hdmi_target() {
+        let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
+        let calls = std::sync::Mutex::new(Vec::<String>::new());
+        let ensure_eqmac = |devices: &[OutputDevice], target_uid: &str| {
+            assert!(devices.iter().any(|device| device.uid == target_uid));
+            calls.lock().unwrap().push(target_uid.to_string());
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            })
+        };
+
+        let (result, _list) = daemon_tick_with_eqmac(
+            &hal,
+            &test_config("hdmi-1"),
             DaemonTickReason::Scheduled,
-            Some("hdmi-1"),
-            "hdmi-1"
-        ));
-        assert!(!preserve_current_output_on_startup(
-            DaemonTickReason::Startup,
-            Some("builtin"),
-            "hdmi-1"
-        ));
+            &ensure_eqmac,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert_eq!(calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert!(hal.set_calls().is_empty());
+        assert!(hal.volume_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_startup_applies_volume_when_already_on_target() {
+        let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
+        let mut config = test_config("hdmi-1");
+        config.volume = Some(25);
+
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert!(hal.set_calls().is_empty());
+        assert_eq!(
+            hal.volume_calls(),
+            vec![crate::coreaudio::mock::SetVolumeCall {
+                uid: "hdmi-1".into(),
+                percent: 25,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_daemon_scheduled_no_change_leaves_volume_alone() {
+        let hal = MockHal::new(vec![hdmi_device("hdmi-1", "DELL U3219Q")]).with_default("hdmi-1");
+        let mut config = test_config("hdmi-1");
+        config.volume = Some(25);
+
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Scheduled).unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert!(hal.volume_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_startup_no_change_on_fallback_does_not_use_preferred_volume() {
+        let hal = MockHal::new(vec![builtin_speakers("BuiltInSpeakerDevice")])
+            .with_default("BuiltInSpeakerDevice");
+        let mut config = test_config("missing-hdmi");
+        config.volume = Some(25);
+
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert!(hal.set_calls().is_empty());
+        assert!(hal.volume_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_switch_sets_config_volume_before_and_after_route_change() {
+        let hal = MockHal::new(vec![
+            builtin_speakers("BuiltInSpeakerDevice"),
+            hdmi_device("hdmi-1", "DELL U3219Q"),
+        ])
+        .with_default("BuiltInSpeakerDevice");
+        let mut config = test_config("hdmi-1");
+        config.volume = Some(25);
+
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Startup).unwrap();
+
+        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert_eq!(
+            hal.volume_calls(),
+            vec![
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi-1".into(),
+                    percent: 25,
+                },
+                crate::coreaudio::mock::SetVolumeCall {
+                    uid: "hdmi-1".into(),
+                    percent: 25,
+                }
+            ]
+        );
     }
 
     #[test]
@@ -430,7 +623,8 @@ mod tests {
         let mut config = test_config("hdmi-1");
         config.auto_switch = false;
 
-        let (result, _list) = daemon_tick(&hal, &config, DaemonTickReason::Scheduled).unwrap();
+        let (result, _list) =
+            daemon_tick_no_eqmac(&hal, &config, DaemonTickReason::Scheduled).unwrap();
 
         assert_eq!(result, DaemonTickResult::AutoSwitchDisabled);
         assert!(hal.set_calls().is_empty());
@@ -442,7 +636,8 @@ mod tests {
             .with_default("disconnected-hdmi");
 
         let (result, _list) =
-            daemon_tick(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled).unwrap();
+            daemon_tick_no_eqmac(&hal, &test_config("hdmi-1"), DaemonTickReason::Scheduled)
+                .unwrap();
 
         assert!(matches!(result, DaemonTickResult::Switched(_)));
         assert_eq!(

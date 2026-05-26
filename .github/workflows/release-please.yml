@@ -1,8 +1,7 @@
 name: Release Please
 
 on:
-  push:
-    branches: [main]
+  # Temporarily disabled while Homebrew tap automation is being sorted out.
   workflow_dispatch:
 
 permissions:

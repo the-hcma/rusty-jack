@@ -9,6 +9,8 @@ use serde::Serialize;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 
+const IMPLICIT_BUILTIN_FALLBACK_LABEL: &str = "built-in output (automatic when available)";
+
 /// Result of creating or preserving the default user config.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -21,6 +23,8 @@ pub enum ConfigSetupResult {
         fallback_uid: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         fallback_label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        volume: Option<u8>,
     },
     Kept {
         config_path: String,
@@ -69,7 +73,8 @@ pub fn ensure_default_config(
         default_fallback_device_index(&list.devices, &preferred.uid)
     };
     let fallback = fallback_index.map(|index| &list.devices[index]);
-    let config = render_config_json(preferred, fallback)?;
+    let volume = hal.output_volume_percent(&preferred.uid);
+    let config = render_config_json(preferred, fallback, volume)?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
@@ -82,6 +87,7 @@ pub fn ensure_default_config(
         preferred_label: preferred.friendly_label(),
         fallback_uid: fallback.map(|device| device.uid.clone()),
         fallback_label: fallback.map(OutputDevice::friendly_label),
+        volume,
     })
 }
 
@@ -128,6 +134,7 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             config_path,
             preferred_label,
             fallback_label,
+            volume,
             ..
         } => {
             println!("Created config");
@@ -135,8 +142,13 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             println!("  preferred: {preferred_label}");
             println!(
                 "  fallback:  {}",
-                fallback_label.as_deref().unwrap_or("(none)")
+                fallback_label
+                    .as_deref()
+                    .unwrap_or(IMPLICIT_BUILTIN_FALLBACK_LABEL)
             );
+            if let Some(volume) = volume {
+                println!("  volume:    {volume}%");
+            }
         }
         ConfigSetupResult::Kept { config_path } => {
             println!("Config already exists");
@@ -226,7 +238,7 @@ fn prompt_for_fallback_device(
         .iter()
         .map(|choice| match choice {
             Some(index) => setup_device_label(&devices[*index]),
-            None => "No fallback".into(),
+            None => format!("Use {IMPLICIT_BUILTIN_FALLBACK_LABEL}"),
         })
         .collect::<Vec<_>>();
     let selection = Select::new()
@@ -286,11 +298,12 @@ fn setup_device_label(device: &OutputDevice) -> String {
 pub(crate) fn render_config_json(
     preferred: &OutputDevice,
     fallback: Option<&OutputDevice>,
+    volume: Option<u8>,
 ) -> Result<String, RustyJackError> {
     let fallback_uids = fallback
         .map(|device| vec![device.uid.clone()])
         .unwrap_or_default();
-    let value = serde_json::json!({
+    let mut value = serde_json::json!({
         "version": 1,
         "auto_switch": true,
         "poll_interval_ms": 2000,
@@ -303,6 +316,9 @@ pub(crate) fn render_config_json(
         "fallback_uids": fallback_uids,
         "also_set_system_output": true,
     });
+    if let Some(volume) = volume {
+        value["volume"] = serde_json::json!(volume);
+    }
     serde_json::to_string_pretty(&value)
         .map(|json| format!("{json}\n"))
         .map_err(|err| RustyJackError::Config(format!("could not render config: {err}")))
@@ -386,10 +402,20 @@ mod tests {
             false,
         );
 
-        let json = render_config_json(&preferred, Some(&fallback)).unwrap();
+        let json = render_config_json(&preferred, Some(&fallback), Some(13)).unwrap();
 
         assert!(json.contains("\"uid\": \"hdmi\""));
         assert!(json.contains("\"speakers\""));
+        assert!(json.contains("\"volume\": 13"));
         assert!(json.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_render_config_json_omits_unreadable_volume() {
+        let preferred = device("hdmi", "HDMI", TransportKind::Hdmi, true);
+
+        let json = render_config_json(&preferred, None, None).unwrap();
+
+        assert!(!json.contains("\"volume\""));
     }
 }

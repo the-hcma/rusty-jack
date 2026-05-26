@@ -1,7 +1,7 @@
 //! launchd LaunchAgent management (macOS).
 
 use crate::{version, RustyJackError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -86,6 +86,8 @@ pub enum PauseResult {
         label: String,
         plist_path: String,
         was_loaded: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pause_reason: Option<DaemonPauseReason>,
     },
     NotInstalled {
         plist_path: String,
@@ -116,6 +118,8 @@ pub enum DaemonStatus {
         label: String,
         plist_path: String,
         service: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pause_reason: Option<DaemonPauseReason>,
     },
     NotInstalled {
         plist_path: String,
@@ -125,6 +129,49 @@ pub enum DaemonStatus {
         plist_path: String,
         message: String,
     },
+}
+
+/// Why the LaunchAgent is intentionally paused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DaemonPauseReason {
+    PickerOverride {
+        selected_uid: String,
+        selected_label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preferred_uid: Option<String>,
+    },
+}
+
+impl DaemonPauseReason {
+    #[must_use]
+    pub fn picker_override(
+        selected_uid: String,
+        selected_label: String,
+        preferred_uid: Option<String>,
+    ) -> Self {
+        Self::PickerOverride {
+            selected_uid,
+            selected_label,
+            preferred_uid,
+        }
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::PickerOverride { .. } => "picker override",
+        }
+    }
+
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::PickerOverride { selected_label, .. } => {
+                format!("user picked {selected_label}; daemon is paused until `rusty-jack resume`")
+            }
+        }
+    }
 }
 
 /// Path to the user LaunchAgent plist (`~/Library/LaunchAgents/<label>.plist`).
@@ -163,6 +210,50 @@ fn plist_path_or_err() -> Result<PathBuf, RustyJackError> {
     launch_agent_plist_path().ok_or_else(|| {
         RustyJackError::Launchd("HOME is not set; cannot locate LaunchAgents".into())
     })
+}
+
+fn pause_reason_path() -> Option<PathBuf> {
+    crate::config::default_config_path().and_then(|path| {
+        path.parent()
+            .map(|parent| parent.join("daemon-pause-reason.json"))
+    })
+}
+
+fn write_pause_reason(reason: Option<&DaemonPauseReason>) -> Result<(), RustyJackError> {
+    let Some(path) = pause_reason_path() else {
+        return Ok(());
+    };
+
+    if let Some(reason) = reason {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
+        }
+        let raw = serde_json::to_string_pretty(reason)
+            .map_err(|err| RustyJackError::Launchd(format!("pause reason JSON: {err}")))?;
+        std::fs::write(path, format!("{raw}\n")).map_err(RustyJackError::Io)?;
+    } else if path.exists() {
+        std::fs::remove_file(path).map_err(RustyJackError::Io)?;
+    }
+
+    Ok(())
+}
+
+fn read_pause_reason() -> Result<Option<DaemonPauseReason>, RustyJackError> {
+    let Some(path) = pause_reason_path() else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|err| RustyJackError::Launchd(format!("pause reason JSON: {err}")))
+}
+
+fn clear_pause_reason() {
+    let _ = write_pause_reason(None);
 }
 
 fn home_dir_or_err() -> Result<PathBuf, RustyJackError> {
@@ -302,6 +393,7 @@ fn write_and_load_daemon(mode: LoadMode) -> Result<LoadDaemonResult, RustyJackEr
                 "launchctl bootstrap {domain} {plist_display} failed (status {bootstrap_status})"
             )));
         }
+        clear_pause_reason();
     }
 
     Ok(LoadDaemonResult {
@@ -428,6 +520,7 @@ pub fn daemon_status() -> Result<DaemonStatus, RustyJackError> {
             label: LAUNCH_AGENT_LABEL.into(),
             plist_path: plist_display,
             service,
+            pause_reason: read_pause_reason().ok().flatten(),
         }),
         Err(err) => Ok(DaemonStatus::Unknown {
             label: LAUNCH_AGENT_LABEL.into(),
@@ -447,8 +540,16 @@ fn parse_launchctl_pid(output: &str) -> Option<u32> {
 
 /// Stop the daemon and prevent launchd from restarting it (`pause`). Keeps the plist installed.
 pub fn pause_daemon() -> Result<PauseResult, RustyJackError> {
+    pause_daemon_with_reason(None)
+}
+
+/// Stop the daemon and record why it is paused.
+pub fn pause_daemon_with_reason(
+    pause_reason: Option<DaemonPauseReason>,
+) -> Result<PauseResult, RustyJackError> {
     let plist_path = plist_path_or_err()?;
     if !plist_path.exists() {
+        clear_pause_reason();
         return Ok(PauseResult::NotInstalled {
             plist_path: plist_path_display(&plist_path)?,
         });
@@ -457,11 +558,13 @@ pub fn pause_daemon() -> Result<PauseResult, RustyJackError> {
     let domain = gui_domain()?;
     let was_loaded = is_job_loaded(&domain, LAUNCH_AGENT_LABEL)?;
     stop_job_best_effort(&domain, &plist_path);
+    write_pause_reason(pause_reason.as_ref())?;
 
     Ok(PauseResult::Paused {
         label: LAUNCH_AGENT_LABEL.into(),
         plist_path: plist_path_display(&plist_path)?,
         was_loaded,
+        pause_reason,
     })
 }
 
@@ -469,6 +572,7 @@ pub fn pause_daemon() -> Result<PauseResult, RustyJackError> {
 pub fn resume_daemon() -> Result<ResumeResult, RustyJackError> {
     let plist_path = plist_path_or_err()?;
     if !plist_path.exists() {
+        clear_pause_reason();
         return Ok(ResumeResult::NotInstalled {
             plist_path: plist_path_display(&plist_path)?,
         });
@@ -477,6 +581,7 @@ pub fn resume_daemon() -> Result<ResumeResult, RustyJackError> {
     let domain = gui_domain()?;
     let plist_display = plist_path_display(&plist_path)?;
     if is_job_loaded(&domain, LAUNCH_AGENT_LABEL)? {
+        clear_pause_reason();
         return Ok(ResumeResult::AlreadyRunning {
             label: LAUNCH_AGENT_LABEL.into(),
             plist_path: plist_display,
@@ -498,16 +603,19 @@ pub fn resume_daemon() -> Result<ResumeResult, RustyJackError> {
         )));
     }
 
-    Ok(ResumeResult::Resumed {
+    let result = ResumeResult::Resumed {
         label: LAUNCH_AGENT_LABEL.into(),
         plist_path: plist_display,
-    })
+    };
+    clear_pause_reason();
+    Ok(result)
 }
 
 /// Uninstall the LaunchAgent: stop the job, disable it, and remove the plist (`disable`).
 pub fn uninstall_daemon() -> Result<DisableResult, RustyJackError> {
     let plist_path = plist_path_or_err()?;
     if !plist_path.exists() {
+        clear_pause_reason();
         return Ok(DisableResult::NotInstalled {
             plist_path: plist_path_display(&plist_path)?,
         });
@@ -517,6 +625,7 @@ pub fn uninstall_daemon() -> Result<DisableResult, RustyJackError> {
     let was_loaded = is_job_loaded(&domain, LAUNCH_AGENT_LABEL)?;
     stop_job_best_effort(&domain, &plist_path);
     std::fs::remove_file(&plist_path).map_err(RustyJackError::Io)?;
+    clear_pause_reason();
 
     Ok(DisableResult::Uninstalled {
         label: LAUNCH_AGENT_LABEL.into(),
@@ -635,6 +744,7 @@ pub fn print_pause_result(result: &PauseResult) {
             label,
             plist_path,
             was_loaded,
+            pause_reason,
         } => {
             println!("Paused rusty-jack daemon ({label})");
             println!("  plist kept:    {plist_path}");
@@ -642,6 +752,9 @@ pub fn print_pause_result(result: &PauseResult) {
                 "  was running:   {}",
                 if *was_loaded { "yes" } else { "no" }
             );
+            if let Some(reason) = pause_reason {
+                println!("  reason:        {}", reason.message());
+            }
             println!("  auto-routing stopped until `rusty-jack resume`");
         }
         PauseResult::NotInstalled { plist_path } => {
@@ -803,6 +916,27 @@ mod tests {
         })
         .unwrap();
         assert!(json.contains("\"status\":\"not_installed\""));
+    }
+
+    #[test]
+    fn test_picker_pause_reason_serializes() {
+        let reason = DaemonPauseReason::picker_override(
+            "builtin".into(),
+            "Built-in Output".into(),
+            Some("hdmi-1".into()),
+        );
+        let json = serde_json::to_string(&PauseResult::Paused {
+            label: LAUNCH_AGENT_LABEL.into(),
+            plist_path: "/tmp/test.plist".into(),
+            was_loaded: true,
+            pause_reason: Some(reason.clone()),
+        })
+        .unwrap();
+
+        assert!(json.contains("\"status\":\"paused\""));
+        assert!(json.contains("\"pause_reason\""));
+        assert!(json.contains("\"kind\":\"picker_override\""));
+        assert!(reason.message().contains("rusty-jack resume"));
     }
 
     #[test]
