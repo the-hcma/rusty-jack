@@ -1,5 +1,6 @@
 //! Live CoreAudio HAL (`coreaudio-sys`).
 
+use crate::coreaudio::display::preferred_output_name;
 use crate::coreaudio::property::{
     all_device_ids, default_output_device_id, device_has_output_streams, device_is_alive,
     device_name, device_transport_type, device_uid,
@@ -48,14 +49,15 @@ impl AudioHal for CoreAudioHal {
                 Err(_) => continue,
             };
 
-            let name = device_name(id).unwrap_or_else(|_| uid.clone());
+            let transport_code = device_transport_type(id).unwrap_or(0);
+            let transport = TransportKind::from_fourcc(transport_code);
+            let is_alive = device_is_alive(id).unwrap_or(false);
+            let raw_name = device_name(id).unwrap_or_else(|_| uid.clone());
+            let name = preferred_output_name(&uid, &raw_name, transport, is_alive);
             if OutputDevice::is_excluded_by_name(&name) {
                 continue;
             }
 
-            let transport_code = device_transport_type(id).unwrap_or(0);
-            let transport = TransportKind::from_fourcc(transport_code);
-            let is_alive = device_is_alive(id).unwrap_or(false);
             out.push(OutputDevice {
                 id,
                 uid,

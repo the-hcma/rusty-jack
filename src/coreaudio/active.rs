@@ -97,6 +97,15 @@ mod tests {
     }
 
     #[test]
+    fn test_eqmac_virtual_maps_to_monitor_name() {
+        let devices = vec![device("hdmi", "DELL U3219Q", None, TransportKind::Hdmi)];
+        assert_eq!(
+            resolve_active_uid("EQMOutputCapture", "DELL U3219Q (eqMac)", &devices).as_deref(),
+            Some("hdmi")
+        );
+    }
+
+    #[test]
     fn test_eqmac_internal_speakers_maps_to_builtin() {
         let devices = vec![
             device("builtin", "Built-in Output", None, TransportKind::BuiltIn),
