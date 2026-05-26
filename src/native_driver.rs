@@ -1,5 +1,9 @@
 //! Lifecycle helpers for the Rusty Jack CoreAudio HAL driver bundle.
 
+use crate::eqmac::{
+    eqmac_driver_backup_info, eqmac_driver_backup_path, remove_eqmac_driver_backup_info,
+    write_eqmac_driver_backup_info, EqMacDriverBackupInfo, EQMAC_HAL_DRIVER_PATH,
+};
 use crate::hdmi_displayport_volume_control::{
     connected_hdmi_displayport_output_present, native_driver_info, native_driver_scope_note,
     RUSTY_JACK_DRIVER_BUNDLE_ID,
@@ -10,6 +14,7 @@ use crate::RustyJackError;
 use dialoguer::Confirm;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub const RUSTY_JACK_DRIVER_BUNDLE_NAME: &str = "RustyJack.driver";
 
@@ -76,6 +81,55 @@ pub enum NativeDriverUpgradeResult {
         install_path: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DriverSwapInResult {
+    SwappedIn {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        eqmac_backup: Option<EqMacDriverBackupInfo>,
+        native_driver: NativeDriverInstallResult,
+    },
+    Skipped {
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DriverSwapOutResult {
+    SwappedOut {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        restored_eqmac: Option<EqMacDriverBackupInfo>,
+        native_driver: NativeDriverUninstallResult,
+    },
+    UpToDate {
+        message: String,
+    },
+    Skipped {
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwapInEqMacAction {
+    BackUpSystemDriver,
+    AlreadyBackedUp,
+    NoEqMacDriver,
+    Conflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwapOutEqMacAction {
+    RestoreBackup,
+    AlreadyRestored,
+    NoEqMacDriverState,
+    Conflict,
 }
 
 #[must_use]
@@ -264,6 +318,152 @@ pub fn upgrade_if_materially_changed(
     })
 }
 
+pub fn install_bundled_native_driver() -> Result<NativeDriverInstallResult, RustyJackError> {
+    let Some(source) = bundled_native_driver_path() else {
+        return Ok(NativeDriverInstallResult::BundleUnavailable {
+            message: bundle_unavailable_message(),
+        });
+    };
+    let source_info = crate::hal_plugin::driver_bundle_info(&source).ok_or_else(|| {
+        RustyJackError::Config(format!(
+            "driver bundle {} is missing a readable Info.plist",
+            source.display()
+        ))
+    })?;
+    let install_path = install_path_or_err()?;
+
+    if let Some(installed) = native_driver_info() {
+        if !driver_materially_changed(&source, &source_info, &installed)? {
+            return Ok(NativeDriverInstallResult::AlreadyInstalled {
+                install_path: installed.install_path,
+                version: installed.version,
+            });
+        }
+    }
+
+    install_driver_bundle(&source, &install_path)?;
+    Ok(NativeDriverInstallResult::Installed {
+        source_path: source.to_string_lossy().into_owned(),
+        install_path: install_path.to_string_lossy().into_owned(),
+        version: source_info.version,
+    })
+}
+
+pub fn remove_native_driver_if_installed() -> Result<NativeDriverUninstallResult, RustyJackError> {
+    let Some(driver) = native_driver_info() else {
+        return Ok(NativeDriverUninstallResult::NotInstalled);
+    };
+    std::fs::remove_dir_all(&driver.install_path).map_err(RustyJackError::Io)?;
+    Ok(NativeDriverUninstallResult::Removed {
+        install_path: driver.install_path,
+        version: driver.version,
+    })
+}
+
+pub fn swap_in_for_testing(interactive: bool) -> Result<DriverSwapInResult, RustyJackError> {
+    let eqmac_path = Path::new(EQMAC_HAL_DRIVER_PATH);
+    let backup_path = eqmac_backup_path_or_err()?;
+    let action = plan_swap_in(eqmac_path.exists(), backup_path.exists());
+
+    let eqmac_backup = match action {
+        SwapInEqMacAction::BackUpSystemDriver => {
+            if !interactive {
+                return Ok(DriverSwapInResult::Skipped {
+                    reason: "moving the system eqMac HAL driver requires interactive confirmation"
+                        .into(),
+                    command: Some("rusty-jack driver swap-in".into()),
+                });
+            }
+            if !confirm_system_driver_move(
+                "Back up the system eqMac HAL driver and swap in Rusty Jack for testing?",
+            )? {
+                return Ok(DriverSwapInResult::Skipped {
+                    reason: "user declined driver swap-in".into(),
+                    command: None,
+                });
+            }
+            backup_eqmac_driver(eqmac_path, &backup_path)?
+        }
+        SwapInEqMacAction::AlreadyBackedUp => eqmac_driver_backup_info(),
+        SwapInEqMacAction::NoEqMacDriver => None,
+        SwapInEqMacAction::Conflict => {
+            return Ok(DriverSwapInResult::Skipped {
+                reason: format!(
+                    "eqMac driver exists at {EQMAC_HAL_DRIVER_PATH} and a managed backup also exists at {}; inspect before swapping",
+                    backup_path.display()
+                ),
+                command: None,
+            });
+        }
+    };
+
+    let native_driver = install_bundled_native_driver()?;
+    Ok(DriverSwapInResult::SwappedIn {
+        eqmac_backup,
+        native_driver,
+    })
+}
+
+pub fn swap_out_for_testing(interactive: bool) -> Result<DriverSwapOutResult, RustyJackError> {
+    let eqmac_path = Path::new(EQMAC_HAL_DRIVER_PATH);
+    let backup_path = eqmac_backup_path_or_err()?;
+    let action = plan_swap_out(eqmac_path.exists(), backup_path.exists());
+
+    let restored_eqmac = match action {
+        SwapOutEqMacAction::RestoreBackup => {
+            if !interactive {
+                return Ok(DriverSwapOutResult::Skipped {
+                    reason:
+                        "restoring the system eqMac HAL driver requires interactive confirmation"
+                            .into(),
+                    command: Some("rusty-jack driver swap-out".into()),
+                });
+            }
+            let info = eqmac_driver_backup_info().unwrap_or_else(|| EqMacDriverBackupInfo {
+                original_path: EQMAC_HAL_DRIVER_PATH.into(),
+                backup_path: backup_path.to_string_lossy().into_owned(),
+                version: crate::hal_plugin::driver_bundle_info(&backup_path)
+                    .and_then(|info| info.version),
+                backed_up_at_unix: None,
+            });
+            if !confirm_system_driver_move(
+                "Restore the backed-up system eqMac HAL driver and remove Rusty Jack's test driver?",
+            )? {
+                return Ok(DriverSwapOutResult::Skipped {
+                    reason: "user declined driver swap-out".into(),
+                    command: None,
+                });
+            }
+            restore_eqmac_driver(&backup_path, eqmac_path)?;
+            remove_eqmac_driver_backup_info()?;
+            Some(info)
+        }
+        SwapOutEqMacAction::AlreadyRestored => None,
+        SwapOutEqMacAction::NoEqMacDriverState => None,
+        SwapOutEqMacAction::Conflict => {
+            return Ok(DriverSwapOutResult::Skipped {
+                reason: format!(
+                    "eqMac driver exists at {EQMAC_HAL_DRIVER_PATH} and a managed backup also exists at {}; inspect before restoring",
+                    backup_path.display()
+                ),
+                command: None,
+            });
+        }
+    };
+
+    let native_driver = remove_native_driver_if_installed()?;
+    if restored_eqmac.is_none() && native_driver == NativeDriverUninstallResult::NotInstalled {
+        return Ok(DriverSwapOutResult::UpToDate {
+            message: "Rusty Jack driver is absent and eqMac is already restored".into(),
+        });
+    }
+
+    Ok(DriverSwapOutResult::SwappedOut {
+        restored_eqmac,
+        native_driver,
+    })
+}
+
 pub fn print_install_result(result: &NativeDriverInstallResult) {
     match result {
         NativeDriverInstallResult::NotNeededNoHdmiDisplayPort => {}
@@ -360,9 +560,69 @@ pub fn print_upgrade_result(result: &NativeDriverUpgradeResult) {
     }
 }
 
+pub fn print_driver_swap_in_result(result: &DriverSwapInResult) {
+    match result {
+        DriverSwapInResult::SwappedIn {
+            eqmac_backup,
+            native_driver,
+        } => {
+            println!("Swapped in Rusty Jack native audio driver for testing");
+            if let Some(info) = eqmac_backup {
+                println!("  eqMac backup: {}", info.backup_path);
+                println!("  eqMac original: {}", info.original_path);
+            } else {
+                println!("  eqMac backup: not needed; system eqMac driver was not present");
+            }
+            print_install_result(native_driver);
+            println!("  restore: rusty-jack driver swap-out");
+        }
+        DriverSwapInResult::Skipped { reason, command } => {
+            println!("Skipped driver swap-in");
+            println!("  reason: {reason}");
+            if let Some(command) = command {
+                println!("  retry:  {command}");
+            }
+        }
+    }
+}
+
+pub fn print_driver_swap_out_result(result: &DriverSwapOutResult) {
+    match result {
+        DriverSwapOutResult::SwappedOut {
+            restored_eqmac,
+            native_driver,
+        } => {
+            println!("Swapped out Rusty Jack native audio driver");
+            if let Some(info) = restored_eqmac {
+                println!("  restored eqMac: {}", info.original_path);
+            } else {
+                println!("  restored eqMac: not needed; no managed backup was present");
+            }
+            print_uninstall_result(native_driver);
+        }
+        DriverSwapOutResult::UpToDate { message } => {
+            println!("Driver swap-out is up to date");
+            println!("  note: {message}");
+        }
+        DriverSwapOutResult::Skipped { reason, command } => {
+            println!("Skipped driver swap-out");
+            println!("  reason: {reason}");
+            if let Some(command) = command {
+                println!("  retry:  {command}");
+            }
+        }
+    }
+}
+
 fn install_path_or_err() -> Result<PathBuf, RustyJackError> {
     native_driver_install_path().ok_or_else(|| {
         RustyJackError::Config("HOME is not set; cannot locate HAL Plug-Ins directory".into())
+    })
+}
+
+fn eqmac_backup_path_or_err() -> Result<PathBuf, RustyJackError> {
+    eqmac_driver_backup_path().ok_or_else(|| {
+        RustyJackError::Config("HOME is not set; cannot locate eqMac driver backup path".into())
     })
 }
 
@@ -409,6 +669,48 @@ fn install_driver_bundle(source: &Path, destination: &Path) -> Result<(), RustyJ
     copy_dir_all(source, destination)
 }
 
+fn backup_eqmac_driver(
+    eqmac_path: &Path,
+    backup_path: &Path,
+) -> Result<Option<EqMacDriverBackupInfo>, RustyJackError> {
+    if let Some(parent) = backup_path.parent() {
+        std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
+    }
+    let version = crate::hal_plugin::driver_bundle_info(eqmac_path).and_then(|info| info.version);
+    sudo_mv(eqmac_path, backup_path)?;
+    write_eqmac_driver_backup_info(backup_path, version).map(Some)
+}
+
+fn restore_eqmac_driver(backup_path: &Path, eqmac_path: &Path) -> Result<(), RustyJackError> {
+    sudo_mv(backup_path, eqmac_path)
+}
+
+fn confirm_system_driver_move(prompt: &str) -> Result<bool, RustyJackError> {
+    Confirm::new()
+        .with_prompt(format!("{prompt} This uses sudo for /Library."))
+        .default(false)
+        .interact()
+        .map_err(|err| RustyJackError::Config(format!("driver swap prompt failed: {err}")))
+}
+
+fn sudo_mv(source: &Path, destination: &Path) -> Result<(), RustyJackError> {
+    let status = Command::new("sudo")
+        .arg("mv")
+        .arg(source)
+        .arg(destination)
+        .status()
+        .map_err(RustyJackError::Io)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(RustyJackError::Config(format!(
+            "sudo mv {} {} failed with status {status}",
+            source.display(),
+            destination.display()
+        )))
+    }
+}
+
 fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), RustyJackError> {
     std::fs::create_dir_all(destination).map_err(RustyJackError::Io)?;
     for entry in std::fs::read_dir(source).map_err(RustyJackError::Io)? {
@@ -435,6 +737,24 @@ fn driver_materially_changed(
     dirs_differ(source, Path::new(&installed.install_path))
 }
 
+fn plan_swap_in(eqmac_present: bool, backup_present: bool) -> SwapInEqMacAction {
+    match (eqmac_present, backup_present) {
+        (true, false) => SwapInEqMacAction::BackUpSystemDriver,
+        (false, true) => SwapInEqMacAction::AlreadyBackedUp,
+        (false, false) => SwapInEqMacAction::NoEqMacDriver,
+        (true, true) => SwapInEqMacAction::Conflict,
+    }
+}
+
+fn plan_swap_out(eqmac_present: bool, backup_present: bool) -> SwapOutEqMacAction {
+    match (eqmac_present, backup_present) {
+        (false, true) => SwapOutEqMacAction::RestoreBackup,
+        (true, false) => SwapOutEqMacAction::AlreadyRestored,
+        (false, false) => SwapOutEqMacAction::NoEqMacDriverState,
+        (true, true) => SwapOutEqMacAction::Conflict,
+    }
+}
+
 fn dirs_differ(left: &Path, right: &Path) -> Result<bool, RustyJackError> {
     if !right.exists() {
         return Ok(true);
@@ -456,4 +776,51 @@ fn dirs_differ(left: &Path, right: &Path) -> Result<bool, RustyJackError> {
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_swap_in_eqmac_state_plan() {
+        assert_eq!(
+            plan_swap_in(true, false),
+            SwapInEqMacAction::BackUpSystemDriver
+        );
+        assert_eq!(
+            plan_swap_in(false, true),
+            SwapInEqMacAction::AlreadyBackedUp
+        );
+        assert_eq!(plan_swap_in(false, false), SwapInEqMacAction::NoEqMacDriver);
+        assert_eq!(plan_swap_in(true, true), SwapInEqMacAction::Conflict);
+    }
+
+    #[test]
+    fn test_swap_out_eqmac_state_plan() {
+        assert_eq!(
+            plan_swap_out(false, true),
+            SwapOutEqMacAction::RestoreBackup
+        );
+        assert_eq!(
+            plan_swap_out(true, false),
+            SwapOutEqMacAction::AlreadyRestored
+        );
+        assert_eq!(
+            plan_swap_out(false, false),
+            SwapOutEqMacAction::NoEqMacDriverState
+        );
+        assert_eq!(plan_swap_out(true, true), SwapOutEqMacAction::Conflict);
+    }
+
+    #[test]
+    fn test_driver_swap_result_serialization() {
+        let result = DriverSwapInResult::Skipped {
+            reason: "interactive confirmation required".into(),
+            command: Some("rusty-jack driver swap-in".into()),
+        };
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["status"], "skipped");
+        assert_eq!(json["command"], "rusty-jack driver swap-in");
+    }
 }

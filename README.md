@@ -99,6 +99,8 @@ The installer looks for a bundled driver next to the binary, under `../share/rus
 
 The packaged driver currently exposes a minimal virtual HAL output named **Rusty Jack**, including a stereo output stream and basic volume/mute controls. It installs in the per-user HAL directory without `sudo`. It is safe for macOS to load, but it is still a null output until the passthrough software-volume pipeline is wired up; `rusty-jack status` reports the driver scope, path, version, stage, and warning.
 
+For explicit eqMac replacement testing, use `rusty-jack driver swap-in` and `rusty-jack driver swap-out`. `swap-in` moves `/Library/Audio/Plug-Ins/HAL/eqMac.driver` to a managed backup under `~/.config/rusty-jack/driver-backups/` with `sudo`, then installs or refreshes the user-scoped Rusty Jack driver. `swap-out` removes the Rusty Jack user driver and restores the backed-up eqMac driver with `sudo`. JSON/noninteractive mode will not move the system eqMac driver; rerun the command interactively for those steps. `rusty-jack status` shows the managed eqMac backup when one exists.
+
 ---
 
 ## Platform
@@ -131,6 +133,7 @@ Global flag: `--config PATH` (overrides `RUSTY_JACK_CONFIG` and `~/.config/rusty
 | `apply` | Switch to preferred/fallback from config |
 | `daemon` | Long-running policy loop for launchd |
 | `disable` | Uninstall launchd agent (remove plist) |
+| `driver` | Explicit driver test workflow: `swap-in` / `swap-out` eqMac and Rusty Jack HAL drivers |
 | `install` | Install and start the per-user LaunchAgent |
 | `list` | Table of output devices (`--hdmi`, `--json`) |
 | `pause` | Stop launchd agent; keep plist |

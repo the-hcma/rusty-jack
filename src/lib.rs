@@ -37,15 +37,39 @@ pub use error::RustyJackError;
 /// Returns an error if CoreAudio enumeration fails or a subcommand fails.
 pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
     match cli.command {
+        cli::Commands::Apply(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::apply::run(hal.as_ref(), args.json, cli.config.as_deref())?;
+        }
+        cli::Commands::Daemon => {
+            let hal = coreaudio::platform_hal()?;
+            commands::daemon::run(hal.as_ref(), cli.config.as_deref())?;
+        }
         cli::Commands::Disable(args) => commands::disable::run(args.json)?,
+        cli::Commands::Driver(args) => match args.command {
+            cli::DriverCommand::SwapIn(args) => commands::driver::swap_in(args.json)?,
+            cli::DriverCommand::SwapOut(args) => commands::driver::swap_out(args.json)?,
+        },
         cli::Commands::Install(args) => {
             let hal = coreaudio::platform_hal()?;
             commands::install::run(hal.as_ref(), args.json)?;
         }
+        cli::Commands::List(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::list::run(hal.as_ref(), args.hdmi, args.json)?;
+        }
         cli::Commands::Pause(args) => commands::pause::run(args.json)?,
+        cli::Commands::Picker(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::picker::run(hal.as_ref(), args.json, args.index, cli.config.as_deref())?;
+        }
         cli::Commands::Resume(args) => {
             let hal = coreaudio::platform_hal()?;
             commands::resume::run(hal.as_ref(), args.json, cli.config.as_deref())?;
+        }
+        cli::Commands::Status(args) => {
+            let hal = coreaudio::platform_hal()?;
+            commands::status::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
         cli::Commands::Uninstall(args) => commands::uninstall::run(
             args.json,
@@ -54,26 +78,6 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             args.only_driver,
         )?,
         cli::Commands::Upgrade(args) => commands::upgrade::run(args.json, args.force)?,
-        cli::Commands::Daemon => {
-            let hal = coreaudio::platform_hal()?;
-            commands::daemon::run(hal.as_ref(), cli.config.as_deref())?;
-        }
-        cli::Commands::List(args) => {
-            let hal = coreaudio::platform_hal()?;
-            commands::list::run(hal.as_ref(), args.hdmi, args.json)?;
-        }
-        cli::Commands::Status(args) => {
-            let hal = coreaudio::platform_hal()?;
-            commands::status::run(hal.as_ref(), args.json, cli.config.as_deref())?;
-        }
-        cli::Commands::Apply(args) => {
-            let hal = coreaudio::platform_hal()?;
-            commands::apply::run(hal.as_ref(), args.json, cli.config.as_deref())?;
-        }
-        cli::Commands::Picker(args) => {
-            let hal = coreaudio::platform_hal()?;
-            commands::picker::run(hal.as_ref(), args.json, args.index, cli.config.as_deref())?;
-        }
     }
 
     Ok(())

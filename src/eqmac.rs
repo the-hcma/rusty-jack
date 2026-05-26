@@ -1,16 +1,19 @@
 //! eqMac presence detection and auto-launch for HDMI software volume.
 
+use crate::config::default_config_path;
 use crate::output_device::OutputDevice;
 use crate::RustyJackError;
-use serde::Serialize;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const EQMAC_APP_NAME: &str = "eqMac";
 const EQMAC_APP_PATH: &str = "/Applications/eqMac.app";
-const EQMAC_HAL_DRIVER_PATH: &str = "/Library/Audio/Plug-Ins/HAL/eqMac.driver";
+pub const EQMAC_HAL_DRIVER_PATH: &str = "/Library/Audio/Plug-Ins/HAL/eqMac.driver";
 const EQMAC_STARTUP_WAIT: Duration = Duration::from_millis(1500);
+const EQMAC_DRIVER_BACKUP_DIR_NAME: &str = "driver-backups";
+const EQMAC_DRIVER_BACKUP_METADATA_NAME: &str = "eqMac.driver.json";
 
 /// Whether eqMac is present on the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -40,6 +43,17 @@ pub enum EqMacEnsureAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct EqMacEnsureResult {
     pub action: EqMacEnsureAction,
+}
+
+/// Metadata for a managed backup of the eqMac HAL driver.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EqMacDriverBackupInfo {
+    pub original_path: String,
+    pub backup_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backed_up_at_unix: Option<u64>,
 }
 
 /// True when routing to `uid` needs a virtual volume router (HDMI-class outputs).
@@ -75,6 +89,93 @@ pub fn eqmac_hal_driver_path() -> Option<String> {
     Path::new(EQMAC_HAL_DRIVER_PATH)
         .exists()
         .then(|| EQMAC_HAL_DRIVER_PATH.to_string())
+}
+
+/// Managed backup directory for temporary eqMac HAL driver swaps.
+#[must_use]
+pub fn eqmac_driver_backup_dir() -> Option<PathBuf> {
+    default_config_path()
+        .as_deref()
+        .map(eqmac_driver_backup_dir_for_config_path)
+}
+
+#[must_use]
+pub fn eqmac_driver_backup_dir_for_config_path(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join(EQMAC_DRIVER_BACKUP_DIR_NAME)
+}
+
+/// Managed backup path for the eqMac HAL driver bundle.
+#[must_use]
+pub fn eqmac_driver_backup_path() -> Option<PathBuf> {
+    eqmac_driver_backup_dir().map(|dir| dir.join("eqMac.driver"))
+}
+
+/// Managed metadata path for the eqMac HAL driver backup.
+#[must_use]
+pub fn eqmac_driver_backup_metadata_path() -> Option<PathBuf> {
+    eqmac_driver_backup_dir().map(|dir| dir.join(EQMAC_DRIVER_BACKUP_METADATA_NAME))
+}
+
+/// Current managed eqMac HAL driver backup, using metadata when available.
+#[must_use]
+pub fn eqmac_driver_backup_info() -> Option<EqMacDriverBackupInfo> {
+    if let Some(path) = eqmac_driver_backup_metadata_path() {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            if let Ok(info) = serde_json::from_str::<EqMacDriverBackupInfo>(&contents) {
+                return Some(info);
+            }
+        }
+    }
+
+    let backup_path = eqmac_driver_backup_path()?;
+    backup_path.exists().then(|| EqMacDriverBackupInfo {
+        original_path: EQMAC_HAL_DRIVER_PATH.into(),
+        backup_path: backup_path.to_string_lossy().into_owned(),
+        version: crate::hal_plugin::driver_bundle_info(&backup_path).and_then(|info| info.version),
+        backed_up_at_unix: None,
+    })
+}
+
+pub fn write_eqmac_driver_backup_info(
+    backup_path: &Path,
+    version: Option<String>,
+) -> Result<EqMacDriverBackupInfo, RustyJackError> {
+    let metadata_path = eqmac_driver_backup_metadata_path().ok_or_else(|| {
+        RustyJackError::Config("HOME is not set; cannot locate eqMac driver backup metadata".into())
+    })?;
+    if let Some(parent) = metadata_path.parent() {
+        std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
+    }
+
+    let info = EqMacDriverBackupInfo {
+        original_path: EQMAC_HAL_DRIVER_PATH.into(),
+        backup_path: backup_path.to_string_lossy().into_owned(),
+        version,
+        backed_up_at_unix: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs()),
+    };
+    let json = serde_json::to_string_pretty(&info).map_err(|err| {
+        RustyJackError::Config(format!("backup metadata serialization failed: {err}"))
+    })?;
+    std::fs::write(metadata_path, format!("{json}\n")).map_err(RustyJackError::Io)?;
+    Ok(info)
+}
+
+pub fn remove_eqmac_driver_backup_info() -> Result<(), RustyJackError> {
+    let Some(path) = eqmac_driver_backup_metadata_path() else {
+        return Ok(());
+    };
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(RustyJackError::Io(err)),
+    }
 }
 
 /// A leftover eqMac HAL driver without the app bundle is not a usable fallback.
@@ -307,6 +408,17 @@ mod tests {
         let result =
             classify_eqmac_launch(false, "Unable to find application named 'eqMac'\n").unwrap();
         assert_eq!(result, EqMacLaunchAction::NotInstalled);
+    }
+
+    #[test]
+    fn test_eqmac_driver_backup_dir_uses_config_parent() {
+        let backup_dir = eqmac_driver_backup_dir_for_config_path(Path::new(
+            "/Users/example/.config/rusty-jack/config.json",
+        ));
+        assert_eq!(
+            backup_dir,
+            PathBuf::from("/Users/example/.config/rusty-jack/driver-backups")
+        );
     }
 
     #[test]

@@ -144,6 +144,10 @@ fn format_hdmi_displayport_volume_control_block(
     } else if let Some(path) = &status.eqmac_hal_driver_path {
         rows.push(("eqMac driver", format!("installed at {path}")));
     }
+    if let Some(backup) = &status.eqmac_driver_backup {
+        rows.push(("eqMac backup", backup.backup_path.clone()));
+        rows.push(("swap restore", "rusty-jack driver swap-out".into()));
+    }
     if let Some(recommendation) = &status.recommendation {
         rows.push(("note", recommendation.clone()));
     }
@@ -299,6 +303,10 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
             .hdmi_displayport_volume_control
             .native_driver_installed
         || snapshot.hdmi_displayport_volume_control.eqmac_installed
+        || snapshot
+            .hdmi_displayport_volume_control
+            .eqmac_driver_backup
+            .is_some()
     {
         writeln!(out)?;
         writeln!(
@@ -325,6 +333,7 @@ pub fn print_json(snapshot: &StatusSnapshot) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::{Config, DeviceSelectorConfig};
+    use crate::eqmac::EqMacDriverBackupInfo;
     use crate::output_device::OutputDevice;
     use crate::system_default::{HalDriverInfo, SystemDefaultInfo};
     use crate::transport::TransportKind;
@@ -545,6 +554,7 @@ mod tests {
             eqmac_app_path: None,
             eqmac_hal_driver_path: None,
             orphaned_eqmac_hal_driver_path: None,
+            eqmac_driver_backup: None,
             recommendation: None,
         });
         assert_eq!(value, "no (selected output is not HDMI/DisplayPort)");
@@ -578,6 +588,7 @@ mod tests {
                 eqmac_app_path: None,
                 eqmac_hal_driver_path: None,
                 orphaned_eqmac_hal_driver_path: None,
+                eqmac_driver_backup: None,
                 recommendation: None,
             });
 
@@ -587,6 +598,38 @@ mod tests {
         assert!(block.contains("0.1.1"));
         assert!(block.contains("virtual-output-null"));
         assert!(block.contains("null output"));
+    }
+
+    #[test]
+    fn test_format_volume_control_block_includes_eqmac_backup() {
+        let block =
+            format_hdmi_displayport_volume_control_block(&HdmiDisplayPortVolumeControlStatus {
+                connected_output_present: true,
+                native_driver_installed: true,
+                native_driver_recommended: false,
+                native_driver_recommendation_reason: None,
+                native_driver_install_path: None,
+                native_driver_scope: None,
+                native_driver_stage: None,
+                native_driver_warning: None,
+                native_driver: None,
+                eqmac_installed: true,
+                eqmac_app_path: Some("/Applications/eqMac.app".into()),
+                eqmac_hal_driver_path: None,
+                orphaned_eqmac_hal_driver_path: None,
+                eqmac_driver_backup: Some(EqMacDriverBackupInfo {
+                    original_path: "/Library/Audio/Plug-Ins/HAL/eqMac.driver".into(),
+                    backup_path: "/Users/example/.config/rusty-jack/driver-backups/eqMac.driver"
+                        .into(),
+                    version: Some("1.0.0".into()),
+                    backed_up_at_unix: Some(1_800_000_000),
+                }),
+                recommendation: None,
+            });
+
+        assert!(block.contains("eqMac backup"));
+        assert!(block.contains("driver-backups/eqMac.driver"));
+        assert!(block.contains("rusty-jack driver swap-out"));
     }
 
     #[test]
