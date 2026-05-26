@@ -45,11 +45,16 @@ pub fn driver_bundle_info(path: &Path) -> Option<HalDriverInfo> {
         .or_else(|| value.get("CFBundleVersion"))
         .and_then(Value::as_str)
         .map(str::to_string);
+    let stage = value
+        .get("RustyJackDriverStage")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     Some(HalDriverInfo {
         name,
         bundle_id,
         version,
+        stage,
         install_path: path.to_string_lossy().into_owned(),
     })
 }

@@ -138,7 +138,7 @@ The driver is installed to:
 ~/Library/Audio/Plug-Ins/HAL/RustyJack.driver
 ```
 
-After installing, restart audio apps if they do not immediately see the virtual device. `rusty-jack status` reports whether the driver is installed and where.
+This is a per-user HAL plug-in path, so install and removal do not need `sudo`. After installing, restart audio apps if they do not immediately see the virtual device. `rusty-jack status` reports scope, path, version, stage, and the current null-output warning.
 
 Packages include the bundle at `share/rusty-jack/RustyJack.driver`. Source installs can build the same layout with `make install`, or just validate the packaged bundle with:
 
@@ -147,6 +147,19 @@ make validate-driver-bundle
 ```
 
 The current bundle exposes a minimal virtual HAL output named **Rusty Jack**, with a stereo output stream plus volume and mute controls. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle. The device is still a null output until the passthrough software-volume pipeline is wired up, so Rusty Jack does not automatically route audio through it yet.
+
+Manual smoke test:
+
+```bash
+make install              # source checkout only; packages already include the bundle
+make validate-driver-bundle
+rusty-jack install
+rusty-jack status
+rusty-jack uninstall --only-driver
+rusty-jack install
+```
+
+Check that `rusty-jack status` shows `driver scope: user`, the user HAL path above, a driver version, and `driver stage: virtual-output-null`. Audio MIDI Setup or System Settings should show a **Rusty Jack** output after install and stop showing it after `uninstall --only-driver` once CoreAudio refreshes. Do not select **Rusty Jack** for listening yet; it intentionally remains a null output until passthrough lands.
 
 ### Pause, Resume, Uninstall
 

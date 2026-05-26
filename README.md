@@ -97,7 +97,7 @@ Run `rusty-jack install` with an HDMI/DisplayPort output connected. In an intera
 
 The installer looks for a bundled driver next to the binary, under `../share/rusty-jack/RustyJack.driver` for Homebrew-style installs, or at `RUSTY_JACK_DRIVER_BUNDLE` for source/testing builds. `make install` builds the source bundle into `~/.cargo/share/rusty-jack/RustyJack.driver`; Homebrew installs the same bundle into `share/rusty-jack`. `rusty-jack uninstall` offers to remove the driver when it is installed. `rusty-jack upgrade` compares the bundled and installed driver and only offers a driver upgrade when the bundle materially changed.
 
-The packaged driver currently exposes a minimal virtual HAL output named **Rusty Jack**, including a stereo output stream and basic volume/mute controls. It is safe for macOS to load, but it is still a null output until the passthrough software-volume pipeline is wired up.
+The packaged driver currently exposes a minimal virtual HAL output named **Rusty Jack**, including a stereo output stream and basic volume/mute controls. It installs in the per-user HAL directory without `sudo`. It is safe for macOS to load, but it is still a null output until the passthrough software-volume pipeline is wired up; `rusty-jack status` reports the driver scope, path, version, stage, and warning.
 
 ---
 

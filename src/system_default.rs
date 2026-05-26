@@ -10,6 +10,8 @@ pub struct HalDriverInfo {
     pub name: String,
     pub bundle_id: String,
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
     pub install_path: String,
 }
 

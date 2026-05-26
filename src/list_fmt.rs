@@ -433,6 +433,7 @@ mod tests {
                 name: "eqMac".into(),
                 bundle_id: "com.bitgapp.eqmac.driver".into(),
                 version: Some("2.6.0".into()),
+                stage: None,
                 install_path: "/Library/Audio/Plug-Ins/HAL/eqMac.driver".into(),
             }),
             routed_to_uid: Some("hdmi-uid".into()),

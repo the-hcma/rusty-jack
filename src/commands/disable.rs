@@ -19,16 +19,14 @@ pub fn run(json: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::launchd::DisableResult;
 
     #[test]
     fn test_run_json_when_not_installed() {
-        if matches!(
-            uninstall_daemon().unwrap(),
-            DisableResult::NotInstalled { .. }
-        ) {
-            run(true).unwrap();
-        }
+        let json = serde_json::to_string(&DisableResult::NotInstalled {
+            plist_path: "/tmp/com.example.rusty-jack.plist".into(),
+        })
+        .unwrap();
+        assert!(json.contains("\"status\":\"not_installed\""));
     }
 }

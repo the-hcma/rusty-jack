@@ -45,6 +45,12 @@ pub struct HdmiDisplayPortVolumeControlStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_driver_install_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_driver_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_driver_stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_driver_warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub native_driver: Option<HalDriverInfo>,
     pub eqmac_installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,6 +197,15 @@ pub fn hdmi_displayport_volume_control_status_for_target(
     let native_driver_install_path = native_driver
         .as_ref()
         .map(|driver| driver.install_path.clone());
+    let native_driver_scope = native_driver
+        .as_ref()
+        .map(|driver| native_driver_scope(&driver.install_path).to_string());
+    let native_driver_stage = native_driver
+        .as_ref()
+        .and_then(|driver| driver.stage.clone());
+    let native_driver_warning = native_driver
+        .as_ref()
+        .and_then(|driver| native_driver_warning(driver.stage.as_deref()));
     let eqmac_app_path = eqmac::eqmac_app_path();
     let eqmac_hal_driver_path = eqmac::eqmac_hal_driver_path();
     let orphaned_eqmac_hal_driver_path = eqmac::orphaned_eqmac_hal_driver_path();
@@ -207,6 +222,9 @@ pub fn hdmi_displayport_volume_control_status_for_target(
         native_driver_recommended,
         native_driver_recommendation_reason,
         native_driver_install_path,
+        native_driver_scope,
+        native_driver_stage,
+        native_driver_warning,
         native_driver,
         eqmac_installed,
         eqmac_app_path,
@@ -233,6 +251,30 @@ fn is_hdmi_displayport_output(device: &OutputDevice) -> bool {
     )
 }
 
+#[must_use]
+pub fn native_driver_scope(install_path: &str) -> &'static str {
+    let user_hal_suffix = "/Library/Audio/Plug-Ins/HAL/";
+    if std::env::var("HOME")
+        .ok()
+        .is_some_and(|home| install_path.starts_with(&format!("{home}{user_hal_suffix}")))
+    {
+        "user"
+    } else if install_path.starts_with(user_hal_suffix) {
+        "system"
+    } else {
+        "custom"
+    }
+}
+
+#[must_use]
+pub fn native_driver_scope_note(install_path: &str) -> &'static str {
+    match native_driver_scope(install_path) {
+        "user" => "user-scope HAL driver; no sudo required",
+        "system" => "system-scope HAL driver; sudo may be required",
+        _ => "custom HAL driver location",
+    }
+}
+
 fn driver_recommendation_reason(
     target_needs_driver: Option<bool>,
     connected_output_present: bool,
@@ -247,6 +289,15 @@ fn driver_recommendation_reason(
             Some("connected HDMI/DisplayPort output detected".into())
         }
         None => Some("no connected HDMI/DisplayPort output detected".into()),
+    }
+}
+
+fn native_driver_warning(stage: Option<&str>) -> Option<String> {
+    match stage {
+        Some("virtual-output-null") | Some("loadable-skeleton") | None => Some(
+            "Rusty Jack is currently a null output until passthrough audio is implemented.".into(),
+        ),
+        Some(_) => None,
     }
 }
 
@@ -344,5 +395,23 @@ mod tests {
             driver_recommendation_reason(Some(true), true, false).as_deref(),
             Some("selected output is HDMI/DisplayPort")
         );
+    }
+
+    #[test]
+    fn test_native_driver_scope_note_for_user_install() {
+        let home = std::env::var("HOME").unwrap();
+        let path = format!("{home}/Library/Audio/Plug-Ins/HAL/RustyJack.driver");
+        assert_eq!(native_driver_scope(&path), "user");
+        assert_eq!(
+            native_driver_scope_note(&path),
+            "user-scope HAL driver; no sudo required"
+        );
+    }
+
+    #[test]
+    fn test_native_driver_warning_for_null_output_stage() {
+        assert!(native_driver_warning(Some("virtual-output-null"))
+            .unwrap()
+            .contains("null output"));
     }
 }
