@@ -1,7 +1,7 @@
 name: Release Please
 
 on:
-  # Temporarily disabled while Homebrew tap automation is being sorted out.
+  # Paused until release environment tokens are created.
   workflow_dispatch:
 
 permissions:
@@ -12,6 +12,7 @@ permissions:
 jobs:
   release-please:
     name: Release Please
+    if: ${{ false }} # Paused until RELEASE_PLEASE_TOKEN and HOMEBREW_TAP_TOKEN exist.
     runs-on: ubuntu-latest
     environment: release
     steps:

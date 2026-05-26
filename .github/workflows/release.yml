@@ -1,9 +1,7 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  # Paused until release environment tokens are created.
   workflow_dispatch:
     inputs:
       tag:
@@ -17,6 +15,7 @@ permissions:
 jobs:
   release:
     name: Release and update Homebrew tap
+    if: ${{ false }} # Paused until RELEASE_PLEASE_TOKEN and HOMEBREW_TAP_TOKEN exist.
     runs-on: ubuntu-latest
     environment: release
 
