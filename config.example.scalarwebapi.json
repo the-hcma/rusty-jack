@@ -1,0 +1,23 @@
+{
+  "activity_idle_threshold_ms": 60000,
+  "activity_poll_interval_ms": 1000,
+  "auto_switch": true,
+  "poll_interval_ms": 3000,
+  "preferred_device": {
+    "monitor_name": "DELL U3219Q"
+  },
+  "scalar_webapi": {
+    "enabled": true,
+    "host": "scalarwebapi-device.local",
+    "mac_output": {
+      "monitor_name": "Built-in Output"
+    },
+    "model": "ScalarWebAPI device",
+    "request_timeout_ms": 3000,
+    "require_quick_start": true,
+    "triggers": ["keyboard", "mouse", "output_selected"],
+    "wake_debounce_ms": 30000
+  },
+  "switch_delay_ms": 500,
+  "version": 1
+}

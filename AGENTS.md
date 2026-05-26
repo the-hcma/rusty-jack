@@ -10,7 +10,7 @@ Rust CLI (`rusty-jack`) for macOS audio routing.
 
 - Binary command: `rusty-jack`.
 - Main purpose: keep macOS audio routed to a preferred HDMI, DisplayPort, dock, or line-out device so external-display audio can be controlled through the keyboard volume keys when an eqMac-style virtual volume layer is available.
-- Sony-like speaker support: can wake Sony Songpal / ScalarWebAPI speakers attached to a Mac output when that output is selected or when daemon activity triggers fire.
+- ScalarWebAPI-compatible speaker support: can wake ScalarWebAPI-compatible devices attached to a Mac output when that output is selected or when daemon activity triggers fire.
 - Config env: `RUSTY_JACK_CONFIG`; legacy alias: `HDMI_SOUND_CONTROLLER_CONFIG`.
 - Default config: `~/.config/rusty-jack/config.json`.
 - Do not commit local config files, private hostnames, secrets, logs, or machine-specific plist files.

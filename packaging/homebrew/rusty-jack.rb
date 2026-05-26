@@ -4,7 +4,7 @@
 #   brew install rusty-jack
 #
 class RustyJack < Formula
-  desc "Route HDMI audio for volume keys and wake Sony-like speakers"
+  desc "Route HDMI audio for volume keys and wake ScalarWebAPI-compatible speakers"
   homepage "https://github.com/the-hcma/rusty-jack"
   license "MIT"
   head "https://github.com/the-hcma/rusty-jack.git", branch: "main"
@@ -19,7 +19,7 @@ class RustyJack < Formula
   def install
     ENV["MACOSX_DEPLOYMENT_TARGET"] = "12.0"
     system "cargo", "install", *std_cargo_args, "--locked"
-    pkgshare.install "config.example.json", "config.example.sony.json", "launchd"
+    pkgshare.install "config.example.json", "config.example.scalarwebapi.json", "launchd"
   end
 
   def caveats

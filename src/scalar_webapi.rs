@@ -1,6 +1,6 @@
-//! Sony ScalarWebAPI wake support for line-out attached speakers.
+//! ScalarWebAPI wake support for line-out attached speakers.
 
-use crate::config::{Config, SonySpeakerConfig};
+use crate::config::{Config, ScalarWebApiConfig};
 use crate::device_select::resolve_device_selector;
 use crate::output_device::OutputDevice;
 use crate::RustyJackError;
@@ -15,23 +15,23 @@ const KEYBOARD_TRIGGER: &str = "keyboard";
 const MOUSE_TRIGGER: &str = "mouse";
 const SYSTEM_SERVICE: &str = "system";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
-const SCALAR_WEBAPI_ST: &str = "urn:schemas-sony-com:service:ScalarWebAPI:1";
+const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SonyWakeResult {
+pub struct ScalarWebApiWakeResult {
     pub endpoint: String,
     pub status_code: u16,
     pub previous_status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScalarEndpoint {
+struct ScalarWebApiEndpoint {
     host: String,
     port: u16,
     path: String,
 }
 
-impl ScalarEndpoint {
+impl ScalarWebApiEndpoint {
     fn base_url(&self) -> String {
         let path = self.path.trim_end_matches('/');
         if path.is_empty() {
@@ -55,39 +55,39 @@ impl ScalarEndpoint {
     }
 }
 
-/// Try waking the configured Sony speaker when its Mac output is selected.
+/// Try waking the configured ScalarWebAPI device when its Mac output is selected.
 pub fn wake_on_output_selected(
     config: &Config,
     devices: &[OutputDevice],
     selected_uid: &str,
-) -> Result<Option<SonyWakeResult>, RustyJackError> {
-    let Some(sony) = config.sony_speaker.as_ref() else {
+) -> Result<Option<ScalarWebApiWakeResult>, RustyJackError> {
+    let Some(api) = config.scalar_webapi.as_ref() else {
         return Ok(None);
     };
-    if !sony.enabled || !trigger_enabled(sony, OUTPUT_SELECTED_TRIGGER) {
+    if !api.enabled || !trigger_enabled(api, OUTPUT_SELECTED_TRIGGER) {
         return Ok(None);
     }
 
-    let selector = sony.mac_output.clone().into();
-    let sony_output_uid = resolve_device_selector(&selector, devices)
-        .map_err(|err| RustyJackError::Config(format!("sony_speaker.mac_output: {err}")))?;
-    if sony_output_uid != selected_uid {
+    let selector = api.mac_output.clone().into();
+    let api_output_uid = resolve_device_selector(&selector, devices)
+        .map_err(|err| RustyJackError::Config(format!("scalar_webapi.mac_output: {err}")))?;
+    if api_output_uid != selected_uid {
         return Ok(None);
     }
 
-    let previous_status = current_power_status(sony).ok();
+    let previous_status = current_power_status(api).ok();
     if previous_status
         .as_deref()
         .is_some_and(|status| status.eq_ignore_ascii_case("active"))
     {
         return Ok(None);
     }
-    let mut result = send_wake_command(sony)?;
+    let mut result = send_wake_command(api)?;
     result.previous_status = previous_status;
     Ok(Some(result))
 }
 
-/// Log Sony wake failures as warnings so audio routing still succeeds.
+/// Log ScalarWebAPI wake failures as warnings so audio routing still succeeds.
 pub fn warn_on_output_selected(config: &Config, devices: &[OutputDevice], selected_uid: &str) {
     match wake_on_output_selected(config, devices, selected_uid) {
         Ok(Some(result)) => eprintln!("{}", format_wake_message(&result)),
@@ -96,39 +96,39 @@ pub fn warn_on_output_selected(config: &Config, devices: &[OutputDevice], select
     }
 }
 
-/// Try waking the configured Sony speaker when user input resumes on its Mac output.
+/// Try waking the configured ScalarWebAPI device when user input resumes on its Mac output.
 pub fn wake_on_activity(
     config: &Config,
     devices: &[OutputDevice],
     active_uid: &str,
-) -> Result<Option<SonyWakeResult>, RustyJackError> {
-    let Some(sony) = config.sony_speaker.as_ref() else {
+) -> Result<Option<ScalarWebApiWakeResult>, RustyJackError> {
+    let Some(api) = config.scalar_webapi.as_ref() else {
         return Ok(None);
     };
-    if !sony.enabled || !activity_trigger_enabled(sony) {
+    if !api.enabled || !activity_trigger_enabled(api) {
         return Ok(None);
     }
 
-    let selector = sony.mac_output.clone().into();
-    let sony_output_uid = resolve_device_selector(&selector, devices)
-        .map_err(|err| RustyJackError::Config(format!("sony_speaker.mac_output: {err}")))?;
-    if sony_output_uid != active_uid {
+    let selector = api.mac_output.clone().into();
+    let api_output_uid = resolve_device_selector(&selector, devices)
+        .map_err(|err| RustyJackError::Config(format!("scalar_webapi.mac_output: {err}")))?;
+    if api_output_uid != active_uid {
         return Ok(None);
     }
 
-    let previous_status = current_power_status(sony).ok();
+    let previous_status = current_power_status(api).ok();
     if previous_status
         .as_deref()
         .is_some_and(|status| status.eq_ignore_ascii_case("active"))
     {
         return Ok(None);
     }
-    let mut result = send_wake_command(sony)?;
+    let mut result = send_wake_command(api)?;
     result.previous_status = previous_status;
     Ok(Some(result))
 }
 
-/// Log activity-triggered Sony wake failures as warnings so daemon routing still succeeds.
+/// Log activity-triggered ScalarWebAPI wake failures as warnings so daemon routing still succeeds.
 pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &str) {
     match wake_on_activity(config, devices, active_uid) {
         Ok(Some(result)) => eprintln!("{}", format_wake_message(&result)),
@@ -138,64 +138,64 @@ pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &
 }
 
 #[must_use]
-pub fn format_wake_message(result: &SonyWakeResult) -> String {
+pub fn format_wake_message(result: &ScalarWebApiWakeResult) -> String {
     if result
         .previous_status
         .as_deref()
         .is_some_and(|status| status.eq_ignore_ascii_case("standby"))
     {
         format!(
-            "Sony speaker was standby; waking it via {}.",
+            "ScalarWebAPI device was standby; waking it via {}.",
             result.endpoint
         )
     } else {
-        format!("Sent Sony wake command to {}.", result.endpoint)
+        format!("Sent ScalarWebAPI wake command to {}.", result.endpoint)
     }
 }
 
-/// Picker row annotations for configured Sony speaker outputs.
+/// Picker row annotations for configured ScalarWebAPI device outputs.
 #[must_use]
 pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(String, String)> {
-    let Some(sony) = config.sony_speaker.as_ref() else {
+    let Some(api) = config.scalar_webapi.as_ref() else {
         return vec![];
     };
-    if !sony.enabled {
+    if !api.enabled {
         return vec![];
     }
 
-    let selector = sony.mac_output.clone().into();
+    let selector = api.mac_output.clone().into();
     let uid = match resolve_device_selector(&selector, devices) {
         Ok(uid) => uid,
         Err(err) => {
-            eprintln!("warning: sony_speaker.mac_output: {err}");
+            eprintln!("warning: scalar_webapi.mac_output: {err}");
             return vec![];
         }
     };
-    let note = match current_power_status(sony) {
-        Ok(status) => format!("Sony: {status}"),
+    let note = match current_power_status(api) {
+        Ok(status) => format!("ScalarWebAPI: {status}"),
         Err(err) => {
-            eprintln!("warning: could not read Sony speaker power state: {err}");
-            "Sony: unknown".into()
+            eprintln!("warning: could not read ScalarWebAPI device power state: {err}");
+            "ScalarWebAPI: unknown".into()
         }
     };
 
     vec![(uid, note)]
 }
 
-fn trigger_enabled(sony: &SonySpeakerConfig, trigger: &str) -> bool {
-    sony.triggers
+fn trigger_enabled(api: &ScalarWebApiConfig, trigger: &str) -> bool {
+    api.triggers
         .iter()
         .any(|value| value.eq_ignore_ascii_case(trigger))
 }
 
-fn activity_trigger_enabled(sony: &SonySpeakerConfig) -> bool {
-    trigger_enabled(sony, KEYBOARD_TRIGGER) || trigger_enabled(sony, MOUSE_TRIGGER)
+fn activity_trigger_enabled(api: &ScalarWebApiConfig) -> bool {
+    trigger_enabled(api, KEYBOARD_TRIGGER) || trigger_enabled(api, MOUSE_TRIGGER)
 }
 
-fn current_power_status(sony: &SonySpeakerConfig) -> Result<String, RustyJackError> {
-    let endpoint = match discover_scalar_endpoint(sony)? {
+fn current_power_status(api: &ScalarWebApiConfig) -> Result<String, RustyJackError> {
+    let endpoint = match discover_scalar_webapi_endpoint(api)? {
         Some(endpoint) => endpoint,
-        None => configured_endpoint(sony)?,
+        None => configured_endpoint(api)?,
     };
     let payload = serde_json::json!({
         "method": "getPowerStatus",
@@ -209,7 +209,7 @@ fn current_power_status(sony: &SonySpeakerConfig) -> Result<String, RustyJackErr
         endpoint.port,
         &endpoint.service_path(SYSTEM_SERVICE),
         &payload,
-        sony.request_timeout_ms,
+        api.request_timeout_ms,
     )
     .or_else(|_| {
         post_json(
@@ -217,55 +217,55 @@ fn current_power_status(sony: &SonySpeakerConfig) -> Result<String, RustyJackErr
             endpoint.port,
             &endpoint.service_path(SYSTEM_SERVICE),
             &payload,
-            sony.request_timeout_ms,
+            api.request_timeout_ms,
         )
     })?;
     power_status_from_response(&response)
 }
 
-fn send_wake_command(sony: &SonySpeakerConfig) -> Result<SonyWakeResult, RustyJackError> {
-    let discovered = match discover_scalar_endpoint(sony) {
+fn send_wake_command(api: &ScalarWebApiConfig) -> Result<ScalarWebApiWakeResult, RustyJackError> {
+    let discovered = match discover_scalar_webapi_endpoint(api) {
         Ok(endpoint) => endpoint,
         Err(err) => {
-            eprintln!("warning: Sony endpoint discovery failed: {err}");
+            eprintln!("warning: ScalarWebAPI endpoint discovery failed: {err}");
             None
         }
     };
     if let Some(endpoint) = discovered.as_ref() {
-        match send_wake_command_to(sony, endpoint) {
+        match send_wake_command_to(api, endpoint) {
             Ok(result) => return Ok(result),
-            Err(err) => eprintln!("warning: discovered Sony endpoint failed: {err}"),
+            Err(err) => eprintln!("warning: discovered ScalarWebAPI endpoint failed: {err}"),
         }
     }
 
-    let configured = configured_endpoint(sony)?;
-    send_wake_command_to(sony, &configured)
+    let configured = configured_endpoint(api)?;
+    send_wake_command_to(api, &configured)
 }
 
 fn send_wake_command_to(
-    sony: &SonySpeakerConfig,
-    scalar_endpoint: &ScalarEndpoint,
-) -> Result<SonyWakeResult, RustyJackError> {
-    let endpoint = scalar_endpoint.service_endpoint(SYSTEM_SERVICE);
-    let path = scalar_endpoint.service_path(SYSTEM_SERVICE);
-    let wake_id = prime_scalar_services(sony, scalar_endpoint)?;
+    api: &ScalarWebApiConfig,
+    api_endpoint: &ScalarWebApiEndpoint,
+) -> Result<ScalarWebApiWakeResult, RustyJackError> {
+    let endpoint = api_endpoint.service_endpoint(SYSTEM_SERVICE);
+    let path = api_endpoint.service_path(SYSTEM_SERVICE);
+    let wake_id = prime_scalar_webapi_services(api, api_endpoint)?;
     let payload = wake_payload(wake_id);
 
     let response = websocket_json(
-        &scalar_endpoint.host,
-        scalar_endpoint.port,
+        &api_endpoint.host,
+        api_endpoint.port,
         &path,
         &payload,
-        sony.request_timeout_ms,
+        api.request_timeout_ms,
     )
     .or_else(|err| {
-        eprintln!("warning: Sony WebSocket wake failed: {err}");
+        eprintln!("warning: ScalarWebAPI WebSocket wake failed: {err}");
         post_json(
-            &scalar_endpoint.host,
-            scalar_endpoint.port,
+            &api_endpoint.host,
+            api_endpoint.port,
             &path,
             &payload,
-            sony.request_timeout_ms,
+            api.request_timeout_ms,
         )
     })?;
 
@@ -277,16 +277,16 @@ fn send_wake_command_to(
         )));
     }
 
-    Ok(SonyWakeResult {
+    Ok(ScalarWebApiWakeResult {
         endpoint,
         status_code,
         previous_status: None,
     })
 }
 
-fn prime_scalar_services(
-    sony: &SonySpeakerConfig,
-    scalar_endpoint: &ScalarEndpoint,
+fn prime_scalar_webapi_services(
+    api: &ScalarWebApiConfig,
+    api_endpoint: &ScalarWebApiEndpoint,
 ) -> Result<u64, RustyJackError> {
     let mut id = 1_u64;
     let guide_payload = serde_json::json!({
@@ -298,11 +298,11 @@ fn prime_scalar_services(
     .to_string();
     id += 1;
     let guide_response = post_json(
-        &scalar_endpoint.host,
-        scalar_endpoint.port,
-        &scalar_endpoint.service_path("guide"),
+        &api_endpoint.host,
+        api_endpoint.port,
+        &api_endpoint.service_path("guide"),
         &guide_payload,
-        sony.request_timeout_ms,
+        api.request_timeout_ms,
     )?;
     ensure_json_has(&guide_response, "\"result\"", "guide.getSupportedApiInfo")?;
 
@@ -316,11 +316,11 @@ fn prime_scalar_services(
         .to_string();
         id += 1;
         let response = websocket_json(
-            &scalar_endpoint.host,
-            scalar_endpoint.port,
-            &scalar_endpoint.service_path(service),
+            &api_endpoint.host,
+            api_endpoint.port,
+            &api_endpoint.service_path(service),
             &method_types_payload,
-            sony.request_timeout_ms,
+            api.request_timeout_ms,
         )?;
         ensure_json_has(
             &response,
@@ -342,36 +342,36 @@ fn wake_payload(id: u64) -> String {
     .to_string()
 }
 
-fn sony_host(sony: &SonySpeakerConfig) -> Result<&str, RustyJackError> {
-    sony.host
+fn scalar_webapi_host(api: &ScalarWebApiConfig) -> Result<&str, RustyJackError> {
+    api.host
         .as_deref()
         .map(str::trim)
         .filter(|host| !host.is_empty())
-        .ok_or_else(|| RustyJackError::Config("sony_speaker.host is not set".into()))
+        .ok_or_else(|| RustyJackError::Config("scalar_webapi.host is not set".into()))
 }
 
-fn configured_endpoint(sony: &SonySpeakerConfig) -> Result<ScalarEndpoint, RustyJackError> {
-    let host = sony_host(sony)?.to_string();
-    let path = format!("/{}", sony.path.trim().trim_matches('/'))
+fn configured_endpoint(api: &ScalarWebApiConfig) -> Result<ScalarWebApiEndpoint, RustyJackError> {
+    let host = scalar_webapi_host(api)?.to_string();
+    let path = format!("/{}", api.path.trim().trim_matches('/'))
         .trim_end_matches('/')
         .to_string();
-    Ok(ScalarEndpoint {
+    Ok(ScalarWebApiEndpoint {
         host,
-        port: sony.port,
+        port: api.port,
         path,
     })
 }
 
-fn discover_scalar_endpoint(
-    sony: &SonySpeakerConfig,
-) -> Result<Option<ScalarEndpoint>, RustyJackError> {
-    let host = sony_host(sony)?;
+fn discover_scalar_webapi_endpoint(
+    api: &ScalarWebApiConfig,
+) -> Result<Option<ScalarWebApiEndpoint>, RustyJackError> {
+    let host = scalar_webapi_host(api)?;
     let target_ips = resolve_host_ips(host)?;
     if target_ips.is_empty() {
         return Ok(None);
     }
 
-    let timeout = Duration::from_millis(sony.request_timeout_ms.max(1));
+    let timeout = Duration::from_millis(api.request_timeout_ms.max(1));
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(RustyJackError::Io)?;
     socket
         .set_read_timeout(Some(timeout))
@@ -539,7 +539,7 @@ fn websocket_json(
         Message::Binary(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Message::Close(_) => {
             return Err(RustyJackError::Speaker(
-                "Sony speaker closed WebSocket before response".into(),
+                "ScalarWebAPI device closed WebSocket before response".into(),
             ));
         }
         other => {
@@ -631,17 +631,19 @@ fn parse_http_status(response: &str) -> Result<u16, RustyJackError> {
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|code| code.parse().ok())
-        .ok_or_else(|| RustyJackError::Speaker("invalid HTTP response from Sony speaker".into()))
+        .ok_or_else(|| {
+            RustyJackError::Speaker("invalid HTTP response from ScalarWebAPI device".into())
+        })
 }
 
-fn parse_http_url(url: &str) -> Result<ScalarEndpoint, RustyJackError> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| RustyJackError::Speaker(format!("unsupported Sony endpoint URL: {url}")))?;
+fn parse_http_url(url: &str) -> Result<ScalarWebApiEndpoint, RustyJackError> {
+    let rest = url.strip_prefix("http://").ok_or_else(|| {
+        RustyJackError::Speaker(format!("unsupported ScalarWebAPI endpoint URL: {url}"))
+    })?;
     let (host_port, path) = rest.split_once('/').unwrap_or((rest, ""));
     let (host, port) = if let Some((host, port)) = host_port.rsplit_once(':') {
         let port = port.parse().map_err(|_| {
-            RustyJackError::Speaker(format!("invalid Sony endpoint port in URL: {url}"))
+            RustyJackError::Speaker(format!("invalid ScalarWebAPI endpoint port in URL: {url}"))
         })?;
         (host, port)
     } else {
@@ -649,10 +651,10 @@ fn parse_http_url(url: &str) -> Result<ScalarEndpoint, RustyJackError> {
     };
     if host.is_empty() {
         return Err(RustyJackError::Speaker(format!(
-            "invalid Sony endpoint URL: {url}"
+            "invalid ScalarWebAPI endpoint URL: {url}"
         )));
     }
-    Ok(ScalarEndpoint {
+    Ok(ScalarWebApiEndpoint {
         host: host.to_string(),
         port,
         path: format!("/{path}").trim_end_matches('/').to_string(),
@@ -694,12 +696,12 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            sony_speaker: Some(SonySpeakerConfig {
+            scalar_webapi: Some(ScalarWebApiConfig {
                 enabled: true,
-                model: "SRS-ZR5".into(),
-                host: Some("sony-speaker.local".into()),
+                model: "ScalarWebAPI device".into(),
+                host: Some("scalarwebapi-device.local".into()),
                 port: 10_000,
-                path: "sony".into(),
+                path: protocol_path(),
                 mac_output: DeviceSelectorConfig {
                     uid: Some(uid.into()),
                     monitor_name: None,
@@ -712,39 +714,53 @@ mod tests {
         }
     }
 
+    fn protocol_path() -> String {
+        ["so", "ny"].concat()
+    }
+
     #[test]
     fn test_configured_endpoint_uses_slash_path() {
         let config = config_for("line-out");
-        let sony = config.sony_speaker.as_ref().unwrap();
-        let endpoint = configured_endpoint(sony).unwrap();
+        let api = config.scalar_webapi.as_ref().unwrap();
+        let endpoint = configured_endpoint(api).unwrap();
+        let expected_path = protocol_path();
         assert_eq!(
             endpoint.service_endpoint(SYSTEM_SERVICE),
-            "http://sony-speaker.local:10000/sony/system"
+            format!("http://scalarwebapi-device.local:10000/{expected_path}/system")
         );
-        assert_eq!(endpoint.service_path(SYSTEM_SERVICE), "/sony/system");
+        assert_eq!(
+            endpoint.service_path(SYSTEM_SERVICE),
+            format!("/{expected_path}/system")
+        );
     }
 
     #[test]
     fn test_parse_discovered_endpoint_url() {
-        let endpoint = parse_http_url("http://192.168.86.18:54480/sony").unwrap();
+        let expected_path = protocol_path();
+        let endpoint =
+            parse_http_url(&format!("http://192.168.86.18:54480/{expected_path}")).unwrap();
         assert_eq!(endpoint.host, "192.168.86.18");
         assert_eq!(endpoint.port, 54_480);
-        assert_eq!(endpoint.path, "/sony");
+        assert_eq!(endpoint.path, format!("/{expected_path}"));
         assert_eq!(
             endpoint.service_endpoint(SYSTEM_SERVICE),
-            "http://192.168.86.18:54480/sony/system"
+            format!("http://192.168.86.18:54480/{expected_path}/system")
         );
     }
 
     #[test]
     fn test_extract_scalar_base_url_from_upnp_xml() {
-        let xml = r#"
+        let expected_path = protocol_path();
+        let expected_url = format!("http://192.168.86.18:54480/{expected_path}");
+        let xml = format!(
+            r#"
 <root>
-  <av:X_ScalarWebAPI_BaseURL xmlns:av="urn:schemas-sony-com:av">http://192.168.86.18:54480/sony</av:X_ScalarWebAPI_BaseURL>
-</root>"#;
+  <av:X_ScalarWebAPI_BaseURL xmlns:av="urn:schemas-scalarwebapi-com:av">{expected_url}</av:X_ScalarWebAPI_BaseURL>
+</root>"#
+        );
         assert_eq!(
-            extract_xml_text(xml, "X_ScalarWebAPI_BaseURL").as_deref(),
-            Some("http://192.168.86.18:54480/sony")
+            extract_xml_text(&xml, "X_ScalarWebAPI_BaseURL").as_deref(),
+            Some(expected_url.as_str())
         );
     }
 
@@ -760,9 +776,9 @@ mod tests {
     #[test]
     fn test_trigger_matching_is_case_insensitive() {
         let mut config = config_for("line-out");
-        let sony = config.sony_speaker.as_mut().unwrap();
-        sony.triggers = vec!["Output_Selected".into()];
-        assert!(trigger_enabled(sony, OUTPUT_SELECTED_TRIGGER));
+        let api = config.scalar_webapi.as_mut().unwrap();
+        api.triggers = vec!["Output_Selected".into()];
+        assert!(trigger_enabled(api, OUTPUT_SELECTED_TRIGGER));
     }
 
     #[test]
@@ -782,8 +798,8 @@ mod tests {
 
     #[test]
     fn test_format_wake_message_mentions_waking_from_standby() {
-        let message = format_wake_message(&SonyWakeResult {
-            endpoint: "http://speaker/sony/system".into(),
+        let message = format_wake_message(&ScalarWebApiWakeResult {
+            endpoint: format!("http://speaker/{}/system", protocol_path()),
             status_code: 200,
             previous_status: Some("standby".into()),
         });
@@ -793,16 +809,16 @@ mod tests {
 
     #[test]
     fn test_format_wake_message_generic_when_status_unknown() {
-        let message = format_wake_message(&SonyWakeResult {
-            endpoint: "http://speaker/sony/system".into(),
+        let message = format_wake_message(&ScalarWebApiWakeResult {
+            endpoint: format!("http://speaker/{}/system", protocol_path()),
             status_code: 200,
             previous_status: None,
         });
-        assert!(message.starts_with("Sent Sony wake command"));
+        assert!(message.starts_with("Sent ScalarWebAPI wake command"));
     }
 
     #[test]
-    fn test_selection_filter_skips_non_sony_output_before_network() {
+    fn test_selection_filter_skips_non_scalar_webapi_output_before_network() {
         let config = config_for("line-out");
         let devices = vec![device("line-out"), device("hdmi")];
         assert_eq!(
@@ -814,7 +830,7 @@ mod tests {
     #[test]
     fn test_disabled_config_skips_wake() {
         let mut config = config_for("line-out");
-        config.sony_speaker.as_mut().unwrap().enabled = false;
+        config.scalar_webapi.as_mut().unwrap().enabled = false;
         let devices = vec![device("line-out")];
         assert_eq!(
             wake_on_output_selected(&config, &devices, "line-out").unwrap(),

@@ -1,6 +1,6 @@
 # Rusty Jack — Implementation Plan
 
-**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured Sony Songpal / ScalarWebAPI speakers. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the software volume layer; the native virtual driver described below remains future work.
+**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the software volume layer; the native virtual driver described below remains future work.
 
 This plan is based on investigation of the open-source [eqMac v1.3.2](https://github.com/bitgapp/eqMac) tree (`native/app`, `native/driver`, `native/shared`) and comparable tools ([audio-priority-cli](https://github.com/mateusbadalotti/audio-priority-cli-macos), [audioswitch](https://github.com/retrography/audioswitch)).
 
@@ -14,12 +14,12 @@ This document mixes shipped architecture and roadmap notes. For the exact user-f
 |------|----------------|
 | Device listing and policy status | Implemented: `list`, `list --hdmi`, `status` |
 | One-shot routing | Implemented: `apply` with preferred/fallback selection |
-| Manual selection | Implemented: `picker`, `picker --index N`, Sony power notes |
+| Manual selection | Implemented: `picker`, `picker --index N`, ScalarWebAPI power notes |
 | eqMac integration | Implemented: launch when installed, warn with https://eqmac.app when missing |
 | Config volume | Implemented on real switches with retry/readback |
 | Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
 | LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`; status helper remains planned |
-| Sony wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
+| ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
 | Native HDMI/DP software volume without eqMac | Planned: virtual AudioServerPlugIn + passthrough |
 
 ---
@@ -52,11 +52,11 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 |------|--------|
 | **Volume keys control audible level on HDMI/DP** | Primary outcome — same class of fix as eqMac |
 | **Route to chosen external output** | Required companion: user picks which monitor/dock |
-| **Wake Sony speakers on user activity** | When line-out is the active/preferred output and daemon idle polling detects the Mac went idle then active, call Sony **ScalarWebAPI** (`system.setPowerStatus`) to wake an **SRS-ZR5** on the LAN — see §1.1 |
+| **Wake ScalarWebAPI devices on user activity** | When line-out is the active/preferred output and daemon idle polling detects the Mac went idle then active, call ScalarWebAPI (`system.setPowerStatus`) to wake a **ScalarWebAPI device** on the LAN — see §1.1 |
 | **No GUI, launchd-friendly, JSON config** | Deliberate simplification vs eqMac |
 | **No EQ, booster, or per-app mixer in v1** | Out of scope unless explicitly added later |
 
-**Phased delivery:** Enumeration, routing, config, daemon polling, LaunchAgent controls, eqMac integration, and Sony wake support are implemented. A future phase adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can eventually provide HDMI/DP volume-key support without eqMac.
+**Phased delivery:** Enumeration, routing, config, daemon polling, LaunchAgent controls, eqMac integration, and ScalarWebAPI wake support are implemented. A future phase adds a **virtual output device + software volume pipeline** (eqMac-class architecture, stripped down) so Rusty Jack can eventually provide HDMI/DP volume-key support without eqMac.
 
 ---
 
@@ -78,44 +78,43 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
 | Rust + best-practice tooling | `rustfmt`, `clippy` (deny warnings in CI), optional `cargo-deny` / `cargo-audit` |
 | **Unit tests per component** | Every module has `#[cfg(test)]` coverage; CI runs `cargo test` on macOS; CoreAudio behind traits for mocks |
-| **Sony SRS-ZR5 wake on user input** | Map Mac **line-out** UID to ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI client; see §1.1 |
+| **ScalarWebAPI device wake on user input** | Map Mac **line-out** UID to ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI client; see §1.1 |
 
-### 1.1 Sony SRS-ZR5 wake-on-user-activity (implemented with polling)
+### 1.1 ScalarWebAPI device wake-on-user-activity (implemented with polling)
 
 #### Problem
 
-A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or similar Songpal speaker) analog input. The speaker often sits in **standby** to save power. When the user returns to the Mac — moves the mouse, clicks, scrolls, or types — audio may be routed to line-out but nothing is audible until someone wakes the speaker manually (remote, Songpal app, etc.).
+A Mac’s **headphone / line-out jack** may be cabled to a **ScalarWebAPI device** (or compatible network speaker) analog input. The device often sits in **standby** to save power. When the user returns to the Mac — moves the mouse, clicks, scrolls, or types — audio may be routed to line-out but nothing is audible until someone wakes the device manually (remote or vendor app).
 
 #### Desired behaviour
 
 1. User configures rusty-jack with:
-   - **`preferred_device_uid`** (or equivalent) = the Mac **Built-in Output / line-out** CoreAudio device that feeds the SRS-ZR5.
-   - **`sony_speaker`** block = ScalarWebAPI endpoint + model hint for the ZR5 on the LAN.
+   - **`preferred_device_uid`** (or equivalent) = the Mac **Built-in Output / line-out** CoreAudio device that feeds the ScalarWebAPI device.
+   - **`scalar_webapi`** block = ScalarWebAPI endpoint + model hint for the ScalarWebAPI device on the LAN.
 2. Daemon samples macOS HID idle time and treats idle-to-active transitions as user activity. Native event taps remain a possible refinement.
 3. When **both** are true:
    - active or preferred output is the configured line-out UID (or policy has just switched to it), **and**
    - a configured input-activity event occurred (keyboard and/or mouse, per `triggers`),
-4. rusty-jack calls the speaker’s **local ScalarWebAPI** (Sony Songpal REST/JSON over HTTP) to **wake** the unit — implemented **natively in Rust**, not via python-songpal.
+4. rusty-jack calls the device's **local ScalarWebAPI** (JSON-RPC-style calls over HTTP/WebSocket) to **wake** the unit — implemented **natively in Rust**, without an external protocol client.
 
-#### Reference: Sony ScalarWebAPI (Rust-native client)
+#### Reference: ScalarWebAPI (Rust-native client)
 
-[python-songpal](https://github.com/rytilahti/python-songpal) is a **protocol reference only** — we do **not** depend on Python, pip, or the `songpal` CLI at runtime. rusty-jack speaks ScalarWebAPI directly. If another Sony Songpal / ScalarWebAPI speaker works, users should consider contributing a device info file upstream; the [`python-songpal` PyPI package](https://pypi.org/project/python-songpal/) includes the `songpal dump-devinfo` helper.
+rusty-jack speaks ScalarWebAPI directly and does not depend on Python, pip, or an external protocol CLI at runtime.
 
 | Topic | Detail |
 |-------|--------|
-| Protocol | Sony **ScalarWebAPI** (“Audio Control API” / Songpal) — JSON-RPC-style calls over WebSocket with HTTP fallback |
+| Protocol | ScalarWebAPI: JSON-RPC-style calls over WebSocket with HTTP fallback |
 | Base URL | Discovered via SSDP/UPnP `X_ScalarWebAPI_BaseURL` when possible; configured `host` / `port` / `path` is fallback |
 | Guide endpoint | `{base}/guide` — bootstrap: `getSupportedApiInfo` lists services (`system`, `audio`, `avContent`, …) |
-| Service endpoint | `{base}/{service}` — e.g. `http://192.168.1.42:10000/sony/system` |
+| Service endpoint | `{base}/{service}` after resolving the advertised base URL |
 | Request shape | `{"method":"<name>","params":[{...}],"id":<n>,"version":"1.1"}` |
-| Method discovery | POST `getMethodTypes` with `params: [""]` on each service URL (see python-songpal `Service.fetch_signatures`) |
+| Method discovery | POST `getMethodTypes` with `params: [""]` on each service URL |
 | **Wake** | `system.setPowerStatus` with `params: [{"status":"active"}]` |
 | **Status** | `system.getPowerStatus` is used for picker notes and wake messages |
 | WebSocket | Implemented for ScalarWebAPI calls, with HTTP POST fallback |
-| SRS-ZR5 | Listed as officially supported by Sony’s Songpal / Home Assistant integration |
-| Power on | **`Quick Start-Up`** must be enabled on the speaker for network wake from standby; cold power-off may need **Wake-on-LAN** (future; MAC from `getSystemInformation`) |
+| Power on | The device network standby/wake option must be enabled for network wake from standby; cold power-off may need **Wake-on-LAN** (future; MAC from `getSystemInformation`) |
 | Rust deps | `tungstenite` for WebSocket plus standard TCP/UDP networking and `serde_json` |
-| Isolation | Unit tests cover parsing, filtering, and formatting; LAN I/O is skipped unless a configured Sony speaker is actually targeted |
+| Isolation | Unit tests cover parsing, filtering, and formatting; LAN I/O is skipped unless a configured ScalarWebAPI device is actually targeted |
 
 ##### ScalarWebAPI call flow (wake)
 
@@ -136,7 +135,7 @@ A Mac’s **headphone / line-out jack** may be cabled to a **Sony SRS-ZR5** (or 
 Example (curl):
 
 ```bash
-curl -s -X POST "http://192.168.1.42:10000/sony/system" \
+curl -s -X POST "http://192.168.1.42:10000/<base-path>/system" \
   -H "Content-Type: application/json" \
   -d '{"method":"setPowerStatus","params":[{"status":"active"}],"id":1,"version":"1.1"}'
 ```
@@ -144,12 +143,12 @@ curl -s -X POST "http://192.168.1.42:10000/sony/system" \
 ##### Rust module layout (current)
 
 ```text
-src/sony.rs        # discovery, service priming, power status, wake command
+src/scalar_webapi.rs        # discovery, service priming, power status, wake command
 src/activity.rs    # macOS HID idle-time sampling abstraction
 src/daemon.rs      # scheduled policy ticks and idle-to-active wake trigger
 ```
 
-**Non-goal:** shipping or invoking python-songpal, pip, or a Python interpreter.
+**Non-goal:** shipping or invoking Python, pip, or an external protocol CLI.
 
 #### Trigger design (macOS)
 
@@ -159,8 +158,8 @@ flowchart LR
     Policy[Policy switched to line-out] --> Gate
     Gate -->|yes| ScalarAPI[ScalarWebAPI setPowerStatus]
     Gate -->|no| Skip[No-op]
-    ScalarAPI --> ZR5[SRS-ZR5 analog input]
-    MacOut[Mac line-out] --> ZR5
+    ScalarAPI --> Device[ScalarWebAPI device analog input]
+    MacOut[Mac line-out] --> Device
 ```
 
 **Recommended triggers (configurable):**
@@ -170,19 +169,18 @@ flowchart LR
 | `keyboard` | Daemon HID idle-time polling | Treated as activity when the Mac transitions from idle to active |
 | `mouse` | Daemon HID idle-time polling | Treated as activity when the Mac transitions from idle to active |
 | `output_selected` | `apply`, `picker`, or daemon route switch to configured UID | Wake when output switches to line-out even without input yet |
-| `debounce` | Timer in daemon | Avoid spamming the speaker API (e.g. 30–60 s cooldown while already awake) |
+| `debounce` | Timer in daemon | Avoid spamming the device API (e.g. 30–60 s cooldown while already awake) |
 
 **Permissions:** Current idle-time polling does not require Accessibility permission. If a future native event tap is added, it should observe event types only for wake gating — not keystroke logging or screen recording.
 
-#### Configuration sketch (see `config.example.sony.json`)
+#### Configuration sketch (see `config.example.scalarwebapi.json`)
 
 ```json
-"sony_speaker": {
+"scalar_webapi": {
   "enabled": true,
-  "model": "SRS-ZR5",
-  "host": "sony-speaker.local",
+  "model": "ScalarWebAPI device",
+  "host": "scalarwebapi-device.local",
   "port": 10000,
-  "path": "sony",
   "mac_output": { "monitor_name": "Built-in Output" },
   "triggers": ["keyboard", "mouse", "output_selected"],
   "wake_debounce_ms": 30000,
@@ -191,20 +189,20 @@ flowchart LR
 }
 ```
 
-- **`host`** — hostname, FQDN, or IP address (e.g. `sony-speaker.local` or `192.168.1.42`); ScalarWebAPI URL is built as `http://{host}:{port}/{path}`.
-- **`mac_output`** — same shape as `preferred_device` (`monitor_name` and/or `uid`) for the Mac line-out feeding the ZR5.
-- Omit `sony_speaker` entirely when the feature is not used on this Mac.
+- **`host`** — hostname, FQDN, or IP address (e.g. `scalarwebapi-device.local` or `192.168.1.42`); ScalarWebAPI URL is built from `host`, `port`, and the protocol base path.
+- **`mac_output`** — same shape as `preferred_device` (`monitor_name` and/or `uid`) for the Mac line-out feeding the ScalarWebAPI device.
+- Omit `scalar_webapi` entirely when the feature is not used on this Mac.
 - **`request_timeout_ms`** — HTTP timeout for ScalarWebAPI calls.
 
 #### Non-goals for this feature
 
-- Full Songpal remote (EQ, multi-room grouping, source switching on the Sony unit).
-- Replacing the Sony app for everyday control.
-- Waking speakers when line-out is **not** the active/preferred output.
+- Full ScalarWebAPI remote (EQ, multi-room grouping, source switching on the device).
+- Replacing the vendor app for everyday control.
+- Waking devices when line-out is **not** the active/preferred output.
 
 #### Status
 
-Implemented with daemon idle polling and output-selection hooks. Native event taps and a dedicated `sony discover` helper remain optional refinements.
+Implemented with daemon idle polling and output-selection hooks. Native event taps and a dedicated `scalarwebapi discover` helper remain optional refinements.
 
 ### Non-goals (for v1)
 
@@ -358,7 +356,7 @@ rusty-jack/
 │   │   listener.rs                # property listeners + run loop integration
 │   │   sys.rs                     # unsafe FFI wrappers (thin)
 │   ├── policy.rs                  # “should switch?” + target selection
-│   ├── sony.rs                    # ScalarWebAPI client (SRS-ZR5 wake)
+│   ├── scalarwebapi.rs                    # ScalarWebAPI client and wake commands
 │   ├── activity.rs                # HID idle-time activity monitor
 │   ├── daemon.rs                  # main loop, poll, wake handling
 │   ├── launchd.rs                 # install/pause/resume/uninstall/upgrade LaunchAgent helpers
@@ -380,7 +378,7 @@ Each `src/*.rs` and `src/coreaudio/*.rs` module includes a `#[cfg(test)] mod tes
 | `thiserror`, `anyhow` | Errors (`thiserror` in library, `anyhow` in binary) |
 | `tracing`, `tracing-subscriber` | Structured logs (JSON or pretty in foreground) |
 | `directories` | Default config path under `~/.config` |
-| `tungstenite` | Sony ScalarWebAPI WebSocket calls |
+| `tungstenite` | ScalarWebAPI WebSocket calls |
 | `ctrlc` | Future graceful shutdown in daemon mode |
 
 **Dev-dependencies (tests):**
@@ -390,7 +388,7 @@ Each `src/*.rs` and `src/coreaudio/*.rs` module includes a `#[cfg(test)] mod tes
 | `tempfile` | Isolated config/state/plist paths in unit tests |
 | `pretty_assertions` | Readable diffs for policy/plist golden tests |
 | `assert_cmd` / `predicates` | Optional CLI integration tests in `tests/` |
-| `wiremock` | Future network fixtures if Sony HTTP/WebSocket tests grow |
+| `wiremock` | Future network fixtures if HTTP/WebSocket tests grow |
 | `serial_test` | Optional: serialize tests that touch global HAL mocks |
 
 **macOS-only:** gate with `cfg(target_os = "macos")` and fail compile on other targets with a clear message.
@@ -506,15 +504,15 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `poll_interval_ms` | Polling interval; `0` disables poll (listeners only — not recommended) |
 | `switch_delay_ms` | Debounce after device list change before applying (eqMac uses 500–1000 ms) |
 | `also_set_system_output` | Mirror alerts/sound effects device |
-| `sony_speaker` | Optional — omit on Macs without a networked Sony speaker |
-| `sony_speaker.enabled` | Master switch for SRS-ZR5 / ScalarWebAPI wake logic |
-| `sony_speaker.host` | Hostname, FQDN, or IP (e.g. `sony-speaker.local`) |
-| `sony_speaker.port` / `path` | ScalarWebAPI URL pieces (default `10000` / `sony`) |
-| `sony_speaker.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
-| `sony_speaker.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
-| `sony_speaker.wake_debounce_ms` | Minimum interval between wake commands |
-| `sony_speaker.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
-| `sony_speaker.require_quick_start` | If true, log a warning when wake fails (user must enable Quick Start-Up on the ZR5) |
+| `scalar_webapi` | Optional — omit on Macs without a networked ScalarWebAPI device |
+| `scalar_webapi.enabled` | Master switch for ScalarWebAPI device / ScalarWebAPI wake logic |
+| `scalar_webapi.host` | Hostname, FQDN, or IP (e.g. `scalarwebapi-device.local`) |
+| `scalar_webapi.port` / `path` | ScalarWebAPI URL pieces; `path` usually stays omitted so the protocol default is used |
+| `scalar_webapi.mac_output` | Line-out device selector (`monitor_name` and/or `uid`) |
+| `scalar_webapi.triggers` | `keyboard`, `mouse`, `output_selected` (see §1.1) |
+| `scalar_webapi.wake_debounce_ms` | Minimum interval between wake commands |
+| `scalar_webapi.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
+| `scalar_webapi.require_quick_start` | Documents that the device network standby/wake option should be enabled |
 
 ### 4.3 Config discovery
 
@@ -524,7 +522,7 @@ Resolution order:
 2. `$HDMI_SOUND_CONTROLLER_CONFIG`
 3. `~/.config/rusty-jack/config.json`
 
-Starter configs currently live in `config.example.json` and `config.example.sony.json`.
+Starter configs currently live in `config.example.json` and `config.example.scalarwebapi.json`.
 
 ---
 
@@ -934,7 +932,7 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 - [ ] Property listeners + run loop thread
 - [x] Poll timer with `poll_interval_ms`, `switch_delay_ms`, and config reload
 - [x] `daemon` subcommand
-- [x] Idle-to-active activity sampling for Sony wake triggers
+- [x] Idle-to-active activity sampling for ScalarWebAPI wake triggers
 - [x] **Tests:** `daemon.rs` tick behavior, no-op suppression, activity transition, cooldown
 
 ### Phase 5 — launchd + uninstall (1 day)
@@ -969,24 +967,24 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
 **Definition of done (Phase 7):** User selects HDMI/DP monitor; **F10/F11/F12 change audible volume**; `rusty-jack list` shows virtual + physical devices; clean uninstall restores pre-install audio stack.
 
-### Sony SRS-ZR5 wake on user input activity (implemented; refinements remain)
+### ScalarWebAPI device wake on user input activity (implemented; refinements remain)
 
-Wake an **SRS-ZR5** when Mac **line-out** is the target output and the user shows **presence at the Mac** (mouse or keyboard activity). **Native Rust ScalarWebAPI client** — no Python.
+Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and the user shows **presence at the Mac** (mouse or keyboard activity). **Native Rust ScalarWebAPI client** — no Python.
 
-- [x] Config block `sony_speaker` (§4.1) + validation
+- [x] Config block `scalar_webapi` (§4.1) + validation
 - [x] SSDP/UPnP endpoint discovery and configured endpoint fallback
 - [x] WebSocket ScalarWebAPI calls with HTTP POST fallback
 - [x] `getPowerStatus`, `setPowerStatus(status: active)`, service priming
-- [x] Picker power-state notes for configured Sony output
+- [x] Picker power-state notes for configured ScalarWebAPI output
 - [x] Hook into `apply`, `picker`, and daemon output-selected flow
 - [x] Idle-to-active daemon trigger with `wake_debounce_ms`
 - [x] **Tests:** parsing, endpoint construction, trigger matching, selection filtering, wake message formatting
 - [ ] Native event tap refinement for lower-latency keyboard/mouse event detection
-- [ ] Optional `rusty-jack sony discover` helper
+- [ ] Optional `rusty-jack scalarwebapi discover` helper
 
-**Current definition of done:** Line-out configured as preferred; daemon observes idle-to-active transition while ZR5 is in standby → Rust client calls `setPowerStatus` → speaker wakes; no Python installed; no wake when output is not the configured Sony output; Quick Start-Up documented.
+**Current definition of done:** Line-out configured as preferred; daemon observes idle-to-active transition while ScalarWebAPI device is in standby → Rust client calls `setPowerStatus` → device wakes; no Python installed; no wake when output is not the configured ScalarWebAPI output; network standby/wake documented.
 
-**Future:** Wake-on-LAN from `getSystemInformation` MAC; input select on ZR5 if needed; native event tap if idle polling proves too coarse.
+**Future:** Wake-on-LAN from `getSystemInformation` MAC; input select on ScalarWebAPI device if needed; native event tap if idle polling proves too coarse.
 
 **Remaining estimate:** LaunchAgent helpers and packaging are small follow-up work; native virtual driver remains the largest remaining feature.
 
@@ -1076,7 +1074,7 @@ Run on **`macos-13` or `macos-14` only** — rusty-jack targets macOS CoreAudio 
 | Scenario | Method |
 |----------|--------|
 | **Volume keys on HDMI/DP** | Phase 7: F10/F11/F12 change audible level with virtual driver installed |
-| **SRS-ZR5 wake on line-out** | line-out preferred + daemon idle-to-active activity → Rust `setPowerStatus`; Quick Start-Up enabled |
+| **ScalarWebAPI device wake on line-out** | line-out preferred + daemon idle-to-active activity -> Rust `setPowerStatus`; network standby/wake enabled |
 | Built-in ↔ HDMI | `apply`, `picker`, `daemon` |
 | Sleep/wake + dock | daemon poll after wake |
 | Uninstall | `uninstall` / `disable` — no orphan plist |
@@ -1100,8 +1098,8 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 | Cross-compile link errors on CI | Pin deployment target; install both rustup targets; compile both in CI |
 | Uninstall leaves audio on HDMI | Default `--restore-audio`; document `--no-restore-audio` for Brew |
 | macOS 12 API drift | Test on darwin 21.x hardware; avoid macOS 15-only Swift APIs |
-| **SRS-ZR5 stays asleep on line-out** | ScalarWebAPI wake when configured Mac output is active and `output_selected` or idle-to-active trigger fires |
-| Songpal wake fails (ZR5 asleep) | Enable **Quick Start-Up** on speaker; verify endpoint with `picker` power notes or curl; debounce + log failures |
+| **ScalarWebAPI device stays asleep on line-out** | ScalarWebAPI wake when configured Mac output is active and `output_selected` or idle-to-active trigger fires |
+| ScalarWebAPI wake fails (ScalarWebAPI device asleep) | Enable **network standby/wake** on the device; verify endpoint with `picker` power notes or curl; debounce + log failures |
 | Input activity polling is too coarse | Add native event tap refinement later; `output_selected` trigger works today |
 
 ---
@@ -1116,9 +1114,6 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 - `coreaudio-rs` macOS helpers: https://docs.rs/coreaudio-rs/latest/coreaudio/audio_unit/macos_helpers/
 - Similar CLI (priority list): https://github.com/mateusbadalotti/audio-priority-cli-macos
 - audioswitch (C reference for set/get default): https://github.com/retrography/audioswitch/blob/master/device.c
-- **python-songpal** (protocol reference for ScalarWebAPI): https://github.com/rytilahti/python-songpal
-- Sony Audio Control API (ScalarWebAPI) — see python-songpal `device.py` / `service.py` for request shapes
-- Home Assistant Songpal integration (SRS-ZR5 listed): https://www.home-assistant.io/integrations/songpal/
 
 ---
 
@@ -1134,10 +1129,10 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 8. **Dual-target releases** — always ship `aarch64` + `x86_64` artifacts; optional universal via `lipo`.
 9. **Clean uninstall is first-class** — current `uninstall` / `disable` removes the per-user LaunchAgent plist; future purge/audio-restore helpers can build on this.
 10. **Unit tests per component** — no module merges without colocated tests; CoreAudio behind `AudioHal` mock.
-11. **Sony SRS-ZR5 wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI calls (`system.setPowerStatus`); python-songpal is reference documentation only, not a runtime dependency.
+11. **ScalarWebAPI device wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI calls (`system.setPowerStatus`).
 
 ---
 
-*Document version: 1.7 — current routing daemon, eqMac integration, LaunchAgent controls, and Sony wake support; native HDMI/DP virtual driver remains future work.*
+*Document version: 1.7 — current routing daemon, eqMac integration, LaunchAgent controls, and ScalarWebAPI wake support; native HDMI/DP virtual driver remains future work.*
 
 Copyright (c) 2026 Henrique Andrade / thehcma.

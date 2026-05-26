@@ -85,7 +85,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume,
-            sony_speaker: None,
+            scalar_webapi: None,
         }
     }
 

@@ -593,7 +593,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            sony_speaker: None,
+            scalar_webapi: None,
         };
         assert_eq!(
             preferred_uid_from_config(Some(&config), &devices).as_deref(),
@@ -645,9 +645,12 @@ mod tests {
     fn test_append_picker_note() {
         let label = append_picker_note(
             "   External Headphones — built-in".into(),
-            Some("Sony: standby"),
+            Some("ScalarWebAPI: standby"),
         );
-        assert_eq!(label, "   External Headphones — built-in — Sony: standby");
+        assert_eq!(
+            label,
+            "   External Headphones — built-in — ScalarWebAPI: standby"
+        );
     }
 
     #[test]
@@ -675,7 +678,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: Some(13),
-            sony_speaker: None,
+            scalar_webapi: None,
         };
         assert_eq!(
             volume_for_preferred_pick(Some(&config), &devices, "hdmi-1"),

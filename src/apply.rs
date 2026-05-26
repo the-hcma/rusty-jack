@@ -102,7 +102,7 @@ pub fn apply_policy(
             volume,
         },
     )?;
-    crate::sony::warn_on_output_selected(config, &list.devices, &target.uid);
+    crate::scalar_webapi::warn_on_output_selected(config, &list.devices, &target.uid);
 
     Ok((result, list))
 }
@@ -268,7 +268,7 @@ mod tests {
             fallback_uids: vec![],
             also_set_system_output: true,
             volume: None,
-            sony_speaker: None,
+            scalar_webapi: None,
         }
     }
 
