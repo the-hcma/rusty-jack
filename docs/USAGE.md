@@ -276,7 +276,7 @@ Integer 0–100. Created automatically from the preferred route's current effect
 
 ### `scalar_webapi_device`
 
-Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
+Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. `mac_output` may be any Mac output connected to the external device; eqMac is only involved when that output is HDMI/DisplayPort and needs the software volume layer. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
 
 | Field | Default | Description |
 |-------|---------|-------------|

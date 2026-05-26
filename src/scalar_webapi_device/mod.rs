@@ -1,4 +1,4 @@
-//! ScalarWebAPI wake support for line-out attached speakers.
+//! ScalarWebAPI wake support for external devices attached to a selected Mac output.
 
 use crate::config::{Config, ScalarWebApiDeviceConfig};
 use crate::device_select::resolve_device_selector;
