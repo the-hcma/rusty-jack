@@ -19,7 +19,9 @@ pub struct OutputDevice {
 impl OutputDevice {
     #[must_use]
     pub fn is_excluded_by_name(name: &str) -> bool {
-        name.contains("CADefaultDeviceAggregate") || name.contains("(eqMac)")
+        name.contains("CADefaultDeviceAggregate")
+            || name.contains("(eqMac)")
+            || name == "Rusty Jack"
     }
 
     /// True when the device can be chosen as the system output route.
@@ -84,7 +86,9 @@ pub fn non_selectable_reason(
 
 fn is_app_virtual_output(uid: &str, name: &str) -> bool {
     let uid_lower = uid.to_ascii_lowercase();
-    name.contains("ZoomAudio") || uid_lower.contains("zoom.us")
+    name.contains("ZoomAudio")
+        || uid_lower.contains("zoom.us")
+        || uid_lower == "com.the-hcma.rusty-jack.driver.output"
 }
 
 /// Prefer speaker-style built-in outputs over line-out/headphone built-ins for fallback.
@@ -151,6 +155,7 @@ mod tests {
     #[test]
     fn test_is_excluded_by_name() {
         assert!(OutputDevice::is_excluded_by_name("Foo (eqMac)"));
+        assert!(OutputDevice::is_excluded_by_name("Rusty Jack"));
         assert!(!OutputDevice::is_excluded_by_name("CalDigit TS4 Audio"));
     }
 
@@ -167,6 +172,21 @@ mod tests {
             .non_selectable_reason()
             .unwrap()
             .contains("app virtual"));
+    }
+
+    #[test]
+    fn test_rusty_jack_virtual_device_not_selectable() {
+        let rusty_jack = sample(
+            "com.the-hcma.rusty-jack.driver.output",
+            "Rusty Jack",
+            TransportKind::Virtual,
+            false,
+        );
+        assert!(!rusty_jack.is_selectable());
+        assert_eq!(
+            rusty_jack.non_selectable_reason(),
+            Some("virtual router entry")
+        );
     }
 
     #[test]

@@ -65,9 +65,7 @@ jobs:
         run: cargo build --release --jobs "$(sysctl -n hw.logicalcpu)"
 
       - name: validate driver bundle
-        run: |
-          ./scripts/build-driver-bundle
-          ./scripts/validate-driver-bundle
+        run: make validate-driver-bundle
 
   build-release-aarch64:
     name: Build release (aarch64-apple-darwin)
