@@ -30,6 +30,8 @@ pub enum EqMacEnsureAction {
     AlreadyRunning,
     /// eqMac was launched successfully.
     Launched,
+    /// eqMac was restarted to recover a stale route.
+    Restarted,
     /// HDMI-class route but eqMac is not installed.
     NotInstalled,
 }
@@ -118,6 +120,48 @@ pub fn ensure_eqmac_running() -> Result<EqMacEnsureResult, RustyJackError> {
     }
 }
 
+/// Restart eqMac for a target route that needs HDMI/DP software volume.
+///
+/// # Errors
+///
+/// Returns an error when eqMac is installed but cannot be relaunched.
+pub fn restart_eqmac_for_target(
+    devices: &[OutputDevice],
+    target_uid: &str,
+) -> Result<EqMacEnsureResult, RustyJackError> {
+    if !routing_needs_eqmac(devices, target_uid) {
+        return Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotNeeded,
+        });
+    }
+    if eqmac_install_state() == EqMacInstallState::NotInstalled {
+        return Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotInstalled,
+        });
+    }
+
+    if eqmac_is_running() {
+        quit_eqmac_app();
+        thread::sleep(EQMAC_STARTUP_WAIT);
+        if eqmac_is_running() {
+            kill_eqmac_app();
+            thread::sleep(EQMAC_STARTUP_WAIT);
+        }
+    }
+
+    match launch_eqmac_app()? {
+        EqMacLaunchAction::Launched => {
+            thread::sleep(EQMAC_STARTUP_WAIT);
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::Restarted,
+            })
+        }
+        EqMacLaunchAction::NotInstalled => Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotInstalled,
+        }),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EqMacLaunchAction {
     Launched,
@@ -134,6 +178,18 @@ fn launch_eqmac_app() -> Result<EqMacLaunchAction, RustyJackError> {
         output.status.success(),
         &String::from_utf8_lossy(&output.stderr),
     )
+}
+
+fn quit_eqmac_app() {
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", "tell application \"eqMac\" to quit"])
+        .output();
+}
+
+fn kill_eqmac_app() {
+    let _ = std::process::Command::new("pkill")
+        .args(["-x", EQMAC_APP_NAME])
+        .output();
 }
 
 fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
@@ -156,6 +212,9 @@ pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
         EqMacEnsureAction::NotNeeded | EqMacEnsureAction::AlreadyRunning => vec![],
         EqMacEnsureAction::Launched => {
             vec!["Started eqMac (software volume for HDMI/DisplayPort).".into()]
+        }
+        EqMacEnsureAction::Restarted => {
+            vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
         }
         EqMacEnsureAction::NotInstalled => vec![
             "warning: eqMac is not installed; volume buttons cannot control HDMI/DisplayPort output."
@@ -203,6 +262,15 @@ mod tests {
         });
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("Started eqMac"));
+    }
+
+    #[test]
+    fn test_format_ensure_restarted_message() {
+        let lines = format_ensure_messages(EqMacEnsureResult {
+            action: EqMacEnsureAction::Restarted,
+        });
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("Restarted eqMac"));
     }
 
     #[test]

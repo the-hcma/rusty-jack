@@ -5,7 +5,8 @@ use crate::apply::{preferred_uid, switch_output, volume_for_target, ApplyResult,
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
 use crate::eqmac::{
-    ensure_eqmac_for_target, format_ensure_messages, EqMacEnsureAction, EqMacEnsureResult,
+    ensure_eqmac_for_target, format_ensure_messages, restart_eqmac_for_target, EqMacEnsureAction,
+    EqMacEnsureResult,
 };
 use crate::network::{current_network_access_snapshot, NetworkAccessSnapshot};
 use crate::output_device::OutputDevice;
@@ -108,24 +109,42 @@ pub fn daemon_tick(
     config: &Config,
     reason: DaemonTickReason,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-    daemon_tick_with_eqmac(hal, config, reason, &ensure_eqmac_for_target)
+    daemon_tick_with_eqmac(
+        hal,
+        config,
+        reason,
+        &ensure_eqmac_for_target,
+        &restart_eqmac_for_target,
+    )
 }
 
 type EqMacEnsureFn<'a> =
     dyn Fn(&[OutputDevice], &str) -> Result<EqMacEnsureResult, RustyJackError> + 'a;
+type EqMacRecoverFn<'a> =
+    dyn Fn(&[OutputDevice], &str) -> Result<EqMacEnsureResult, RustyJackError> + 'a;
+
+struct EqMacHooks<'a> {
+    ensure: &'a EqMacEnsureFn<'a>,
+    recover: &'a EqMacRecoverFn<'a>,
+}
 
 fn daemon_tick_with_eqmac(
     hal: &dyn AudioHal,
     config: &Config,
     reason: DaemonTickReason,
     ensure_eqmac: &EqMacEnsureFn<'_>,
+    recover_eqmac: &EqMacRecoverFn<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
+    let eqmac_hooks = EqMacHooks {
+        ensure: ensure_eqmac,
+        recover: recover_eqmac,
+    };
     daemon_tick_with_scalar_webapi_device_fallback(
         hal,
         config,
         reason,
         ScalarWebApiDeviceFallbackPermission::Allowed,
-        ensure_eqmac,
+        &eqmac_hooks,
     )
 }
 
@@ -140,14 +159,14 @@ fn daemon_tick_with_scalar_webapi_device_fallback(
     config: &Config,
     reason: DaemonTickReason,
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
-    ensure_eqmac: &EqMacEnsureFn<'_>,
+    eqmac_hooks: &EqMacHooks<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     daemon_tick_with_hooks(
         hal,
         config,
         reason,
         scalar_webapi_device_fallback,
-        ensure_eqmac,
+        eqmac_hooks,
         &crate::scalar_webapi_device::wake_on_output_selected,
         &crate::scalar_webapi_device::wake_on_activity,
     )
@@ -165,7 +184,7 @@ fn daemon_tick_with_hooks(
     config: &Config,
     reason: DaemonTickReason,
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
-    ensure_eqmac: &EqMacEnsureFn<'_>,
+    eqmac_hooks: &EqMacHooks<'_>,
     wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
     wake_on_activity: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
@@ -195,7 +214,7 @@ fn daemon_tick_with_hooks(
                     &list,
                     &fallback,
                     preferred_uid.as_deref(),
-                    ensure_eqmac,
+                    eqmac_hooks.ensure,
                 )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
@@ -220,12 +239,22 @@ fn daemon_tick_with_hooks(
                     &list,
                     &checked_target,
                     preferred_uid.as_deref(),
-                    ensure_eqmac,
+                    eqmac_hooks.ensure,
                 )?;
                 return Ok((DaemonTickResult::Switched(result), list));
             }
         }
-        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, ensure_eqmac)?;
+        if let Some(result) = recover_eqmac_for_daemon_target(
+            hal,
+            config,
+            &list,
+            &target,
+            preferred_uid.as_deref(),
+            reason,
+            eqmac_hooks,
+        )? {
+            return Ok((DaemonTickResult::Switched(result), list));
+        }
         ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
@@ -248,7 +277,17 @@ fn daemon_tick_with_hooks(
     };
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
-        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, ensure_eqmac)?;
+        if let Some(result) = recover_eqmac_for_daemon_target(
+            hal,
+            config,
+            &list,
+            &target,
+            preferred_uid.as_deref(),
+            reason,
+            eqmac_hooks,
+        )? {
+            return Ok((DaemonTickResult::Switched(result), list));
+        }
         ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
@@ -260,7 +299,7 @@ fn daemon_tick_with_hooks(
         &list,
         &target,
         preferred_uid.as_deref(),
-        ensure_eqmac,
+        eqmac_hooks.ensure,
     )?;
 
     Ok((DaemonTickResult::Switched(result), list))
@@ -348,6 +387,42 @@ fn ensure_eqmac_for_daemon_target(
         }
     }
     Ok(())
+}
+
+fn recover_eqmac_for_daemon_target(
+    hal: &dyn AudioHal,
+    config: &Config,
+    list: &DeviceList,
+    target: &RoutingTarget,
+    preferred_uid: Option<&str>,
+    reason: DaemonTickReason,
+    eqmac_hooks: &EqMacHooks<'_>,
+) -> Result<Option<ApplyResult>, RustyJackError> {
+    if !matches!(
+        reason,
+        DaemonTickReason::Startup | DaemonTickReason::UserActivity
+    ) {
+        ensure_eqmac_for_daemon_target(&list.devices, &target.uid, reason, eqmac_hooks.ensure)?;
+        return Ok(None);
+    }
+
+    let eqmac = (eqmac_hooks.recover)(&list.devices, &target.uid)?;
+    let recovered = matches!(eqmac.action, EqMacEnsureAction::Restarted);
+    let should_log = recovered
+        || (reason == DaemonTickReason::Startup
+            && matches!(eqmac.action, EqMacEnsureAction::NotInstalled));
+    if should_log {
+        for line in format_ensure_messages(eqmac) {
+            eprintln!("{line}");
+        }
+    }
+
+    if recovered {
+        return switch_daemon_target(hal, config, list, target, preferred_uid, eqmac_hooks.ensure)
+            .map(Some);
+    }
+
+    Ok(None)
 }
 
 fn scalar_webapi_device_checked_target_or_fallback(
@@ -541,7 +616,10 @@ fn run_tick_logged(
         config,
         reason,
         scalar_webapi_device_fallback,
-        &ensure_eqmac_for_target,
+        &EqMacHooks {
+            ensure: &ensure_eqmac_for_target,
+            recover: &restart_eqmac_for_target,
+        },
     ) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
@@ -690,12 +768,28 @@ mod tests {
         })
     }
 
+    fn no_op_eqmac_recovery(
+        _devices: &[OutputDevice],
+        _target_uid: &str,
+    ) -> Result<EqMacEnsureResult, RustyJackError> {
+        Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotNeeded,
+        })
+    }
+
     fn daemon_tick_no_eqmac(
         hal: &dyn AudioHal,
         config: &Config,
         reason: DaemonTickReason,
     ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-        daemon_tick_with_eqmac(hal, config, reason, &no_op_eqmac)
+        daemon_tick_with_eqmac(hal, config, reason, &no_op_eqmac, &no_op_eqmac_recovery)
+    }
+
+    fn no_op_eqmac_hooks() -> EqMacHooks<'static> {
+        EqMacHooks {
+            ensure: &no_op_eqmac,
+            recover: &no_op_eqmac_recovery,
+        }
     }
 
     fn scalar_webapi_device_config(uid: &str) -> Config {
@@ -807,7 +901,7 @@ mod tests {
             &config,
             DaemonTickReason::Startup,
             ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -840,7 +934,7 @@ mod tests {
             &config,
             DaemonTickReason::Startup,
             ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -873,7 +967,7 @@ mod tests {
             &config,
             DaemonTickReason::StartupRetry,
             ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -906,7 +1000,7 @@ mod tests {
             &config,
             DaemonTickReason::Startup,
             ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -938,7 +1032,7 @@ mod tests {
             &config,
             DaemonTickReason::Scheduled,
             ScalarWebApiDeviceFallbackPermission::Allowed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -970,7 +1064,7 @@ mod tests {
             &config,
             DaemonTickReason::Scheduled,
             ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -1003,7 +1097,7 @@ mod tests {
             &config,
             DaemonTickReason::Scheduled,
             ScalarWebApiDeviceFallbackPermission::Suppressed,
-            &no_op_eqmac,
+            &no_op_eqmac_hooks(),
             &wake_on_output_selected,
             &wake_on_activity,
         )
@@ -1033,6 +1127,7 @@ mod tests {
             &test_config("hdmi-1"),
             DaemonTickReason::Scheduled,
             &ensure_eqmac,
+            &no_op_eqmac_recovery,
         )
         .unwrap();
 
@@ -1040,6 +1135,68 @@ mod tests {
         assert_eq!(calls.lock().unwrap().as_slice(), ["hdmi-1"]);
         assert!(hal.set_calls().is_empty());
         assert!(hal.volume_calls().is_empty());
+    }
+
+    #[test]
+    fn test_daemon_startup_restarts_stale_eqmac_and_reapplies_route() {
+        let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
+        hdmi.is_active = true;
+        let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
+        let recover_calls = std::sync::Mutex::new(Vec::<String>::new());
+        let recover_eqmac = |devices: &[OutputDevice], target_uid: &str| {
+            assert!(devices.iter().any(|device| device.uid == target_uid));
+            recover_calls.lock().unwrap().push(target_uid.to_string());
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::Restarted,
+            })
+        };
+        let ensure_eqmac = |_: &[OutputDevice], _: &str| {
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            })
+        };
+
+        let (result, _list) = daemon_tick_with_eqmac(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::Startup,
+            &ensure_eqmac,
+            &recover_eqmac,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert_eq!(recover_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
+    }
+
+    #[test]
+    fn test_daemon_user_activity_restarts_stale_eqmac_and_reapplies_route() {
+        let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
+        hdmi.is_active = true;
+        let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
+        let recover_eqmac = |_: &[OutputDevice], _: &str| {
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::Restarted,
+            })
+        };
+        let ensure_eqmac = |_: &[OutputDevice], _: &str| {
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            })
+        };
+
+        let (result, _list) = daemon_tick_with_eqmac(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::UserActivity,
+            &ensure_eqmac,
+            &recover_eqmac,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
     }
 
     #[test]
