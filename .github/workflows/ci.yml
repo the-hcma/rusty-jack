@@ -35,14 +35,22 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        run: |
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
+      - name: install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy \
+            --target aarch64-apple-darwin \
+            --target x86_64-apple-darwin
+          rustup default stable
 
       - name: rustfmt
         run: cargo fmt --all -- --check
@@ -62,13 +70,19 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        run: |
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
+      - name: install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --target aarch64-apple-darwin
+          rustup default stable
 
       - name: build release
         run: cargo build --release --target aarch64-apple-darwin --jobs "$(sysctl -n hw.logicalcpu)"
@@ -79,13 +93,19 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        run: |
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin
-
-      - uses: Swatinem/rust-cache@v2
+      - name: install Rust toolchain
+        run: |
+          rustup toolchain install stable \
+            --profile minimal \
+            --target x86_64-apple-darwin
+          rustup default stable
 
       - name: build release
         run: cargo build --release --target x86_64-apple-darwin --jobs "$(sysctl -n hw.logicalcpu)"
