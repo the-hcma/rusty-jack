@@ -3,6 +3,7 @@
 use crate::device_select::DeviceSelector;
 use crate::RustyJackError;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 const ENV_CONFIG: &str = "RUSTY_JACK_CONFIG";
@@ -230,7 +231,49 @@ pub fn load_config(path: &Path) -> Result<Config, RustyJackError> {
     let config: Config = serde_json::from_str(&raw)
         .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
     validate_config(&config)?;
+    rewrite_config_if_needed(path, &raw)?;
     Ok(config)
+}
+
+/// Render JSON with all object keys sorted lexicographically at every level.
+pub fn render_lexicographic_json(value: &Value) -> Result<String, RustyJackError> {
+    let mut value = value.clone();
+    sort_json_keys(&mut value);
+    serde_json::to_string_pretty(&value)
+        .map(|json| format!("{json}\n"))
+        .map_err(|err| RustyJackError::Config(format!("could not render config: {err}")))
+}
+
+fn rewrite_config_if_needed(path: &Path, raw: &str) -> Result<(), RustyJackError> {
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+    let canonical = render_lexicographic_json(&value)?;
+    if raw != canonical {
+        std::fs::write(path, canonical).map_err(RustyJackError::Io)?;
+    }
+    Ok(())
+}
+
+fn sort_json_keys(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let mut entries = std::mem::take(map).into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut sorted = Map::new();
+            for (key, mut value) in entries {
+                sort_json_keys(&mut value);
+                sorted.insert(key, value);
+            }
+            *map = sorted;
+        }
+        Value::Array(values) => {
+            for value in values {
+                sort_json_keys(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 /// Load config when present; returns `None` if the file does not exist.
@@ -450,6 +493,96 @@ mod tests {
         .unwrap();
         let config = load_config(file.path()).unwrap();
         assert_eq!(config.volume, Some(13));
+    }
+
+    #[test]
+    fn test_load_config_rewrites_keys_lexicographically() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "volume": 80,
+  "sony_speaker": {{
+    "wake_debounce_ms": 2000,
+    "triggers": ["output_selected"],
+    "request_timeout_ms": 3000,
+    "require_quick_start": true,
+    "path": "sony",
+    "model": "SRS-ZR5",
+    "mac_output": {{
+      "uid": "BuiltInHeadphoneOutputDevice"
+    }},
+    "host": "sony-speaker.local",
+    "enabled": true
+  }},
+  "preferred_device": {{
+    "uid": "BuiltInHeadphoneOutputDevice"
+  }},
+  "poll_interval_ms": 2000,
+  "fallback_uids": [],
+  "auto_switch": true,
+  "also_set_system_output": true
+}}"#
+        )
+        .unwrap();
+
+        let config = load_config(file.path()).unwrap();
+
+        assert_eq!(config.volume, Some(80));
+        assert_eq!(
+            std::fs::read_to_string(file.path()).unwrap(),
+            r#"{
+  "also_set_system_output": true,
+  "auto_switch": true,
+  "fallback_uids": [],
+  "poll_interval_ms": 2000,
+  "preferred_device": {
+    "uid": "BuiltInHeadphoneOutputDevice"
+  },
+  "sony_speaker": {
+    "enabled": true,
+    "host": "sony-speaker.local",
+    "mac_output": {
+      "uid": "BuiltInHeadphoneOutputDevice"
+    },
+    "model": "SRS-ZR5",
+    "path": "sony",
+    "request_timeout_ms": 3000,
+    "require_quick_start": true,
+    "triggers": [
+      "output_selected"
+    ],
+    "wake_debounce_ms": 2000
+  },
+  "version": 1,
+  "volume": 80
+}
+"#
+        );
+    }
+
+    #[test]
+    fn test_render_lexicographic_json_sorts_nested_objects() {
+        let value = serde_json::json!({
+            "z": 1,
+            "a": {
+                "d": 4,
+                "b": 2
+            }
+        });
+
+        assert_eq!(
+            render_lexicographic_json(&value).unwrap(),
+            r#"{
+  "a": {
+    "b": 2,
+    "d": 4
+  },
+  "z": 1
+}
+"#
+        );
     }
 
     #[test]
