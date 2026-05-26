@@ -194,7 +194,7 @@ rusty-jack uninstall --only-driver  # remove only the native audio driver
 rusty-jack uninstall --remove-config  # also remove default config without prompting
 ```
 
-`resume` applies the configured route and volume synchronously, then starts the daemon. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--only-driver` removes only the native driver and leaves the LaunchAgent, binary, config, and logs alone. `--keep-config` keeps config without prompting. Neither command deletes log files.
+`resume` applies the configured route and volume synchronously, then starts the daemon. If the daemon was paused because `picker` selected a non-preferred output, interactive `resume` first asks whether to return to the configured output; declining leaves the daemon paused. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--only-driver` removes only the native driver and leaves the LaunchAgent, binary, config, and logs alone. `--keep-config` keeps config without prompting. Neither command deletes log files.
 
 ### Update
 
