@@ -316,6 +316,9 @@ pub(crate) fn render_config_json(
         "fallback_uids": fallback_uids,
         "also_set_system_output": true,
     });
+    if let Some(monitor_name) = preferred.monitor_name.as_deref() {
+        value["preferred_device"]["monitor_name"] = serde_json::json!(monitor_name);
+    }
     if let Some(volume) = volume {
         value["volume"] = serde_json::json!(volume);
     }
@@ -392,7 +395,8 @@ mod tests {
 
     #[test]
     fn test_render_config_json_includes_preferred_and_fallback() {
-        let preferred = device("hdmi", "HDMI", TransportKind::Hdmi, true);
+        let mut preferred = device("hdmi", "HDMI", TransportKind::Hdmi, true);
+        preferred.monitor_name = Some("DELL U3219Q".into());
         let fallback = device(
             "speakers",
             "Mac mini Speakers",
@@ -402,6 +406,7 @@ mod tests {
 
         let json = render_config_json(&preferred, Some(&fallback), Some(13)).unwrap();
 
+        assert!(json.contains("\"monitor_name\": \"DELL U3219Q\""));
         assert!(json.contains("\"uid\": \"hdmi\""));
         assert!(json.contains("\"speakers\""));
         assert!(json.contains("\"volume\": 13"));

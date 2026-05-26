@@ -27,7 +27,7 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, eqMac, launc
 
 ## `apply` says switched but I hear nothing
 
-- Wrong monitor in config — run `list`, fix `preferred_device.monitor_name` or `uid`.
+- Wrong monitor in config — run `list`, fix `preferred_device.monitor_name` and `uid` so they describe the same output.
 - eqMac routing target mismatch — set output inside eqMac to your HDMI device.
 - Monitor input/source — select correct HDMI input on the display.
 

@@ -249,10 +249,12 @@ Path resolution order:
 
 ### `preferred_device`
 
-Use **either** (or both; `preferred_device` wins when set):
+Use `monitor_name`, or use `uid` plus `monitor_name` when setup can record both:
 
 - `monitor_name` — product name from `list` MONITOR column (must be unique among connected devices)
 - `uid` — stable CoreAudio UID from `list`
+
+When both fields are present, the connected device with `uid` must still report the configured `monitor_name`. This keeps stale UIDs from silently routing to the wrong display after hardware changes.
 
 ### `fallback_uids`
 

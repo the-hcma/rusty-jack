@@ -178,6 +178,7 @@ pub fn select_routing_target(
             }
         }
         Err(err @ ResolveError::MonitorAmbiguous { .. })
+        | Err(err @ ResolveError::MonitorMismatch { .. })
         | Err(err @ ResolveError::NotSpecified) => {
             return Err(SelectTargetError::Resolve(err));
         }
