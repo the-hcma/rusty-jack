@@ -41,6 +41,8 @@ pub struct HdmiDisplayPortVolumeControlStatus {
     pub native_driver_installed: bool,
     pub native_driver_recommended: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_driver_recommendation_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub native_driver_install_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_driver: Option<HalDriverInfo>,
@@ -165,10 +167,27 @@ pub fn format_ensure_messages(result: HdmiDisplayPortVolumeControlEnsureResult) 
 pub fn hdmi_displayport_volume_control_status(
     devices: &[OutputDevice],
 ) -> HdmiDisplayPortVolumeControlStatus {
+    hdmi_displayport_volume_control_status_for_target(devices, None)
+}
+
+/// Build status/recommendation for a specific route, when one is known.
+#[must_use]
+pub fn hdmi_displayport_volume_control_status_for_target(
+    devices: &[OutputDevice],
+    target_uid: Option<&str>,
+) -> HdmiDisplayPortVolumeControlStatus {
     let connected_output_present = connected_hdmi_displayport_output_present(devices);
     let native_driver = native_driver_info();
     let native_driver_installed = native_driver.is_some();
-    let native_driver_recommended = connected_output_present && !native_driver_installed;
+    let target_needs_driver =
+        target_uid.map(|uid| route_needs_hdmi_displayport_volume_control(devices, uid));
+    let native_driver_recommended =
+        target_needs_driver.unwrap_or(connected_output_present) && !native_driver_installed;
+    let native_driver_recommendation_reason = driver_recommendation_reason(
+        target_needs_driver,
+        connected_output_present,
+        native_driver_installed,
+    );
     let native_driver_install_path = native_driver
         .as_ref()
         .map(|driver| driver.install_path.clone());
@@ -186,6 +205,7 @@ pub fn hdmi_displayport_volume_control_status(
         connected_output_present,
         native_driver_installed,
         native_driver_recommended,
+        native_driver_recommendation_reason,
         native_driver_install_path,
         native_driver,
         eqmac_installed,
@@ -211,6 +231,23 @@ fn is_hdmi_displayport_output(device: &OutputDevice) -> bool {
         device.transport,
         TransportKind::Hdmi | TransportKind::DisplayPort
     )
+}
+
+fn driver_recommendation_reason(
+    target_needs_driver: Option<bool>,
+    connected_output_present: bool,
+    native_driver_installed: bool,
+) -> Option<String> {
+    match target_needs_driver {
+        Some(false) => Some("selected output is not HDMI/DisplayPort".into()),
+        Some(true) if native_driver_installed => Some("native driver is already installed".into()),
+        Some(true) => Some("selected output is HDMI/DisplayPort".into()),
+        None if native_driver_installed => Some("native driver is already installed".into()),
+        None if connected_output_present => {
+            Some("connected HDMI/DisplayPort output detected".into())
+        }
+        None => Some("no connected HDMI/DisplayPort output detected".into()),
+    }
 }
 
 fn driver_offer_message(eqmac_installed: bool) -> String {
@@ -291,5 +328,21 @@ mod tests {
     fn test_driver_offer_without_eqmac_does_not_mention_eqmac() {
         let message = driver_offer_message(false);
         assert!(!message.contains("eqMac"));
+    }
+
+    #[test]
+    fn test_driver_recommendation_reason_for_selected_builtin() {
+        assert_eq!(
+            driver_recommendation_reason(Some(false), true, false).as_deref(),
+            Some("selected output is not HDMI/DisplayPort")
+        );
+    }
+
+    #[test]
+    fn test_driver_recommendation_reason_for_selected_hdmi() {
+        assert_eq!(
+            driver_recommendation_reason(Some(true), true, false).as_deref(),
+            Some("selected output is HDMI/DisplayPort")
+        );
     }
 }

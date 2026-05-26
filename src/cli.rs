@@ -43,7 +43,7 @@ pub enum Commands {
     Status(StatusArgs),
     /// Uninstall the launchd LaunchAgent (alias for disable)
     Uninstall(UninstallArgs),
-    /// Refresh the LaunchAgent to the current binary and restart it
+    /// Refresh the LaunchAgent to the current binary when needed
     Upgrade(UpgradeArgs),
 }
 
@@ -118,12 +118,16 @@ pub struct UninstallArgs {
     pub json: bool,
 
     /// Remove the default config file without prompting
-    #[arg(long, conflicts_with = "keep_config")]
+    #[arg(long, conflicts_with_all = ["keep_config", "only_driver"])]
     pub remove_config: bool,
 
     /// Keep the default config file without prompting
-    #[arg(long, conflicts_with = "remove_config")]
+    #[arg(long, conflicts_with_all = ["remove_config", "only_driver"])]
     pub keep_config: bool,
+
+    /// Only remove the native audio driver; keep LaunchAgent, binary, and config
+    #[arg(long)]
+    pub only_driver: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -131,6 +135,10 @@ pub struct UpgradeArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
     pub json: bool,
+
+    /// Restart/rewrite even when the LaunchAgent already matches this binary
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[cfg(test)]
@@ -279,6 +287,7 @@ mod tests {
             Commands::Uninstall(args) => {
                 assert!(args.remove_config);
                 assert!(!args.keep_config);
+                assert!(!args.only_driver);
             }
             _ => panic!("expected uninstall"),
         }
@@ -293,10 +302,40 @@ mod tests {
     }
 
     #[test]
+    fn test_uninstall_only_driver_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "uninstall", "--only-driver"]).unwrap();
+        match cli.command {
+            Commands::Uninstall(args) => {
+                assert!(args.only_driver);
+                assert!(!args.remove_config);
+                assert!(!args.keep_config);
+            }
+            _ => panic!("expected uninstall"),
+        }
+
+        assert!(Cli::try_parse_from([
+            "rusty-jack",
+            "uninstall",
+            "--only-driver",
+            "--remove-config",
+        ])
+        .is_err());
+    }
+
+    #[test]
     fn test_upgrade_json_flag() {
         let cli = Cli::try_parse_from(["rusty-jack", "upgrade", "--json"]).unwrap();
         match cli.command {
             Commands::Upgrade(args) => assert!(args.json),
+            _ => panic!("expected upgrade"),
+        }
+    }
+
+    #[test]
+    fn test_upgrade_force_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "upgrade", "--force"]).unwrap();
+        match cli.command {
+            Commands::Upgrade(args) => assert!(args.force),
             _ => panic!("expected upgrade"),
         }
     }

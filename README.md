@@ -137,8 +137,8 @@ Global flag: `--config PATH` (overrides `RUSTY_JACK_CONFIG` and `~/.config/rusty
 | `picker` | Interactive menu or `--index N` to switch; pauses a running daemon after confirmation when you pick a non-preferred output |
 | `resume` | Re-enable launchd agent; synchronously routes and restores configured `volume` first |
 | `status` | Devices + virtual default block + policy + volume + daemon state |
-| `uninstall` | Uninstall launchd agent (alias for `disable`) |
-| `upgrade` | Refresh LaunchAgent to current binary and restart it |
+| `uninstall` | Uninstall launchd agent; `--only-driver` removes just the native driver |
+| `upgrade` | Refresh LaunchAgent to current binary when needed |
 
 All subcommands support `--json` where applicable. Subcommands are alphabetical in `--help`.
 
@@ -221,7 +221,7 @@ Plist template: [`launchd/com.example.rusty-jack.plist.template`](./launchd/com.
 | `pause` | `bootout` + `disable`; plist **kept** |
 | `resume` | `enable` + `bootstrap` |
 | `uninstall` | Same daemon uninstall behavior as `disable` |
-| `upgrade` | Rewrite plist for the current binary path and restart |
+| `upgrade` | Rewrite plist for the current binary path when needed |
 
 `daemon` runs in the current user session and reloads config before each scheduled poll. The LaunchAgent is per-user: each macOS login account that wants auto-routing installs its own plist under `~/Library/LaunchAgents`, with its own config and logs. Two users can install it at the same time because each job lives in a separate `gui/<uid>` launchd domain.
 
@@ -234,7 +234,7 @@ rusty-jack install
 
 `install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
 
-Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `disable` for daemon-only removal that always keeps config and logs.
+Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `rusty-jack uninstall --only-driver` to remove only the native audio driver, or `disable` for daemon-only removal that always keeps config and logs.
 
 ### Update the daemon
 
@@ -246,7 +246,7 @@ git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade` to refresh and restart the LaunchAgent. The CLI `upgrade` command itself does not download or build Rusty Jack.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` to refresh and restart the LaunchAgent after an in-place source install. The CLI `upgrade` command itself does not download or build Rusty Jack, and without `--force` it reports when the LaunchAgent is already current.
 
 ---
 
@@ -284,7 +284,7 @@ make release
 
 ```bash
 make install    # ~/.cargo/bin/rusty-jack
-make upgrade    # install once, then restart LaunchAgent
+make upgrade    # install once, then force-refresh LaunchAgent
 make uninstall  # stop/remove LaunchAgent, then cargo uninstall rusty-jack
 ```
 

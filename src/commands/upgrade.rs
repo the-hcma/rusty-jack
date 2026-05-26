@@ -1,4 +1,4 @@
-//! `rusty-jack upgrade` — refresh and restart the per-user LaunchAgent.
+//! `rusty-jack upgrade` — refresh the per-user LaunchAgent when needed.
 
 use crate::launchd::{print_upgrade_result, upgrade_daemon};
 use crate::native_driver::{
@@ -7,11 +7,11 @@ use crate::native_driver::{
 use crate::setup::terminal_is_interactive;
 use anyhow::Result;
 
-/// Refresh the plist to the current binary path and restart the LaunchAgent.
-pub fn run(json: bool) -> Result<()> {
+/// Refresh the plist to the current binary path and restart the LaunchAgent when needed.
+pub fn run(json: bool, force_reload: bool) -> Result<()> {
     let interactive = !json && terminal_is_interactive();
     let native_driver = upgrade_if_materially_changed(interactive).map_err(anyhow::Error::new)?;
-    let result = upgrade_daemon().map_err(anyhow::Error::new)?;
+    let result = upgrade_daemon(force_reload).map_err(anyhow::Error::new)?;
 
     if json {
         let value = serde_json::to_string_pretty(&serde_json::json!({

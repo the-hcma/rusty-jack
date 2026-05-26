@@ -26,6 +26,13 @@ pub enum InstallResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UpgradeResult {
+    UpToDate {
+        label: String,
+        plist_path: String,
+        binary_path: String,
+        binary_version: BinaryVersion,
+        was_loaded: bool,
+    },
     Upgraded {
         label: String,
         plist_path: String,
@@ -336,6 +343,7 @@ struct LoadDaemonResult {
     previous_binary_version: Option<BinaryVersion>,
     was_loaded: bool,
     had_plist: bool,
+    changed: bool,
     resumed_after_upgrade: bool,
 }
 
@@ -345,7 +353,10 @@ enum LoadMode {
     Upgrade,
 }
 
-fn write_and_load_daemon(mode: LoadMode) -> Result<LoadDaemonResult, RustyJackError> {
+fn write_and_load_daemon(
+    mode: LoadMode,
+    force_reload: bool,
+) -> Result<LoadDaemonResult, RustyJackError> {
     let plist_path = plist_path_or_err()?;
     let home = home_dir_or_err()?;
     let binary_path = current_exe_display()?;
@@ -353,17 +364,46 @@ fn write_and_load_daemon(mode: LoadMode) -> Result<LoadDaemonResult, RustyJackEr
     let domain = gui_domain()?;
     let was_loaded = is_job_loaded(&domain, LAUNCH_AGENT_LABEL)?;
     let had_plist = plist_path.exists();
-    let previous_binary_path = if had_plist {
-        std::fs::read_to_string(&plist_path)
-            .ok()
-            .and_then(|plist| launch_agent_binary_path_from_plist(&plist))
+    let existing_plist = if had_plist {
+        std::fs::read_to_string(&plist_path).ok()
     } else {
         None
     };
+    let previous_binary_path = existing_plist
+        .as_deref()
+        .and_then(launch_agent_binary_path_from_plist);
     let previous_binary_version = previous_binary_path
         .as_deref()
         .and_then(binary_version_from_path);
     let plist = render_launch_agent_plist(&binary_path, &home_display);
+    let binary_version = BinaryVersion::current();
+    let plist_display = plist_path_display(&plist_path)?;
+
+    if matches!(mode, LoadMode::Upgrade)
+        && daemon_upgrade_is_current(
+            force_reload,
+            existing_plist.as_deref(),
+            &plist,
+            previous_binary_path.as_deref(),
+            previous_binary_version.as_ref(),
+            &binary_path,
+            &binary_version,
+        )
+    {
+        return Ok(LoadDaemonResult {
+            label: LAUNCH_AGENT_LABEL.into(),
+            plist_path: plist_display,
+            binary_path,
+            binary_version,
+            previous_binary_path,
+            previous_binary_version,
+            was_loaded,
+            had_plist,
+            changed: false,
+            resumed_after_upgrade: false,
+        });
+    }
+
     let load_after_write = should_load_after_write(mode, had_plist, was_loaded);
 
     if should_stop_before_write(mode, had_plist, was_loaded) {
@@ -378,7 +418,6 @@ fn write_and_load_daemon(mode: LoadMode) -> Result<LoadDaemonResult, RustyJackEr
     std::fs::write(&plist_path, plist).map_err(RustyJackError::Io)?;
 
     let service = service_id(&domain, LAUNCH_AGENT_LABEL);
-    let plist_display = plist_path_display(&plist_path)?;
     if load_after_write {
         let enable_status = run_launchctl(&["enable", &service])?;
         if enable_status != 0 {
@@ -400,13 +439,29 @@ fn write_and_load_daemon(mode: LoadMode) -> Result<LoadDaemonResult, RustyJackEr
         label: LAUNCH_AGENT_LABEL.into(),
         plist_path: plist_display,
         binary_path,
-        binary_version: BinaryVersion::current(),
+        binary_version,
         previous_binary_path,
         previous_binary_version,
         was_loaded,
         had_plist,
+        changed: true,
         resumed_after_upgrade: matches!(mode, LoadMode::Upgrade) && had_plist && was_loaded,
     })
+}
+
+fn daemon_upgrade_is_current(
+    force_reload: bool,
+    existing_plist: Option<&str>,
+    rendered_plist: &str,
+    previous_binary_path: Option<&str>,
+    previous_binary_version: Option<&BinaryVersion>,
+    binary_path: &str,
+    binary_version: &BinaryVersion,
+) -> bool {
+    !force_reload
+        && existing_plist.is_some_and(|plist| plist == rendered_plist)
+        && previous_binary_path == Some(binary_path)
+        && previous_binary_version == Some(binary_version)
 }
 
 fn should_stop_before_write(mode: LoadMode, had_plist: bool, was_loaded: bool) -> bool {
@@ -464,7 +519,7 @@ fn unescape_xml(value: &str) -> String {
 
 /// Install or reinstall the LaunchAgent for the current user.
 pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
-    let result = write_and_load_daemon(LoadMode::Install)?;
+    let result = write_and_load_daemon(LoadMode::Install, false)?;
     Ok(InstallResult::Installed {
         label: result.label,
         plist_path: result.plist_path,
@@ -474,9 +529,17 @@ pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
 }
 
 /// Refresh the LaunchAgent plist to the current binary and restart the daemon.
-pub fn upgrade_daemon() -> Result<UpgradeResult, RustyJackError> {
-    let result = write_and_load_daemon(LoadMode::Upgrade)?;
-    if result.had_plist {
+pub fn upgrade_daemon(force_reload: bool) -> Result<UpgradeResult, RustyJackError> {
+    let result = write_and_load_daemon(LoadMode::Upgrade, force_reload)?;
+    if result.had_plist && !result.changed {
+        Ok(UpgradeResult::UpToDate {
+            label: result.label,
+            plist_path: result.plist_path,
+            binary_path: result.binary_path,
+            binary_version: result.binary_version,
+            was_loaded: result.was_loaded,
+        })
+    } else if result.had_plist {
         Ok(UpgradeResult::Upgraded {
             label: result.label,
             plist_path: result.plist_path,
@@ -655,6 +718,26 @@ pub fn print_install_result(result: &InstallResult) {
 /// Human-readable output for [`UpgradeResult`].
 pub fn print_upgrade_result(result: &UpgradeResult) {
     match result {
+        UpgradeResult::UpToDate {
+            label,
+            plist_path,
+            binary_path,
+            binary_version,
+            was_loaded,
+        } => {
+            println!("rusty-jack daemon LaunchAgent is up to date ({label})");
+            println!("  version:      {}", binary_version.display());
+            println!("  binary:       {binary_path}");
+            println!("  plist:        {plist_path}");
+            println!(
+                "  auto-routing: {}",
+                if *was_loaded {
+                    "active"
+                } else {
+                    "remains paused"
+                }
+            );
+        }
         UpgradeResult::Upgraded {
             label,
             plist_path,
@@ -893,11 +976,66 @@ mod tests {
     }
 
     #[test]
+    fn test_upgrade_up_to_date_result_serializes() {
+        let json = serde_json::to_string(&UpgradeResult::UpToDate {
+            label: LAUNCH_AGENT_LABEL.into(),
+            plist_path: "/tmp/test.plist".into(),
+            binary_path: "/tmp/rusty-jack".into(),
+            binary_version: BinaryVersion {
+                version: "0.1.0".into(),
+                commit: "abc1234".into(),
+            },
+            was_loaded: true,
+        })
+        .unwrap();
+        assert!(json.contains("\"status\":\"up_to_date\""));
+        assert!(json.contains("\"was_loaded\":true"));
+    }
+
+    #[test]
     fn test_upgrade_pauses_only_running_daemon() {
         assert!(should_stop_before_write(LoadMode::Upgrade, true, true));
         assert!(!should_stop_before_write(LoadMode::Upgrade, true, false));
         assert!(should_load_after_write(LoadMode::Upgrade, true, true));
         assert!(!should_load_after_write(LoadMode::Upgrade, true, false));
+    }
+
+    #[test]
+    fn test_daemon_upgrade_is_current_when_plist_binary_and_version_match() {
+        let version = BinaryVersion {
+            version: "0.1.0".into(),
+            commit: "abc1234".into(),
+        };
+        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example");
+
+        assert!(daemon_upgrade_is_current(
+            false,
+            Some(&plist),
+            &plist,
+            Some("/tmp/rusty-jack"),
+            Some(&version),
+            "/tmp/rusty-jack",
+            &version,
+        ));
+    }
+
+    #[test]
+    fn test_daemon_upgrade_force_bypasses_current_check() {
+        let version = BinaryVersion {
+            version: "0.1.0".into(),
+            commit: "abc1234".into(),
+        };
+        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example");
+
+        assert!(!daemon_upgrade_is_current(
+            true,
+            Some(&plist),
+            &plist,
+            Some("/tmp/rusty-jack"),
+            Some(&version),
+            "/tmp/rusty-jack",
+            &version,
+        ));
     }
 
     #[test]
