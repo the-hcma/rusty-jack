@@ -35,7 +35,12 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        run: |
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
 
       - name: install Rust toolchain
         run: |
@@ -65,7 +70,12 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        run: |
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
 
       - name: install Rust toolchain
         run: |
@@ -83,7 +93,12 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - name: checkout
+        run: |
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF}"
+          git checkout --detach FETCH_HEAD
 
       - name: install Rust toolchain
         run: |
