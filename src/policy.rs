@@ -24,7 +24,12 @@ pub fn evaluate_policy(
             configured: false,
             config_path: config_path.map(|p| p.display().to_string()),
             preferred_device_name: None,
+            preferred_device_label: None,
             preferred_device_uid: None,
+            active_device_label: active_uid(list)
+                .as_deref()
+                .and_then(|uid| find_device(&list.devices, uid))
+                .map(OutputDevice::friendly_label),
             active_device_uid: active_uid(list),
             matches_preferred: None,
             preferred_present: None,
@@ -38,44 +43,80 @@ pub fn evaluate_policy(
     let selector = config.preferred_selector();
     let preferred_device_name = config.preferred_device.name.clone();
     let active = active_uid(list);
+    let active_device_label = active
+        .as_deref()
+        .and_then(|uid| find_device(&list.devices, uid))
+        .map(OutputDevice::friendly_label);
 
     let resolved = resolve_device_selector(&selector, &list.devices);
 
-    let (preferred_uid, message, matches, preferred_present, preferred_alive) = match resolved {
+    let (
+        preferred_uid,
+        preferred_device_label,
+        message,
+        matches,
+        preferred_present,
+        preferred_alive,
+    ) = match resolved {
         Ok(uid) => {
             let preferred_device = find_device(&list.devices, &uid);
+            let preferred_device_label = preferred_device.map(OutputDevice::friendly_label);
             let matches = active.as_deref() == Some(uid.as_str());
             let message = if preferred_device.is_none() {
-                format!("preferred device `{uid}` is not connected")
+                let label = preferred_device_name
+                    .as_deref()
+                    .unwrap_or("(unknown preferred)");
+                format!("preferred device {label} ({uid}) is not connected")
             } else if preferred_device.is_some_and(|d| !d.is_alive) {
-                format!("preferred device `{uid}` is not alive")
+                let label = preferred_device_label
+                    .as_deref()
+                    .or(preferred_device_name.as_deref())
+                    .unwrap_or("(unknown preferred)");
+                format!("preferred device {label} ({uid}) is not alive")
             } else if matches {
-                preferred_match_message(preferred_device.as_ref(), &uid)
+                preferred_match_message(
+                    preferred_device_label.as_deref(),
+                    preferred_device_name.as_deref(),
+                    &uid,
+                )
             } else {
                 format!(
-                    "active output is `{}`; preferred is `{uid}`",
-                    active.as_deref().unwrap_or("(none)")
+                    "active output is {} ({}); preferred is {} ({uid})",
+                    active_device_label.as_deref().unwrap_or("(unknown active)"),
+                    active.as_deref().unwrap_or("(none)"),
+                    preferred_device_label
+                        .as_deref()
+                        .or(preferred_device_name.as_deref())
+                        .unwrap_or("(unknown preferred)"),
                 )
             };
             (
                 Some(uid),
+                preferred_device_label,
                 message,
                 Some(matches),
                 Some(preferred_device.is_some()),
                 preferred_device.map(|d| d.is_alive),
             )
         }
-        Err(ResolveError::NotSpecified) => {
-            (None, "set preferred_device.uid".into(), None, None, None)
-        }
-        Err(err) => (None, err.to_string(), None, None, None),
+        Err(ResolveError::NotSpecified) => (
+            None,
+            None,
+            "set preferred_device.uid".into(),
+            None,
+            None,
+            None,
+        ),
+        Err(err) => (None, None, err.to_string(), None, None, None),
     };
 
     PolicyStatus {
         configured: true,
         config_path: config_path.map(|p| p.display().to_string()),
         preferred_device_name,
+        preferred_device_label,
         preferred_device_uid: preferred_uid,
+        active_device_label,
         active_device_uid: active,
         matches_preferred: matches,
         preferred_present,
@@ -86,15 +127,15 @@ pub fn evaluate_policy(
     }
 }
 
-fn preferred_match_message(device: Option<&&OutputDevice>, uid: &str) -> String {
-    if let Some(device) = device {
-        format!(
-            "active output matches preferred device `{}` ({uid})",
-            device.name
-        )
-    } else {
-        "active output matches preferred device".into()
-    }
+fn preferred_match_message(
+    preferred_label: Option<&str>,
+    preferred_name: Option<&str>,
+    uid: &str,
+) -> String {
+    let label = preferred_label
+        .or(preferred_name)
+        .unwrap_or("(unknown preferred)");
+    format!("active output matches preferred device {label} ({uid})")
 }
 
 fn active_uid(list: &DeviceList) -> Option<String> {
