@@ -5,7 +5,11 @@ use crate::coreaudio::AudioHal;
 use crate::hdmi_displayport_volume_control::{
     ensure_hdmi_displayport_volume_control_for_target, format_ensure_messages,
 };
-use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource};
+use crate::passthrough::{
+    passthrough_physical_uid, select_effective_routing_target, select_physical_routing_target,
+    volume_for_effective_target,
+};
+use crate::policy::{RoutingTarget, RoutingTargetSource};
 use crate::system_default::DeviceList;
 use crate::volume_memory::{remember_active_non_preferred, remembered_volume};
 use crate::volume_result::VolumeEnsureResult;
@@ -80,14 +84,17 @@ pub fn apply_policy(
     config: &Config,
 ) -> Result<(ApplyResult, DeviceList), RustyJackError> {
     let list = hal.list_outputs()?;
-    let target = select_routing_target(config, &list.devices)
+    let physical = select_physical_routing_target(config, &list.devices)
+        .map_err(|err| RustyJackError::Config(err.to_string()))?;
+    let target = select_effective_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
     let preferred_uid = preferred_uid(config, &list.devices);
-    remember_active_non_preferred(hal, &list.devices, preferred_uid.as_deref(), &target.uid)?;
-    let volume = volume_for_target(config, &target, &preferred_uid);
+    remember_active_non_preferred(hal, &list.devices, preferred_uid.as_deref(), &physical.uid)?;
+    let volume = volume_for_effective_target(config, &target, &physical, &preferred_uid);
 
+    let hdmi_uid = passthrough_physical_uid(config, &list.devices).unwrap_or(&physical.uid);
     let volume_control =
-        ensure_hdmi_displayport_volume_control_for_target(&list.devices, &target.uid)?;
+        ensure_hdmi_displayport_volume_control_for_target(&list.devices, hdmi_uid)?;
     for line in format_ensure_messages(volume_control) {
         eprintln!("{line}");
     }
@@ -100,7 +107,7 @@ pub fn apply_policy(
             volume,
         },
     )?;
-    crate::scalar_webapi_device::warn_on_output_selected(config, &list.devices, &target.uid);
+    crate::scalar_webapi_device::warn_on_output_selected(config, &list.devices, &physical.uid);
 
     Ok((result, list))
 }

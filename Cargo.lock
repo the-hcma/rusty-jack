@@ -909,6 +909,7 @@ dependencies = [
  "coreaudio-sys",
  "crossterm",
  "dialoguer",
+ "libc",
  "predicates",
  "pretty_assertions",
  "serde",

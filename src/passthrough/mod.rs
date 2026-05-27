@@ -1,9 +1,13 @@
 //! Native-driver passthrough pipeline (virtual HAL capture → gain → physical render).
-//!
-//! Slice 1 provides planning, gain math, and daemon lifecycle hooks. CoreAudio capture/render
-//! lands in a follow-up slice.
 
 mod gain;
+
+#[cfg(target_os = "macos")]
+#[cfg_attr(test, allow(dead_code))]
+mod engine;
+#[cfg(target_os = "macos")]
+#[cfg_attr(test, allow(dead_code))]
+mod ring;
 
 use crate::config::Config;
 use crate::coreaudio::AudioHal;
@@ -11,7 +15,7 @@ use crate::hdmi_displayport_volume_control::{
     native_driver_info, route_needs_hdmi_displayport_volume_control, RUSTY_JACK_DRIVER_NAME,
 };
 use crate::output_device::OutputDevice;
-use crate::policy::select_routing_target;
+use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource, SelectTargetError};
 use crate::system_default::HalDriverInfo;
 use crate::RustyJackError;
 use serde::Serialize;
@@ -21,8 +25,11 @@ pub use gain::{apply_stereo_interleaved_gain, percent_to_scalar};
 /// CoreAudio UID for the Rusty Jack virtual output published by the HAL driver.
 pub const RUSTY_JACK_VIRTUAL_OUTPUT_UID: &str = "com.the-hcma.rusty-jack.driver.output";
 
-/// Driver stage value while the daemon hosts a passthrough skeleton without live audio I/O.
+/// Driver stage while the daemon plans passthrough without live audio I/O.
 pub const PASSTHROUGH_SKELETON_DRIVER_STAGE: &str = "passthrough-skeleton";
+
+/// Driver stage when capture/render is wired through the shared ring and daemon IO proc.
+pub const PASSTHROUGH_ACTIVE_DRIVER_STAGE: &str = "passthrough-active";
 
 /// Stereo format shared with `driver/RustyJack/RustyJackAudioServerPlugIn.c`.
 pub const PASSTHROUGH_SAMPLE_RATE_HZ: u32 = 48_000;
@@ -35,8 +42,10 @@ pub const PASSTHROUGH_FRAMES_PER_CHUNK: usize = 512;
 pub enum PassthroughMode {
     /// Native driver absent or route does not need HDMI/DP software volume.
     Disabled,
-    /// Driver installed and route qualifies; daemon will host passthrough once I/O is wired.
+    /// Driver installed and route qualifies; planning only (legacy / driver not yet active).
     Skeleton,
+    /// Daemon is rendering captured audio to the physical HDMI/DP device.
+    Active,
 }
 
 /// Target route for the passthrough renderer.
@@ -51,9 +60,20 @@ pub struct PassthroughPlan {
 }
 
 /// Tracks passthrough lifecycle inside the daemon loop.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct PassthroughController {
     active: Option<PassthroughPlan>,
+    #[cfg(target_os = "macos")]
+    engine: Option<engine::PassthroughEngine>,
+}
+
+impl std::fmt::Debug for PassthroughController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PassthroughController")
+            .field("active", &self.active)
+            .field("engine_running", &self.engine.is_some())
+            .finish()
+    }
 }
 
 impl PassthroughController {
@@ -67,11 +87,14 @@ impl PassthroughController {
 
     #[must_use]
     pub fn mode(&self) -> PassthroughMode {
-        if self.active.is_some() {
-            PassthroughMode::Skeleton
-        } else {
-            PassthroughMode::Disabled
+        if self.active.is_none() {
+            return PassthroughMode::Disabled;
         }
+        #[cfg(target_os = "macos")]
+        if self.engine.is_some() {
+            return PassthroughMode::Active;
+        }
+        PassthroughMode::Skeleton
     }
 
     #[must_use]
@@ -84,10 +107,17 @@ impl PassthroughController {
             return;
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(engine) = self.engine.take() {
+                drop(engine);
+            }
+        }
+
         match (&self.active, &plan) {
             (None, Some(next)) => {
                 eprintln!(
-                    "passthrough skeleton: armed for {} at {}% (virtual {} → physical {})",
+                    "passthrough: armed for {} at {}% (virtual {} → physical {})",
                     next.physical_name,
                     next.volume_percent,
                     next.virtual_output_uid,
@@ -96,21 +126,112 @@ impl PassthroughController {
             }
             (Some(previous), None) => {
                 eprintln!(
-                    "passthrough skeleton: disarmed (was {} at {}%)",
+                    "passthrough: disarmed (was {} at {}%)",
                     previous.physical_name, previous.volume_percent
                 );
             }
             (Some(previous), Some(next)) if previous != next => {
                 eprintln!(
-                    "passthrough skeleton: retargeted {} → {} at {}%",
+                    "passthrough: retargeted {} → {} at {}%",
                     previous.physical_name, next.physical_name, next.volume_percent
                 );
             }
             _ => {}
         }
 
-        self.active = plan;
+        self.active = plan.clone();
+
+        #[cfg(all(target_os = "macos", not(test)))]
+        if let Some(next) = plan {
+            match engine::PassthroughEngine::start(&next) {
+                Ok(engine) => {
+                    self.engine = Some(engine);
+                }
+                Err(err) => {
+                    eprintln!("warning: passthrough engine failed to start: {err}");
+                    self.active = None;
+                }
+            }
+        }
     }
+}
+
+/// Policy-selected HDMI/DP target before virtual default substitution.
+pub fn select_physical_routing_target(
+    config: &Config,
+    devices: &[OutputDevice],
+) -> Result<RoutingTarget, SelectTargetError> {
+    select_routing_target(config, devices)
+}
+
+/// Default output target: Rusty Jack virtual device when passthrough is active.
+pub fn select_effective_routing_target(
+    config: &Config,
+    devices: &[OutputDevice],
+) -> Result<RoutingTarget, SelectTargetError> {
+    let physical = select_physical_routing_target(config, devices)?;
+    let Some(driver) = native_driver_info() else {
+        return Ok(physical);
+    };
+    select_effective_routing_target_with_native_driver(config, devices, &driver)
+}
+
+pub(crate) fn select_effective_routing_target_with_native_driver(
+    config: &Config,
+    devices: &[OutputDevice],
+    driver: &HalDriverInfo,
+) -> Result<RoutingTarget, SelectTargetError> {
+    let physical = select_physical_routing_target(config, devices)?;
+    let Some(plan) = plan_passthrough_with_native_driver(config, devices, driver) else {
+        return Ok(physical);
+    };
+    if plan.physical_uid != physical.uid {
+        return Ok(physical);
+    }
+    let Some(virtual_device) = devices
+        .iter()
+        .find(|device| device.uid == RUSTY_JACK_VIRTUAL_OUTPUT_UID)
+    else {
+        return Ok(physical);
+    };
+    Ok(RoutingTarget {
+        uid: virtual_device.uid.clone(),
+        name: virtual_device.friendly_label(),
+        source: physical.source,
+    })
+}
+
+/// Physical HDMI/DP UID used for volume-control checks while the virtual device is default.
+#[must_use]
+pub fn passthrough_physical_uid<'a>(
+    config: &'a Config,
+    devices: &'a [OutputDevice],
+) -> Option<&'a str> {
+    let driver = native_driver_info()?;
+    let plan = plan_passthrough_with_native_driver(config, devices, &driver)?;
+    devices
+        .iter()
+        .find(|device| device.uid == plan.physical_uid)
+        .map(|device| device.uid.as_str())
+}
+
+/// Volume level to apply when switching to the effective (virtual) default.
+#[must_use]
+pub fn volume_for_effective_target(
+    config: &Config,
+    effective: &RoutingTarget,
+    physical: &RoutingTarget,
+    preferred_uid: &Option<String>,
+) -> Option<u8> {
+    if preferred_uid.as_deref() == Some(physical.uid.as_str())
+        || matches!(physical.source, RoutingTargetSource::Preferred)
+    {
+        return config.volume;
+    }
+    if effective.uid == RUSTY_JACK_VIRTUAL_OUTPUT_UID {
+        return config.volume;
+    }
+    crate::volume_memory::remembered_volume(&effective.uid)
 }
 
 /// Build a passthrough plan when the native driver is installed and policy targets HDMI/DP.
@@ -147,23 +268,27 @@ pub(crate) fn plan_passthrough_with_native_driver(
     })
 }
 
-/// Human-readable note for status output when passthrough is in skeleton mode.
+/// Human-readable note for status output when passthrough is active or planned.
 #[must_use]
 pub fn passthrough_status_note(
     mode: PassthroughMode,
     plan: Option<&PassthroughPlan>,
 ) -> Option<String> {
+    let plan = plan?;
     match mode {
         PassthroughMode::Disabled => None,
-        PassthroughMode::Skeleton => {
-            let plan = plan?;
-            Some(format!(
-                "passthrough skeleton armed for {name} at {volume}% via {driver}; live CoreAudio I/O is not wired yet",
-                name = plan.physical_name,
-                volume = plan.volume_percent,
-                driver = RUSTY_JACK_DRIVER_NAME
-            ))
-        }
+        PassthroughMode::Skeleton => Some(format!(
+            "passthrough skeleton armed for {name} at {volume}% via {driver}; live CoreAudio I/O is not wired yet",
+            name = plan.physical_name,
+            volume = plan.volume_percent,
+            driver = RUSTY_JACK_DRIVER_NAME
+        )),
+        PassthroughMode::Active => Some(format!(
+            "passthrough active for {name} at {volume}% via {driver} (virtual default → physical render)",
+            name = plan.physical_name,
+            volume = plan.volume_percent,
+            driver = RUSTY_JACK_DRIVER_NAME
+        )),
     }
 }
 
@@ -214,6 +339,18 @@ mod tests {
         }
     }
 
+    fn virtual_device() -> OutputDevice {
+        OutputDevice {
+            id: 99,
+            uid: RUSTY_JACK_VIRTUAL_OUTPUT_UID.into(),
+            name: RUSTY_JACK_DRIVER_NAME.into(),
+            transport: TransportKind::Virtual,
+            is_alive: true,
+            is_default: false,
+            is_active: false,
+        }
+    }
+
     fn builtin_device(active: bool) -> OutputDevice {
         OutputDevice {
             id: 1,
@@ -231,9 +368,21 @@ mod tests {
             name: RUSTY_JACK_DRIVER_NAME.into(),
             bundle_id: "com.the-hcma.rusty-jack.driver".into(),
             version: Some("0.1.1".into()),
-            stage: Some(PASSTHROUGH_SKELETON_DRIVER_STAGE.into()),
+            stage: Some(PASSTHROUGH_ACTIVE_DRIVER_STAGE.into()),
             install_path: "/tmp/RustyJack.driver".into(),
         }
+    }
+
+    #[test]
+    fn test_select_effective_routing_target_uses_virtual_when_passthrough_planned() {
+        let config = config_with_hdmi_preferred(Some(40));
+        let devices = vec![builtin_device(false), hdmi_device(true), virtual_device()];
+        let physical = select_physical_routing_target(&config, &devices).expect("physical target");
+        assert_eq!(physical.uid, "hdmi");
+        let effective =
+            select_effective_routing_target_with_native_driver(&config, &devices, &fake_driver())
+                .expect("effective target");
+        assert_eq!(effective.uid, RUSTY_JACK_VIRTUAL_OUTPUT_UID);
     }
 
     #[test]
@@ -277,7 +426,7 @@ mod tests {
             physical_name: "HDMI".into(),
             volume_percent: 50,
             volume_scalar: 0.5,
-            driver_stage: Some(PASSTHROUGH_SKELETON_DRIVER_STAGE.into()),
+            driver_stage: Some(PASSTHROUGH_ACTIVE_DRIVER_STAGE.into()),
         };
         let samples = process_silent_chunk(&plan);
         assert_eq!(
@@ -295,14 +444,13 @@ mod tests {
             physical_name: "HDMI".into(),
             volume_percent: 25,
             volume_scalar: 0.25,
-            driver_stage: Some(PASSTHROUGH_SKELETON_DRIVER_STAGE.into()),
+            driver_stage: Some(PASSTHROUGH_ACTIVE_DRIVER_STAGE.into()),
         };
         let mut controller = PassthroughController::default();
 
         controller.apply_plan(Some(plan.clone()));
         assert_eq!(controller.mode(), PassthroughMode::Skeleton);
         controller.apply_plan(Some(plan));
-        assert_eq!(controller.mode(), PassthroughMode::Skeleton);
         controller.apply_plan(None);
         assert_eq!(controller.mode(), PassthroughMode::Disabled);
     }

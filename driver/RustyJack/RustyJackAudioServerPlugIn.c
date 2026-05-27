@@ -1,3 +1,5 @@
+#include "passthrough_ring.h"
+
 #include <CoreAudio/AudioHardware.h>
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CFPlugInCOM.h>
@@ -6,8 +8,7 @@
 #include <stdatomic.h>
 #include <string.h>
 
-// This driver publishes a minimal virtual output device and intentionally drops IO.
-// The Rust daemon hosts passthrough planning/gain in passthrough-skeleton mode; live I/O follows.
+// Virtual output captures WriteMix into a shared ring; the daemon renders to the physical HDMI/DP device.
 #define RUSTY_JACK_DEVICE_OBJECT_ID 2
 #define RUSTY_JACK_STREAM_OBJECT_ID 3
 #define RUSTY_JACK_VOLUME_CONTROL_OBJECT_ID 4
@@ -26,6 +27,7 @@ static atomic_uint g_io_client_count = 0;
 static atomic_ullong g_io_start_host_time = 0;
 static Float32 g_volume_scalar = 1.0f;
 static UInt32 g_muted = 0;
+static rj_passthrough_ring_t *g_passthrough_ring = NULL;
 
 static HRESULT STDMETHODCALLTYPE rusty_jack_query_interface(void *driver, REFIID uuid, LPVOID *out_interface);
 static ULONG STDMETHODCALLTYPE rusty_jack_add_ref(void *driver);
@@ -686,6 +688,7 @@ static ULONG STDMETHODCALLTYPE rusty_jack_release(void *driver) {
 }
 
 static OSStatus STDMETHODCALLTYPE rusty_jack_initialize(AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef host) {
+    (void)rj_passthrough_ring_open(&g_passthrough_ring);
     (void)driver;
     g_host = host;
     return noErr;
@@ -828,6 +831,9 @@ static OSStatus STDMETHODCALLTYPE rusty_jack_set_property_data(AudioServerPlugIn
             value = db_to_scalar(value);
         }
         g_volume_scalar = clamp_scalar(value);
+        if (g_passthrough_ring != NULL) {
+            g_passthrough_ring->header.volume_scalar = g_volume_scalar;
+        }
         return noErr;
     }
 
@@ -836,6 +842,9 @@ static OSStatus STDMETHODCALLTYPE rusty_jack_set_property_data(AudioServerPlugIn
             return kAudioHardwareBadPropertySizeError;
         }
         g_muted = *((const UInt32 *)data) == 0 ? 0 : 1;
+        if (g_passthrough_ring != NULL) {
+            g_passthrough_ring->header.muted = g_muted;
+        }
         return noErr;
     }
 
@@ -927,16 +936,23 @@ static OSStatus STDMETHODCALLTYPE rusty_jack_begin_io_operation(AudioServerPlugI
 static OSStatus STDMETHODCALLTYPE rusty_jack_do_io_operation(AudioServerPlugInDriverRef driver, AudioObjectID device_object_id, AudioObjectID stream_object_id, UInt32 client_id, UInt32 operation_id, UInt32 io_buffer_frame_size, const AudioServerPlugInIOCycleInfo *io_cycle_info, void *main_buffer, void *secondary_buffer) {
     (void)driver;
     (void)client_id;
-    (void)operation_id;
-    (void)io_buffer_frame_size;
     (void)io_cycle_info;
-    (void)main_buffer;
     (void)secondary_buffer;
     if (device_object_id != RUSTY_JACK_DEVICE_OBJECT_ID) {
         return kAudioHardwareBadDeviceError;
     }
     if (stream_object_id != RUSTY_JACK_STREAM_OBJECT_ID) {
         return kAudioHardwareBadStreamError;
+    }
+    if (operation_id == kAudioServerPlugInIOOperationWriteMix && main_buffer != NULL && g_passthrough_ring != NULL) {
+        rj_passthrough_ring_push_write_mix(
+            g_passthrough_ring,
+            (const float *)main_buffer,
+            io_buffer_frame_size,
+            g_volume_scalar,
+            g_muted);
+        const size_t bytes = (size_t)io_buffer_frame_size * (size_t)RUSTY_JACK_CHANNEL_COUNT * sizeof(float);
+        memset(main_buffer, 0, bytes);
     }
     return noErr;
 }
