@@ -9,7 +9,6 @@ use crate::hdmi_displayport_volume_control::{
 use crate::launchd::{
     daemon_status, pause_daemon_with_reason, DaemonPauseReason, DaemonStatus, PauseResult,
 };
-use crate::list_fmt::{terminal_supports_color, ANSI_CYAN, ANSI_RESET};
 use crate::native_driver::{
     install_for_connected_hdmi_displayport, print_install_result as print_driver_install_result,
 };
@@ -21,6 +20,7 @@ use crate::picker::{
 };
 use crate::volume_memory::{remember_active_non_preferred, remembered_volume};
 use anyhow::Result;
+use dialoguer::console::style;
 use dialoguer::Confirm;
 use std::path::Path;
 
@@ -257,13 +257,15 @@ fn maybe_pause_daemon_for_override(
     println!(
         "The daemon is running. Picking {label} instead of the configured preferred output will pause auto-routing until you run `rusty-jack resume`."
     );
-    let prompt = if terminal_supports_color() {
-        format!("{ANSI_CYAN}Continue{ANSI_RESET}")
-    } else {
-        "Continue".into()
-    };
     let confirmed = Confirm::new()
-        .with_prompt(prompt)
+        .with_prompt(
+            style(concat!(
+                "Continue?\n",
+                "This will pause auto-routing until you run `rusty-jack resume`."
+            ))
+            .cyan()
+            .to_string(),
+        )
         .default(true)
         .interact()?;
 

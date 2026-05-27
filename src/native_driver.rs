@@ -11,6 +11,7 @@ use crate::hdmi_displayport_volume_control::{
 use crate::output_device::OutputDevice;
 use crate::system_default::HalDriverInfo;
 use crate::RustyJackError;
+use dialoguer::console::style;
 use dialoguer::Confirm;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -195,7 +196,14 @@ pub fn install_for_connected_hdmi_displayport(
     }
 
     if !Confirm::new()
-        .with_prompt("Install Rusty Jack user audio driver for HDMI/DisplayPort volume keys? No sudo is needed.")
+        .with_prompt(
+            style(concat!(
+                "Install the Rusty Jack user audio driver for HDMI/DisplayPort volume keys?\n",
+                "No sudo is needed."
+            ))
+            .cyan()
+            .to_string(),
+        )
         .default(true)
         .interact()
         .map_err(|err| RustyJackError::Config(format!("driver install prompt failed: {err}")))?

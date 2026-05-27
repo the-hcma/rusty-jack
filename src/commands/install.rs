@@ -6,9 +6,13 @@ use crate::launchd::{install_daemon, print_install_result};
 use crate::native_driver::{
     install_for_connected_hdmi_displayport, print_install_result as print_driver_install_result,
 };
-use crate::setup::{ensure_default_config, print_config_setup_result, terminal_is_interactive};
+use crate::setup::{
+    ensure_default_config, maybe_prompt_add_fallback_to_existing_config, print_config_setup_result,
+    terminal_is_interactive,
+};
 use crate::RustyJackError;
 use anyhow::Result;
+use dialoguer::console::style;
 use dialoguer::Confirm;
 use serde::Serialize;
 
@@ -74,6 +78,12 @@ pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
             print_driver_install_result(native_driver);
         }
         print_install_result(&result);
+        let fallback = maybe_prompt_add_fallback_to_existing_config(hal, interactive)
+            .map_err(anyhow::Error::new)?;
+        if !matches!(fallback, crate::setup::ConfigSetupResult::Kept { .. }) {
+            println!();
+            print_config_setup_result(&fallback);
+        }
     }
 
     Ok(())
@@ -94,7 +104,11 @@ fn cleanup_orphaned_eqmac_driver(
 
     if !Confirm::new()
         .with_prompt(format!(
-            "Remove orphaned eqMac HAL driver at {path}? This uses sudo."
+            "{}",
+            style(format!(
+                "Remove orphaned eqMac HAL driver at {path}?\nThis uses sudo."
+            ))
+            .cyan()
         ))
         .default(false)
         .interact()

@@ -8,6 +8,7 @@ use crate::launchd::{
 };
 use crate::setup::terminal_is_interactive;
 use anyhow::Result;
+use dialoguer::console::style;
 use dialoguer::Confirm;
 use std::path::Path;
 
@@ -108,7 +109,14 @@ fn confirm_resume_after_picker_override(
 
     println!("{}", picker_override_resume_warning(reason));
     Confirm::new()
-        .with_prompt("Resume auto-routing and switch back to the configured output")
+        .with_prompt(
+            style(concat!(
+                "Resume auto-routing and switch back to the configured output?\n",
+                "If you say no, the daemon will remain paused."
+            ))
+            .cyan()
+            .to_string(),
+        )
         .default(false)
         .interact()
         .map_err(anyhow::Error::new)

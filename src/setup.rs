@@ -229,6 +229,10 @@ pub fn terminal_is_interactive() -> bool {
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
+fn q(prompt: impl AsRef<str>) -> String {
+    style(prompt.as_ref()).cyan().to_string()
+}
+
 fn prompt_for_preferred_device(devices: &[OutputDevice]) -> Result<usize, RustyJackError> {
     let candidates = selectable_alive_indices(devices);
     if candidates.is_empty() {
@@ -244,7 +248,7 @@ fn prompt_for_preferred_device(devices: &[OutputDevice]) -> Result<usize, RustyJ
         .map(|index| setup_device_label(&devices[*index]))
         .collect::<Vec<_>>();
     let selection = Select::new()
-        .with_prompt("Pick the preferred output device")
+        .with_prompt(q("Pick the preferred output device"))
         .items(&labels)
         .default(default)
         .interact()
@@ -308,18 +312,8 @@ fn update_existing_config(
         }
     }
 
-    if interactive && fallback_uids_empty(&value) && prompt_add_fallback()? {
-        let preferred_uid = preferred_uid_from_value(&value);
-        if let Some(preferred_uid) = preferred_uid.as_deref() {
-            if let Some(index) = prompt_for_fallback_device(devices, preferred_uid)? {
-                value["fallback_uids"] = serde_json::json!([devices[index].uid]);
-                changes.push(format!(
-                    "added fallback device `{}`",
-                    devices[index].friendly_label()
-                ));
-            }
-        }
-    }
+    // NOTE: fallback prompt is deferred to the end of `rusty-jack install` so that
+    // device selection questions appear after other install steps.
 
     if changes.is_empty() {
         let canonical = render_lexicographic_json(&value)?;
@@ -361,10 +355,70 @@ fn fallback_uids_empty(value: &Value) -> bool {
 
 fn prompt_add_fallback() -> Result<bool, RustyJackError> {
     Confirm::new()
-        .with_prompt("Add an explicit fallback output to the existing config?")
+        .with_prompt(q("Add an explicit fallback output to the existing config?"))
         .default(false)
         .interact()
         .map_err(|err| RustyJackError::Config(format!("fallback prompt failed: {err}")))
+}
+
+/// Prompt to add a fallback output to the existing config, but only when needed.
+///
+/// This is intended to run at the end of `rusty-jack install`, after other setup steps.
+pub fn maybe_prompt_add_fallback_to_existing_config(
+    hal: &dyn AudioHal,
+    interactive: bool,
+) -> Result<ConfigSetupResult, RustyJackError> {
+    if !interactive {
+        return Ok(ConfigSetupResult::Kept {
+            config_path: default_config_path_or_err().and_then(|path| path_display(&path))?,
+        });
+    }
+
+    let path = default_config_path_or_err()?;
+    if !path.exists() {
+        return Ok(ConfigSetupResult::Kept {
+            config_path: path_display(&path)?,
+        });
+    }
+
+    let raw = std::fs::read_to_string(&path).map_err(RustyJackError::Io)?;
+    let mut value = serde_json::from_str::<Value>(&raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+    if !fallback_uids_empty(&value) {
+        return Ok(ConfigSetupResult::Kept {
+            config_path: path_display(&path)?,
+        });
+    }
+
+    let list = hal.list_outputs()?;
+    let preferred_uid = preferred_uid_from_value(&value);
+    let Some(preferred_uid) = preferred_uid.as_deref() else {
+        return Ok(ConfigSetupResult::Kept {
+            config_path: path_display(&path)?,
+        });
+    };
+
+    if !prompt_add_fallback()? {
+        return Ok(ConfigSetupResult::Kept {
+            config_path: path_display(&path)?,
+        });
+    }
+
+    if let Some(index) = prompt_for_fallback_device(&list.devices, preferred_uid)? {
+        value["fallback_uids"] = serde_json::json!([list.devices[index].uid]);
+        std::fs::write(&path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
+        return Ok(ConfigSetupResult::Updated {
+            config_path: path_display(&path)?,
+            changes: vec![format!(
+                "added fallback device `{}`",
+                list.devices[index].friendly_label()
+            )],
+        });
+    }
+
+    Ok(ConfigSetupResult::Kept {
+        config_path: path_display(&path)?,
+    })
 }
 
 fn ensure_device_selector(
@@ -448,7 +502,7 @@ fn prompt_for_fallback_device(
         })
         .collect::<Vec<_>>();
     let selection = Select::new()
-        .with_prompt("Pick a fallback output device")
+        .with_prompt(q("Pick a fallback output device"))
         .items(&labels)
         .default(default)
         .interact()
