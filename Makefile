@@ -4,13 +4,24 @@
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
 
-.PHONY: all build check-cargo clean clippy driver-bundle fmt install list list-hdmi package release test uninstall universal upgrade validate-driver-bundle
+.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package release test uninstall universal upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 export CARGO_BUILD_JOBS ?= $(shell sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
 
 CARGO ?= cargo
+INSTALL_BIN_DIR ?= $(HOME)/.cargo/bin
+INSTALL_SHARE_DIR ?= $(HOME)/.cargo/share/rusty-jack
+BIN_NAME := rusty-jack
+RELEASE_BIN := target/release/$(BIN_NAME)
+INSTALLED_BIN := $(INSTALL_BIN_DIR)/$(BIN_NAME)
+
+# Keep make from invoking cargo when nothing changed.
+# Use git to enumerate tracked Rust sources (fast + includes new files when added to git).
+RUST_SOURCES := $(shell git ls-files '*.rs' 2>/dev/null)
+RUST_BUILD_INPUTS := Cargo.toml Cargo.lock $(RUST_SOURCES)
+
 DRIVER_BUNDLE_OUTPUT ?= target/share/rusty-jack
 DRIVER_BUNDLE := $(DRIVER_BUNDLE_OUTPUT)/RustyJack.driver
 DRIVER_BUNDLE_STAMP := $(DRIVER_BUNDLE)/.built
@@ -24,6 +35,12 @@ all: test build
 
 build: check-cargo
 	$(CARGO) build
+
+build-release: $(RELEASE_BIN)
+
+$(RELEASE_BIN): $(RUST_BUILD_INPUTS)
+	@$(MAKE) check-cargo
+	$(CARGO) build --release
 
 check-cargo:
 	@command -v $(CARGO) >/dev/null 2>&1 || { \
@@ -50,8 +67,16 @@ fmt: check-cargo
 	$(CARGO) fmt --all
 
 install: check-cargo
-	$(CARGO) install --path . --force --locked --target-dir target
-	$(MAKE) driver-bundle DRIVER_BUNDLE_OUTPUT="$$HOME/.cargo/share/rusty-jack"
+	@mkdir -p "$(INSTALL_BIN_DIR)"
+	@mkdir -p "$(INSTALL_SHARE_DIR)"
+	@$(MAKE) build-release
+	@if [ -f "$(INSTALLED_BIN)" ] && cmp -s "$(RELEASE_BIN)" "$(INSTALLED_BIN)"; then \
+		echo "rusty-jack already installed: $(INSTALLED_BIN)"; \
+	else \
+		echo "Installing rusty-jack to $(INSTALLED_BIN)"; \
+		install -m 755 "$(RELEASE_BIN)" "$(INSTALLED_BIN)"; \
+	fi
+	@$(MAKE) driver-bundle DRIVER_BUNDLE_OUTPUT="$(INSTALL_SHARE_DIR)"
 
 list: build
 	$(CARGO) run -- list
