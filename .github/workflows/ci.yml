@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    # Stacked PRs (Graphite) target a non-main base branch; run CI anyway.
 
 env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
