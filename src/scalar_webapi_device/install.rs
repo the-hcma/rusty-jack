@@ -7,6 +7,7 @@ use crate::scalar_webapi_device::{
     OUTPUT_SELECTED_TRIGGER,
 };
 use crate::RustyJackError;
+use dialoguer::console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 use serde_json::Value;
 
@@ -37,9 +38,13 @@ pub fn prompt_add_scalar_webapi_device(
     default_mac_output: &OutputDevice,
 ) -> Result<Option<ScalarWebApiInstallSelection>, RustyJackError> {
     if !Confirm::new()
-        .with_prompt(
-            "Configure ScalarWebAPI speaker wake (e.g. Sony on your LAN) for this Mac output?",
-        )
+        .with_prompt(style(concat!(
+            "Configure ScalarWebAPI speaker wake (for example, a Sony speaker on your LAN).\n",
+            "This lets Rusty Jack wake the speaker when you unlock your Mac and/or select the output.\n",
+            "Configure it now?"
+        ))
+        .cyan()
+        .to_string())
         .default(true)
         .interact()
         .map_err(|err| RustyJackError::Config(format!("ScalarWebAPI prompt failed: {err}")))?
@@ -48,7 +53,13 @@ pub fn prompt_add_scalar_webapi_device(
     }
 
     let host: String = Input::new()
-        .with_prompt("ScalarWebAPI device host (IP or hostname)")
+        .with_prompt(
+            style(
+                "ScalarWebAPI device host.\nEnter an IP address or hostname (e.g. 192.168.1.42).",
+            )
+            .cyan()
+            .to_string(),
+        )
         .validate_with(|input: &String| {
             if input.trim().is_empty() {
                 Err("host is required")
@@ -96,7 +107,12 @@ pub fn maybe_prompt_scalar_webapi_wake_triggers(
 
     if Confirm::new()
         .with_prompt(
-            "ScalarWebAPI wake is missing unlock/activity triggers. Enable all recommended triggers (keyboard, mouse, output selection)?",
+            style(concat!(
+                "ScalarWebAPI wake is missing unlock/activity triggers.\n",
+                "Enable all recommended triggers (keyboard, mouse, and output selection)?"
+            ))
+            .cyan()
+            .to_string(),
         )
         .default(true)
         .interact()
@@ -171,7 +187,14 @@ fn prompt_mac_output(
         .map(|device| crate::setup::setup_device_label(device))
         .collect::<Vec<_>>();
     let selection = Select::new()
-        .with_prompt("Which Mac output is connected to the ScalarWebAPI speaker?")
+        .with_prompt(
+            style(concat!(
+                "Which Mac output is connected to the ScalarWebAPI speaker?\n",
+                "Pick the Mac output that should trigger wake."
+            ))
+            .cyan()
+            .to_string(),
+        )
         .items(&labels)
         .default(default_index)
         .interact()
@@ -183,7 +206,14 @@ fn prompt_mac_output(
 
 fn prompt_wake_triggers() -> Result<Vec<String>, RustyJackError> {
     if Confirm::new()
-        .with_prompt("Use all recommended wake triggers (unlock/activity and output selection)?")
+        .with_prompt(
+            style(concat!(
+                "Use all recommended wake triggers.\n",
+                "This includes unlock/activity (keyboard + mouse) and output selection."
+            ))
+            .cyan()
+            .to_string(),
+        )
         .default(true)
         .interact()
         .map_err(|err| {
@@ -208,7 +238,14 @@ fn prompt_wake_triggers_with_defaults(current: &[String]) -> Result<Vec<String>,
         .collect::<Vec<_>>();
 
     let selection = MultiSelect::new()
-        .with_prompt("Toggle wake triggers ([*] enabled, space to change, enter to confirm)")
+        .with_prompt(
+            style(concat!(
+                "Toggle wake triggers.\n",
+                "Items marked with `*` are currently enabled."
+            ))
+            .cyan()
+            .to_string(),
+        )
         .items(&labels)
         .defaults(&defaults)
         .interact()
@@ -234,9 +271,9 @@ fn prompt_wake_triggers_with_defaults(current: &[String]) -> Result<Vec<String>,
 
 fn format_toggle_label(label: &str, enabled: bool) -> String {
     if enabled {
-        format!("[*] {label}")
+        format!("* {label} (currently enabled)")
     } else {
-        format!("[ ] {label}")
+        format!("  {label}")
     }
 }
 
