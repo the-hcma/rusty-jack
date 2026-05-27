@@ -8,6 +8,7 @@ use crate::scalar_webapi_device::{
     prompt_add_scalar_webapi_device,
 };
 use crate::RustyJackError;
+use dialoguer::console::style;
 use dialoguer::{Confirm, Select};
 use serde::Serialize;
 use serde_json::Value;
@@ -157,34 +158,50 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             scalar_webapi_triggers,
             ..
         } => {
-            println!("Created config");
-            println!("  path:      {config_path}");
-            println!("  preferred: {preferred_label}");
+            println!("{}", style("Created config").cyan());
+            println!("  {} {}", style("path:").dim(), style(config_path).green());
             println!(
-                "  fallback:  {}",
-                fallback_label
-                    .as_deref()
-                    .unwrap_or(IMPLICIT_BUILTIN_FALLBACK_LABEL)
+                "  {} {}",
+                style("preferred:").dim(),
+                style(preferred_label).green()
+            );
+            println!(
+                "  {} {}",
+                style("fallback:").dim(),
+                style(
+                    fallback_label
+                        .as_deref()
+                        .unwrap_or(IMPLICIT_BUILTIN_FALLBACK_LABEL)
+                )
+                .green()
             );
             if let Some(volume) = volume {
-                println!("  volume:    {volume}%");
+                println!(
+                    "  {} {}",
+                    style("volume:").dim(),
+                    style(format!("{volume}%")).green()
+                );
             }
             if let Some(triggers) = scalar_webapi_triggers {
-                println!("  ScalarWebAPI triggers: {}", triggers.join(", "));
+                println!(
+                    "  {} {}",
+                    style("ScalarWebAPI triggers:").dim(),
+                    style(triggers.join(", ")).green()
+                );
             }
         }
         ConfigSetupResult::Kept { config_path } => {
-            println!("Config already exists");
-            println!("  path: {config_path}");
+            println!("{}", style("Config already exists").cyan());
+            println!("  {} {}", style("path:").dim(), style(config_path).green());
         }
         ConfigSetupResult::Updated {
             config_path,
             changes,
         } => {
-            println!("Updated config");
-            println!("  path: {config_path}");
+            println!("{}", style("Updated config").cyan());
+            println!("  {} {}", style("path:").dim(), style(config_path).green());
             for change in changes {
-                println!("  changed: {change}");
+                println!("  {} {}", style("changed:").dim(), style(change).green());
             }
         }
     }
