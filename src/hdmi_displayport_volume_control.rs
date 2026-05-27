@@ -301,6 +301,9 @@ fn native_driver_warning(stage: Option<&str>) -> Option<String> {
         Some("virtual-output-null") | Some("loadable-skeleton") | None => Some(
             "Rusty Jack is currently a null output until passthrough audio is implemented.".into(),
         ),
+        Some(crate::passthrough::PASSTHROUGH_SKELETON_DRIVER_STAGE) => Some(
+            "Rusty Jack passthrough skeleton is armed in the daemon; live CoreAudio capture/render is not wired yet.".into(),
+        ),
         Some(_) => None,
     }
 }
@@ -417,5 +420,14 @@ mod tests {
         assert!(native_driver_warning(Some("virtual-output-null"))
             .unwrap()
             .contains("null output"));
+    }
+
+    #[test]
+    fn test_native_driver_warning_for_passthrough_skeleton_stage() {
+        assert!(
+            native_driver_warning(Some(crate::passthrough::PASSTHROUGH_SKELETON_DRIVER_STAGE))
+                .unwrap()
+                .contains("passthrough skeleton")
+        );
     }
 }

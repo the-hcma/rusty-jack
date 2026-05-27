@@ -7,7 +7,7 @@
 #include <string.h>
 
 // This driver publishes a minimal virtual output device and intentionally drops IO.
-// The Rust daemon will gain passthrough rendering in a later slice.
+// The Rust daemon hosts passthrough planning/gain in passthrough-skeleton mode; live I/O follows.
 #define RUSTY_JACK_DEVICE_OBJECT_ID 2
 #define RUSTY_JACK_STREAM_OBJECT_ID 3
 #define RUSTY_JACK_VOLUME_CONTROL_OBJECT_ID 4
