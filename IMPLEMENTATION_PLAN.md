@@ -961,8 +961,8 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
 - [x] **AudioServerPlugIn** virtual output device skeleton with stereo stream and basic volume/mute controls
 - [x] `driver install` / `driver uninstall` lifecycle via `rusty-jack install`, `upgrade`, and `uninstall`
-- [ ] Daemon **passthrough loop**: read from virtual device, apply **software volume** (sync with volume keys / `kAudioDevicePropertyVolumeScalar`), write to configured physical UID
-- [ ] Set virtual device as **default output** + **default system output** when driver is active
+- [x] Daemon **passthrough loop**: capture on virtual `WriteMix` ring, apply **software volume**, render to configured physical UID via CoreAudio IO proc
+- [x] Set virtual device as **default output** + **default system output** when driver is active and passthrough is armed
 - [ ] `uninstall` removes driver and restores prior physical default
 - [ ] **Tests:** ring-buffer / gain math unit tests; mock render path; driver property handlers where testable off-hardware
 

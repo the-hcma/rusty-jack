@@ -19,6 +19,8 @@ pub use active::resolve_active_uid;
 pub use system_default::build_system_default_info;
 
 #[cfg(target_os = "macos")]
+pub use default_output::device_id_for_uid;
+#[cfg(target_os = "macos")]
 pub use hal::CoreAudioHal;
 
 pub mod mock;

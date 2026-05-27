@@ -1,7 +1,7 @@
 //! Background supervisor loop for `rusty-jack daemon`.
 
 use crate::activity::ActivityMonitor;
-use crate::apply::{preferred_uid, switch_output, volume_for_target, ApplyResult, SwitchOptions};
+use crate::apply::{preferred_uid, switch_output, ApplyResult, SwitchOptions};
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
 use crate::hdmi_displayport_volume_control::{
@@ -12,7 +12,11 @@ use crate::hdmi_displayport_volume_control::{
 use crate::network::{current_network_access_snapshot, NetworkAccessSnapshot};
 use crate::output_device::OutputDevice;
 use crate::passthrough::PassthroughController;
-use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
+use crate::passthrough::{
+    passthrough_physical_uid, select_effective_routing_target, select_physical_routing_target,
+    volume_for_effective_target,
+};
+use crate::policy::{select_fallback_target, RoutingTarget};
 use crate::scalar_webapi_device::ScalarWebApiDeviceWakeResult;
 use crate::system_default::DeviceList;
 use crate::volume_memory::remember_active_non_preferred;
@@ -181,18 +185,21 @@ fn daemon_tick_with_hooks(
         return Ok((DaemonTickResult::AutoSwitchDisabled, list));
     }
 
-    let target = select_routing_target(config, &list.devices)
+    let physical = select_physical_routing_target(config, &list.devices)
+        .map_err(|err| RustyJackError::Config(err.to_string()))?;
+    let target = select_effective_routing_target(config, &list.devices)
         .map_err(|err| RustyJackError::Config(err.to_string()))?;
     let preferred_uid = preferred_uid(config, &list.devices);
     let default_uid = hal.default_output_uid()?;
     let current_uid = current_routed_output_uid(&list, default_uid.as_deref());
+    let hdmi_uid = passthrough_physical_uid(config, &list.devices).unwrap_or(&physical.uid);
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
         if reason == DaemonTickReason::UserActivity {
             if let Some(fallback) = scalar_webapi_device_activity_fallback_target(
                 config,
                 &list.devices,
-                &target.uid,
+                &physical.uid,
                 hooks.scalar_webapi_device.fallback,
                 hooks.scalar_webapi_device.wake_on_activity,
             ) {
@@ -201,6 +208,7 @@ fn daemon_tick_with_hooks(
                     config,
                     &list,
                     &fallback,
+                    &fallback.uid,
                     preferred_uid.as_deref(),
                     hooks.hdmi_displayport_volume_control.ensure,
                 )?;
@@ -226,6 +234,7 @@ fn daemon_tick_with_hooks(
                     config,
                     &list,
                     &checked_target,
+                    hdmi_uid,
                     preferred_uid.as_deref(),
                     hooks.hdmi_displayport_volume_control.ensure,
                 )?;
@@ -237,13 +246,14 @@ fn daemon_tick_with_hooks(
             config,
             &list,
             &target,
+            hdmi_uid,
             preferred_uid.as_deref(),
             reason,
             &hooks.hdmi_displayport_volume_control,
         )? {
             return Ok((DaemonTickResult::Switched(result), list));
         }
-        ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
+        ensure_startup_volume(hal, config, reason, &target, &physical, &preferred_uid)?;
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
@@ -270,13 +280,14 @@ fn daemon_tick_with_hooks(
             config,
             &list,
             &target,
+            hdmi_uid,
             preferred_uid.as_deref(),
             reason,
             &hooks.hdmi_displayport_volume_control,
         )? {
             return Ok((DaemonTickResult::Switched(result), list));
         }
-        ensure_startup_volume(hal, config, reason, &target, &preferred_uid)?;
+        ensure_startup_volume(hal, config, reason, &target, &physical, &preferred_uid)?;
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
@@ -286,6 +297,7 @@ fn daemon_tick_with_hooks(
         config,
         &list,
         &target,
+        hdmi_uid,
         preferred_uid.as_deref(),
         hooks.hdmi_displayport_volume_control.ensure,
     )?;
@@ -314,12 +326,13 @@ fn ensure_startup_volume(
     config: &Config,
     reason: DaemonTickReason,
     target: &RoutingTarget,
+    physical: &RoutingTarget,
     preferred_uid: &Option<String>,
 ) -> Result<(), RustyJackError> {
     if reason != DaemonTickReason::Startup {
         return Ok(());
     }
-    if let Some(volume) = volume_for_target(config, target, preferred_uid) {
+    if let Some(volume) = volume_for_effective_target(config, target, physical, preferred_uid) {
         let _ = hal.set_output_volume(&target.uid, volume)?;
     }
     Ok(())
@@ -330,17 +343,23 @@ fn switch_daemon_target(
     config: &Config,
     list: &DeviceList,
     target: &RoutingTarget,
+    hdmi_uid: &str,
     preferred_uid: Option<&str>,
     ensure_volume_control: &HdmiDisplayPortVolumeControlEnsureFn<'_>,
 ) -> Result<ApplyResult, RustyJackError> {
-    let volume_control = ensure_volume_control(&list.devices, &target.uid)?;
+    let volume_control = ensure_volume_control(&list.devices, hdmi_uid)?;
     for line in format_ensure_messages(volume_control) {
         eprintln!("{line}");
     }
 
-    remember_active_non_preferred(hal, &list.devices, preferred_uid, &target.uid)?;
+    remember_active_non_preferred(hal, &list.devices, preferred_uid, hdmi_uid)?;
     let preferred_uid = preferred_uid.map(str::to_string);
-    let volume = volume_for_target(config, target, &preferred_uid);
+    let physical = RoutingTarget {
+        uid: hdmi_uid.to_string(),
+        name: target.name.clone(),
+        source: target.source.clone(),
+    };
+    let volume = volume_for_effective_target(config, target, &physical, &preferred_uid);
 
     let result = switch_output(
         hal,
@@ -381,11 +400,13 @@ fn ensure_hdmi_displayport_volume_control_for_daemon_target(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recover_hdmi_displayport_volume_control_for_daemon_target(
     hal: &dyn AudioHal,
     config: &Config,
     list: &DeviceList,
     target: &RoutingTarget,
+    hdmi_uid: &str,
     preferred_uid: Option<&str>,
     reason: DaemonTickReason,
     volume_control_hooks: &HdmiDisplayPortVolumeControlHooks<'_>,
@@ -393,14 +414,14 @@ fn recover_hdmi_displayport_volume_control_for_daemon_target(
     if reason != DaemonTickReason::Startup {
         ensure_hdmi_displayport_volume_control_for_daemon_target(
             &list.devices,
-            &target.uid,
+            hdmi_uid,
             reason,
             volume_control_hooks.ensure,
         )?;
         return Ok(None);
     }
 
-    let volume_control = (volume_control_hooks.recover)(&list.devices, &target.uid)?;
+    let volume_control = (volume_control_hooks.recover)(&list.devices, hdmi_uid)?;
     let recovered = matches!(
         volume_control.action,
         HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted
@@ -423,11 +444,17 @@ fn recover_hdmi_displayport_volume_control_for_daemon_target(
             config,
             list,
             target,
+            hdmi_uid,
             preferred_uid,
             volume_control_hooks.ensure,
         )?;
+        let physical = RoutingTarget {
+            uid: hdmi_uid.to_string(),
+            name: target.name.clone(),
+            source: target.source.clone(),
+        };
         let preferred_uid = preferred_uid.map(str::to_string);
-        ensure_startup_volume(hal, config, reason, target, &preferred_uid)?;
+        ensure_startup_volume(hal, config, reason, target, &physical, &preferred_uid)?;
         return Ok(Some(result));
     }
 

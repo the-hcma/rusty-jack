@@ -304,6 +304,7 @@ fn native_driver_warning(stage: Option<&str>) -> Option<String> {
         Some(crate::passthrough::PASSTHROUGH_SKELETON_DRIVER_STAGE) => Some(
             "Rusty Jack passthrough skeleton is armed in the daemon; live CoreAudio capture/render is not wired yet.".into(),
         ),
+        Some(crate::passthrough::PASSTHROUGH_ACTIVE_DRIVER_STAGE) => None,
         Some(_) => None,
     }
 }

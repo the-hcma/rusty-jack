@@ -29,6 +29,8 @@ DRIVER_BUNDLE_SOURCES := \
 	Cargo.toml \
 	driver/RustyJack/Info.plist.in \
 	driver/RustyJack/RustyJackAudioServerPlugIn.c \
+	driver/RustyJack/passthrough_ring.c \
+	driver/RustyJack/passthrough_ring.h \
 	scripts/build-driver-bundle
 
 all: test build

@@ -23,7 +23,10 @@ BUNDLE="${OUT_DIR}/RustyJack.driver"
 CONTENTS="${BUNDLE}/Contents"
 MACOS="${CONTENTS}/MacOS"
 INFO="${CONTENTS}/Info.plist"
-SRC="driver/RustyJack/RustyJackAudioServerPlugIn.c"
+SRC=(
+  driver/RustyJack/RustyJackAudioServerPlugIn.c
+  driver/RustyJack/passthrough_ring.c
+)
 INFO_TEMPLATE="driver/RustyJack/Info.plist.in"
 
 rm -rf "$BUNDLE"
@@ -47,7 +50,7 @@ xcrun clang \
   -framework CoreAudio \
   -framework CoreFoundation \
   -o "${MACOS}/RustyJack" \
-  "$SRC"
+  "${SRC[@]}"
 
 plutil -lint "$INFO" >/dev/null
 chmod 755 "${MACOS}/RustyJack"
