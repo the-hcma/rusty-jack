@@ -74,6 +74,7 @@ Hardware-mutating tests are ignored by default. Do not enable them unless you in
 - **Worktree-per-stack.** Every new stack is created via `start-development --worktree <name> --no-interactive`.
 - Never work directly on `main`.
 - Keep each branch focused on one logical change.
+- Before publishing/submitting any PR, run the required local gates (see **Pre-Commit Checklist** below).
 - Submit with `gt submit --no-interactive --publish` when using Graphite.
 - To merge, add the `merge-it` label. Never use `gh pr merge` directly.
 - Follow **Conventional Commits** for branch commits when practical: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
