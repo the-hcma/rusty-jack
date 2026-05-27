@@ -107,6 +107,30 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.stdout.log"
 
 Rusty Jack uses ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
 
+### Verify ScalarWebAPI on your LAN (UPnP + JSON-RPC)
+
+ScalarWebAPI “documentation” is served by the device itself. The reliable way to find the correct endpoints is UPnP/SSDP discovery:
+
+- The device advertises a UPnP `LOCATION` URL (device description XML).
+- That XML includes `X_ScalarWebAPI_BaseURL` (the JSON-RPC base).
+
+Known-good examples from a discovered `SRS-ZR5` on a local network:
+
+- Device description XML (UPnP `LOCATION`):
+  - `http://192.168.86.18:54380/MediaRenderer_SRS-ZR5.xml`
+- ScalarWebAPI SCPD (action list URL referenced by the UPnP service block):
+  - `http://192.168.86.18:54380/ScalarWebApiSCPD.xml`
+- ScalarWebAPI JSON-RPC endpoint (from `X_ScalarWebAPI_BaseURL`):
+  - `http://192.168.86.18:54480/sony/system`
+
+Important: the ScalarWebAPI service endpoints generally do **not** respond meaningfully to a browser GET. Use JSON-RPC POST:
+
+```bash
+curl -sS -X POST "http://192.168.86.18:54480/sony/system" \
+  -H "Content-Type: application/json" \
+  --data '{"method":"getPowerStatus","params":[],"id":1,"version":"1.1"}'
+```
+
 ---
 
 ## Audio briefly falls back from ScalarWebAPI to internal speakers

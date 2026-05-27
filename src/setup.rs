@@ -4,12 +4,12 @@ use crate::config::{default_config_path, is_placeholder_uid, render_lexicographi
 use crate::coreaudio::AudioHal;
 use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
-    append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_wake_triggers,
-    prompt_add_scalar_webapi_device,
+    append_scalar_webapi_to_config_json, format_scalar_webapi_triggers_for_display,
+    maybe_prompt_scalar_webapi_wake_triggers, prompt_add_scalar_webapi_device,
 };
 use crate::RustyJackError;
 use dialoguer::console::style;
-use dialoguer::{Confirm, Select};
+use dialoguer::{Confirm, MultiSelect, Select};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, IsTerminal};
@@ -33,6 +33,8 @@ pub enum ConfigSetupResult {
         volume: Option<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
         scalar_webapi_triggers: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scalar_webapi_mac_output_label: Option<String>,
     },
     Kept {
         config_path: String,
@@ -100,6 +102,13 @@ pub fn ensure_default_config(
     }
     std::fs::write(&path, config).map_err(RustyJackError::Io)?;
 
+    let scalar_webapi_mac_output_label = scalar_webapi.as_ref().and_then(|selection| {
+        list.devices
+            .iter()
+            .find(|device| device.uid == selection.mac_output_uid)
+            .map(OutputDevice::friendly_label)
+            .or_else(|| Some(selection.mac_output_name.clone()))
+    });
     Ok(ConfigSetupResult::Created {
         config_path: path_display(&path)?,
         preferred_uid: preferred.uid.clone(),
@@ -108,6 +117,7 @@ pub fn ensure_default_config(
         fallback_label: fallback.map(OutputDevice::friendly_label),
         volume,
         scalar_webapi_triggers: scalar_webapi.map(|selection| selection.triggers),
+        scalar_webapi_mac_output_label,
     })
 }
 
@@ -169,61 +179,116 @@ fn reconfigure_existing_config(
     loop {
         let mut updated = value.clone();
 
-        // Preferred device.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum ReconfigureSection {
+            Preferred,
+            Volume,
+            Fallback,
+            ScalarWebApi,
+        }
+
+        let sections = [
+            (ReconfigureSection::Preferred, "preferred output"),
+            (ReconfigureSection::Volume, "volume"),
+            (ReconfigureSection::Fallback, "fallback output"),
+            (
+                ReconfigureSection::ScalarWebApi,
+                "ScalarWebAPI (Sony speaker wake)",
+            ),
+        ];
+        let defaults = [false, false, false, true];
+
+        let selected = MultiSelect::new()
+            .with_prompt(q(concat!(
+                "What would you like to reconfigure?\n",
+                "Select one or more sections (space to toggle, enter to confirm)."
+            )))
+            .items(&sections.iter().map(|(_, label)| *label).collect::<Vec<_>>())
+            .defaults(&defaults)
+            .interact()
+            .map_err(|err| {
+                RustyJackError::Config(format!("reconfigure sections prompt failed: {err}"))
+            })?;
+
+        let selected = selected
+            .into_iter()
+            .filter_map(|idx| sections.get(idx).map(|(section, _)| *section))
+            .collect::<Vec<_>>();
+
+        let reconfigure_preferred = selected.contains(&ReconfigureSection::Preferred);
+        let reconfigure_volume = selected.contains(&ReconfigureSection::Volume);
+        let reconfigure_fallback = selected.contains(&ReconfigureSection::Fallback);
+        let reconfigure_scalar = selected.contains(&ReconfigureSection::ScalarWebApi);
+
+        // Resolve current preferred device (may be needed as a default for ScalarWebAPI prompts).
         let default_preferred_uid = preferred_uid_from_value(&updated);
-        let preferred_index = prompt_for_preferred_device_with_default_uid(
-            devices,
-            default_preferred_uid.as_deref(),
-        )?;
+        let preferred_index = if reconfigure_preferred || default_preferred_uid.is_none() {
+            prompt_for_preferred_device_with_default_uid(devices, default_preferred_uid.as_deref())?
+        } else {
+            devices
+                .iter()
+                .position(|device| Some(device.uid.as_str()) == default_preferred_uid.as_deref())
+                .unwrap_or_else(|| prompt_for_preferred_device(devices).unwrap_or(0))
+        };
         let preferred = &devices[preferred_index];
+
         let mut changes = Vec::new();
-        set_device_selector(
-            &mut updated,
-            "preferred_device",
-            preferred,
-            "preferred device",
-            &mut changes,
-        );
+
+        // Preferred device.
+        if reconfigure_preferred || default_preferred_uid.is_none() {
+            // We only write preferred_device when we're explicitly reconfiguring it (or it's missing).
+            set_device_selector(
+                &mut updated,
+                "preferred_device",
+                preferred,
+                "preferred device",
+                &mut changes,
+            );
+        }
 
         // Volume (keep existing if present, otherwise use current device volume if readable).
-        let volume = updated
-            .get("volume")
-            .and_then(Value::as_u64)
-            .and_then(|v| u8::try_from(v).ok())
-            .or_else(|| hal.output_volume_percent(&preferred.uid));
-        if let Some(volume) = volume {
-            if updated.get("volume").and_then(Value::as_u64) != Some(volume as u64) {
-                updated["volume"] = serde_json::json!(volume);
-                changes.push(format!("set volume to {volume}%"));
+        if reconfigure_volume {
+            let volume = updated
+                .get("volume")
+                .and_then(Value::as_u64)
+                .and_then(|v| u8::try_from(v).ok())
+                .or_else(|| hal.output_volume_percent(&preferred.uid));
+            if let Some(volume) = volume {
+                if updated.get("volume").and_then(Value::as_u64) != Some(volume as u64) {
+                    updated["volume"] = serde_json::json!(volume);
+                    changes.push(format!("set volume to {volume}%"));
+                }
             }
         }
 
         // Fallback device.
-        let default_fallback_uid = updated
-            .get("fallback_uids")
-            .and_then(Value::as_array)
-            .and_then(|arr| arr.first())
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let fallback_index = prompt_for_fallback_device_with_default_uid(
-            devices,
-            &preferred.uid,
-            default_fallback_uid.as_deref(),
-        )?;
-        match fallback_index {
-            Some(index) => {
-                let uid = devices[index].uid.clone();
-                updated["fallback_uids"] = serde_json::json!([uid.clone()]);
-                changes.push(format!(
-                    "set fallback device to `{}`",
-                    devices[index].friendly_label()
-                ));
-            }
-            None => {
-                // Explicitly clear fallback_uids to allow implicit builtin fallback behavior.
-                if !fallback_uids_empty(&updated) {
-                    updated["fallback_uids"] = serde_json::json!([]);
-                    changes.push("cleared explicit fallback".into());
+        if reconfigure_fallback {
+            let default_fallback_uid = updated
+                .get("fallback_uids")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let fallback_index = prompt_for_fallback_device_with_default_uid(
+                devices,
+                &preferred.uid,
+                default_fallback_uid.as_deref(),
+            )?;
+            match fallback_index {
+                Some(index) => {
+                    let uid = devices[index].uid.clone();
+                    updated["fallback_uids"] = serde_json::json!([uid.clone()]);
+                    changes.push(format!(
+                        "set fallback device to `{}`",
+                        devices[index].friendly_label()
+                    ));
+                }
+                None => {
+                    // Explicitly clear fallback_uids to allow implicit builtin fallback behavior.
+                    if !fallback_uids_empty(&updated) {
+                        updated["fallback_uids"] = serde_json::json!([]);
+                        changes.push("cleared explicit fallback".into());
+                    }
                 }
             }
         }
@@ -233,7 +298,8 @@ fn reconfigure_existing_config(
             .pointer("/scalar_webapi_device/enabled")
             .and_then(Value::as_bool)
             == Some(true);
-        if scalar_webapi_enabled
+        if reconfigure_scalar
+            && scalar_webapi_enabled
             && Confirm::new()
                 .with_prompt(q(
                     "Reconfigure ScalarWebAPI settings (host, Mac output, triggers)?",
@@ -331,6 +397,7 @@ fn reconfigure_existing_config(
             updated["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
             changes.push("updated ScalarWebAPI wake triggers".into());
         } else if !scalar_webapi_enabled
+            && reconfigure_scalar
             && Confirm::new()
                 .with_prompt(q(
                     "Configure ScalarWebAPI speaker wake for this Mac output?",
@@ -348,7 +415,7 @@ fn reconfigure_existing_config(
             }
         }
 
-        let diff = summarize_config_diff(&value, &updated);
+        let diff = summarize_config_diff(&value, &updated, devices);
         if diff.is_empty() {
             println!("{}", style("No changes.").dim());
             return Ok(ConfigSetupResult::Kept {
@@ -396,8 +463,19 @@ fn reconfigure_existing_config(
     }
 }
 
-fn summarize_config_diff(before: &Value, after: &Value) -> Vec<String> {
+fn summarize_config_diff(before: &Value, after: &Value, devices: &[OutputDevice]) -> Vec<String> {
     let mut lines = Vec::new();
+
+    let label_for_uid = |uid: Option<&str>| -> String {
+        let Some(uid) = uid else {
+            return "(none)".into();
+        };
+        devices
+            .iter()
+            .find(|device| device.uid == uid)
+            .map(|device| device.friendly_label())
+            .unwrap_or_else(|| uid.to_string())
+    };
 
     let before_preferred = before
         .pointer("/preferred_device/uid")
@@ -408,8 +486,8 @@ fn summarize_config_diff(before: &Value, after: &Value) -> Vec<String> {
     if before_preferred != after_preferred {
         lines.push(format!(
             "preferred: {} -> {}",
-            before_preferred.unwrap_or("(none)"),
-            after_preferred.unwrap_or("(none)")
+            label_for_uid(before_preferred),
+            label_for_uid(after_preferred)
         ));
     }
 
@@ -440,8 +518,16 @@ fn summarize_config_diff(before: &Value, after: &Value) -> Vec<String> {
     if before_fb != after_fb {
         lines.push(format!(
             "fallback: {} -> {}",
-            before_fb.unwrap_or("(implicit builtin)"),
-            after_fb.unwrap_or("(implicit builtin)")
+            if before_fb.is_some() {
+                label_for_uid(before_fb)
+            } else {
+                "(implicit builtin)".into()
+            },
+            if after_fb.is_some() {
+                label_for_uid(after_fb)
+            } else {
+                "(implicit builtin)".into()
+            }
         ));
     }
 
@@ -483,33 +569,63 @@ fn summarize_config_diff(before: &Value, after: &Value) -> Vec<String> {
         ));
     }
 
-    let before_triggers = before
-        .pointer("/scalar_webapi_device/triggers")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        });
-    let after_triggers = after
-        .pointer("/scalar_webapi_device/triggers")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        });
+    let before_triggers = scalar_webapi_triggers_from_value(before);
+    let after_triggers = scalar_webapi_triggers_from_value(after);
     if before_triggers != after_triggers {
         lines.push(format!(
             "ScalarWebAPI triggers: {} -> {}",
-            before_triggers.as_deref().unwrap_or("(none)"),
-            after_triggers.as_deref().unwrap_or("(none)")
+            format_scalar_webapi_triggers_for_display(
+                &before_triggers,
+                scalar_webapi_mac_output_label(before, devices).as_deref(),
+            ),
+            format_scalar_webapi_triggers_for_display(
+                &after_triggers,
+                scalar_webapi_mac_output_label(after, devices).as_deref(),
+            ),
         ));
     }
 
     lines
+}
+
+fn scalar_webapi_triggers_from_value(value: &Value) -> Vec<String> {
+    value
+        .pointer("/scalar_webapi_device/triggers")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn scalar_webapi_mac_output_label(value: &Value, devices: &[OutputDevice]) -> Option<String> {
+    if let Some(name) = value
+        .pointer("/scalar_webapi_device/mac_output/name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+    {
+        let uid = value
+            .pointer("/scalar_webapi_device/mac_output/uid")
+            .and_then(Value::as_str);
+        if let Some(uid) = uid {
+            if let Some(device) = devices.iter().find(|device| device.uid == uid) {
+                return Some(device.friendly_label());
+            }
+        }
+        return Some(name.to_string());
+    }
+    value
+        .pointer("/scalar_webapi_device/mac_output/uid")
+        .and_then(Value::as_str)
+        .and_then(|uid| {
+            devices
+                .iter()
+                .find(|device| device.uid == uid)
+                .map(OutputDevice::friendly_label)
+        })
 }
 
 fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
@@ -559,16 +675,10 @@ fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
             .pointer("/scalar_webapi_device/host")
             .and_then(Value::as_str)
             .unwrap_or("(missing host)");
-        let triggers = value
-            .pointer("/scalar_webapi_device/triggers")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_else(|| "(none)".into());
+        let triggers = format_scalar_webapi_triggers_for_display(
+            &scalar_webapi_triggers_from_value(value),
+            scalar_webapi_mac_output_label(value, devices).as_deref(),
+        );
         println!(
             "  {} {}",
             style("ScalarWebAPI Mac output:").dim(),
@@ -693,6 +803,7 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             fallback_label,
             volume,
             scalar_webapi_triggers,
+            scalar_webapi_mac_output_label,
             ..
         } => {
             println!("{}", style("Created config").cyan());
@@ -723,7 +834,11 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
                 println!(
                     "  {} {}",
                     style("ScalarWebAPI triggers:").dim(),
-                    style(triggers.join(", ")).green()
+                    style(format_scalar_webapi_triggers_for_display(
+                        triggers,
+                        scalar_webapi_mac_output_label.as_deref(),
+                    ))
+                    .green()
                 );
             }
         }

@@ -192,6 +192,23 @@ ScalarWebAPI device example: [`config.example.scalar-webapi-device.json`](./conf
 
 Expected compatible Sony devices include Sony `SRS-ZR5` (the model this integration has been tested with), `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`. This list is not exhaustive; compatibility depends on the device advertising a ScalarWebAPI endpoint on the local network.
 
+### ScalarWebAPI references
+
+Sony’s Developer World pages for the Audio Control API / ScalarWebAPI have been archived and may no longer be publicly accessible. These links are still useful:
+
+- **Community forum**: [Sony Developer World forum — Audio Control API](https://techforum.developer.sony.com/category/7/audio-control-api)
+- **Archived examples**: [`sonydevworld/audio_control_api_examples`](https://github.com/sonydevworld/audio_control_api_examples)
+
+### UPnP device description (canonical per-device “documentation”)
+
+ScalarWebAPI support and method availability vary by device and firmware. The most accurate reference is whatever the device advertises on your LAN:
+
+- **SSDP search target**: `urn:schemas-sony-com:service:ScalarWebAPI:1`
+- **Device description XML** (from SSDP `LOCATION:`) typically includes:
+  - `X_ScalarWebAPI_BaseURL` (for example `http://<ip>:10000/sony`)
+  - `X_ScalarWebAPI_ServiceList` (service groups like `system`, `audio`, `avContent`, ...)
+- **SCPD / action list**: the UPnP service description may reference `ScalarWebApiSCPD.xml` which lists supported actions for that device/firmware.
+
 ---
 
 ## Picker and device list

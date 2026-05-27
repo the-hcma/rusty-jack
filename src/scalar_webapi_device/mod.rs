@@ -28,6 +28,43 @@ pub const MOUSE_TRIGGER: &str = "mouse";
 /// Recommended install defaults: unlock/activity plus output selection.
 pub const DEFAULT_WAKE_TRIGGERS: &[&str] =
     &[KEYBOARD_TRIGGER, MOUSE_TRIGGER, OUTPUT_SELECTED_TRIGGER];
+
+/// Format configured ScalarWebAPI wake triggers for human-readable status output.
+#[must_use]
+pub fn format_scalar_webapi_triggers_for_display(
+    triggers: &[String],
+    mac_output_label: Option<&str>,
+) -> String {
+    let labels: Vec<String> = triggers
+        .iter()
+        .map(|trigger| human_readable_trigger_label(trigger, mac_output_label))
+        .collect();
+    format_readable_trigger_list(&labels)
+}
+
+fn human_readable_trigger_label(trigger: &str, mac_output_label: Option<&str>) -> String {
+    match trigger.to_ascii_lowercase().as_str() {
+        KEYBOARD_TRIGGER => "keyboard activity".into(),
+        MOUSE_TRIGGER => "mouse/pointer activity".into(),
+        OUTPUT_SELECTED_TRIGGER => mac_output_label
+            .map(|name| format!("selecting {name}"))
+            .unwrap_or_else(|| "output device selection".into()),
+        other => other.to_string(),
+    }
+}
+
+fn format_readable_trigger_list(items: &[String]) -> String {
+    match items.len() {
+        0 => "(none)".into(),
+        1 => items[0].clone(),
+        2 => format!("{} and {}", items[0], items[1]),
+        n => {
+            let head = items[..n - 1].join(", ");
+            format!("{}, and {}", head, items[n - 1])
+        }
+    }
+}
+
 const SYSTEM_SERVICE: &str = "system";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
@@ -810,6 +847,27 @@ mod tests {
         let api = config.scalar_webapi_device.as_mut().unwrap();
         api.triggers = vec!["Output_Selected".into()];
         assert!(trigger_enabled(api, OUTPUT_SELECTED_TRIGGER));
+    }
+
+    #[test]
+    fn test_format_scalar_webapi_triggers_for_display() {
+        let triggers = vec![
+            KEYBOARD_TRIGGER.into(),
+            MOUSE_TRIGGER.into(),
+            OUTPUT_SELECTED_TRIGGER.into(),
+        ];
+        assert_eq!(
+            format_scalar_webapi_triggers_for_display(&triggers, Some("External Headphones")),
+            "keyboard activity, mouse/pointer activity, and selecting External Headphones"
+        );
+        assert_eq!(
+            format_scalar_webapi_triggers_for_display(&[KEYBOARD_TRIGGER.into()], None),
+            "keyboard activity"
+        );
+        assert_eq!(
+            format_scalar_webapi_triggers_for_display(&[], None),
+            "(none)"
+        );
     }
 
     #[test]
