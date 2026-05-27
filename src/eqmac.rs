@@ -10,6 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const EQMAC_APP_NAME: &str = "eqMac";
 const EQMAC_APP_PATH: &str = "/Applications/eqMac.app";
+/// HAL driver shipped inside the eqMac app bundle (fallback when managed backup is gone).
+pub const EQMAC_EMBEDDED_DRIVER_PATH: &str =
+    "/Applications/eqMac.app/Contents/Resources/Embedded/eqMac.driver";
 pub const EQMAC_HAL_DRIVER_PATH: &str = "/Library/Audio/Plug-Ins/HAL/eqMac.driver";
 const EQMAC_STARTUP_WAIT: Duration = Duration::from_millis(1500);
 const EQMAC_DRIVER_BACKUP_DIR_NAME: &str = "driver-backups";

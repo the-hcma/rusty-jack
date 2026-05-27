@@ -55,4 +55,11 @@ xcrun clang \
 plutil -lint "$INFO" >/dev/null
 chmod 755 "${MACOS}/RustyJack"
 
+# CoreAudio loads the bundle from disk; fix the install name and ad-hoc sign for local dev.
+install_name_tool -id "@executable_path/RustyJack" "${MACOS}/RustyJack"
+if command -v codesign >/dev/null 2>&1; then
+  codesign -s - -f "${MACOS}/RustyJack" 2>/dev/null || true
+  codesign -s - -f "$BUNDLE" 2>/dev/null || true
+fi
+
 echo "$BUNDLE"

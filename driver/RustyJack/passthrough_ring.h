@@ -12,6 +12,10 @@
 #define RJ_PASSTHROUGH_RING_CHANNELS 2u
 #define RJ_PASSTHROUGH_RING_SAMPLES (RJ_PASSTHROUGH_RING_FRAMES * RJ_PASSTHROUGH_RING_CHANNELS)
 
+/* Shared with rusty-jack daemon (`passthrough::PASSTHROUGH_RING_PATH`). */
+#define RJ_PASSTHROUGH_SHARED_DIR "/Library/Application Support/rusty-jack"
+#define RJ_PASSTHROUGH_RING_PATH RJ_PASSTHROUGH_SHARED_DIR "/passthrough.ring"
+
 typedef struct {
     atomic_uint_least64_t write_index;
     atomic_uint_least64_t read_index;

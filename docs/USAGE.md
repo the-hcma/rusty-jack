@@ -83,7 +83,7 @@ rusty-jack driver swap-out [--json]
 ~/.config/rusty-jack/driver-backups/eqMac.driver
 ```
 
-It also writes backup metadata next to that bundle, then installs or refreshes `~/Library/Audio/Plug-Ins/HAL/RustyJack.driver` from the packaged Rusty Jack bundle. Moving the system eqMac driver requires interactive confirmation and uses `sudo mv`; installing the user Rusty Jack driver does not need `sudo`.
+It also writes backup metadata next to that bundle, then installs or refreshes `/Library/Audio/Plug-Ins/HAL/RustyJack.driver` from the packaged Rusty Jack bundle and restarts `coreaudiod`. Moving the system eqMac driver requires interactive confirmation and uses `sudo mv`; installing the Rusty Jack HAL driver for testing also uses `sudo`.
 
 `swap-out` removes the user Rusty Jack driver and restores the managed eqMac backup to `/Library/Audio/Plug-Ins/HAL/eqMac.driver` with `sudo mv`. It is idempotent: if the Rusty Jack driver is already absent and eqMac is already restored, it reports up to date. If both the original eqMac driver and the managed backup exist, the command skips and asks you to inspect the state instead of overwriting anything.
 

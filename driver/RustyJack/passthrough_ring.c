@@ -11,25 +11,7 @@
 #include <unistd.h>
 
 static const char *ring_path(void) {
-    static char path[PATH_MAX];
-    static int initialized = 0;
-    if (initialized) {
-        return path;
-    }
-    const char *home = getenv("HOME");
-    if (home == NULL || home[0] == '\0') {
-        return NULL;
-    }
-    int written = snprintf(
-        path,
-        sizeof(path),
-        "%s/Library/Application Support/rusty-jack/passthrough.ring",
-        home);
-    if (written <= 0 || (size_t)written >= sizeof(path)) {
-        return NULL;
-    }
-    initialized = 1;
-    return path;
+    return RJ_PASSTHROUGH_RING_PATH;
 }
 
 static bool ensure_parent_dir(const char *file_path) {
@@ -49,7 +31,11 @@ static bool ensure_parent_dir(const char *file_path) {
         (void)mkdir(dir, 0755);
         *cursor = '/';
     }
-    return mkdir(dir, 0755) == 0 || errno == EEXIST;
+    if (mkdir(dir, 0777) != 0 && errno != EEXIST) {
+        return false;
+    }
+    (void)chmod(dir, 0777);
+    return true;
 }
 
 bool rj_passthrough_ring_open(rj_passthrough_ring_t **out_ring) {

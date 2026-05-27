@@ -61,6 +61,8 @@ pub enum DriverCommand {
     SwapIn(DriverSwapArgs),
     /// Remove Rusty Jack's driver and restore the backed-up eqMac driver
     SwapOut(DriverSwapArgs),
+    /// Reinstall eqMac's HAL driver (backup, embedded copy, or refresh) and restart CoreAudio
+    RestoreEqMac(DriverSwapArgs),
 }
 
 #[derive(Parser, Debug)]

@@ -4,7 +4,7 @@
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
 
-.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package release test uninstall universal upgrade validate-driver-bundle
+.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package release sign-driver-bundle test uninstall universal upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -24,7 +24,7 @@ RUST_BUILD_INPUTS := Cargo.toml Cargo.lock $(RUST_SOURCES)
 
 DRIVER_BUNDLE_OUTPUT ?= target/share/rusty-jack
 DRIVER_BUNDLE := $(DRIVER_BUNDLE_OUTPUT)/RustyJack.driver
-DRIVER_BUNDLE_STAMP := $(DRIVER_BUNDLE)/.built
+DRIVER_BUNDLE_STAMP := $(DRIVER_BUNDLE_OUTPUT)/.RustyJack.driver.stamp
 DRIVER_BUNDLE_SOURCES := \
 	Cargo.toml \
 	driver/RustyJack/Info.plist.in \
@@ -106,3 +106,7 @@ upgrade: install
 
 validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
 	./scripts/validate-driver-bundle "$(DRIVER_BUNDLE)"
+
+sign-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/sign-driver-bundle
+	chmod +x scripts/sign-driver-bundle
+	./scripts/sign-driver-bundle "$(DRIVER_BUNDLE)"
