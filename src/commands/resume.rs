@@ -3,13 +3,32 @@
 use crate::config::{load_config_optional, resolve_config_path, Config};
 use crate::coreaudio::AudioHal;
 use crate::daemon::{daemon_tick, DaemonTickReason};
-use crate::launchd::{daemon_status, print_resume_result, resume_daemon, DaemonStatus};
+use crate::launchd::{
+    daemon_status, print_resume_result, resume_daemon, DaemonPauseReason, DaemonStatus,
+};
+use crate::setup::terminal_is_interactive;
 use anyhow::Result;
+use dialoguer::Confirm;
 use std::path::Path;
 
 /// Re-enable and load the LaunchAgent after `pause`.
 pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result<()> {
-    let prepared_volume = prepare_audio_before_resume_if_needed(hal, config_path)?;
+    let preparation = prepare_audio_before_resume_if_needed(
+        hal,
+        config_path,
+        !json && terminal_is_interactive(),
+    )?;
+    let prepared_volume = match preparation {
+        ResumePreparation::Continue { prepared_volume } => prepared_volume,
+        ResumePreparation::Cancelled { selected_label } => {
+            if !json {
+                println!(
+                    "Cancelled. Daemon is still paused and {selected_label} remains selected."
+                );
+            }
+            return Ok(());
+        }
+    };
     let result = resume_daemon().map_err(anyhow::Error::new)?;
 
     if json {
@@ -25,22 +44,41 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResumePreparation {
+    Continue { prepared_volume: Option<u8> },
+    Cancelled { selected_label: String },
+}
+
 fn prepare_audio_before_resume_if_needed(
     hal: &dyn AudioHal,
     config_path: Option<&Path>,
-) -> Result<Option<u8>> {
-    if !matches!(
-        daemon_status().map_err(anyhow::Error::new)?,
-        DaemonStatus::Paused { .. }
-    ) {
-        return Ok(None);
+    interactive: bool,
+) -> Result<ResumePreparation> {
+    let status = daemon_status().map_err(anyhow::Error::new)?;
+    let DaemonStatus::Paused { pause_reason, .. } = status else {
+        return Ok(ResumePreparation::Continue {
+            prepared_volume: None,
+        });
+    };
+
+    if let Some(reason) = pause_reason.as_ref() {
+        if !confirm_resume_after_picker_override(reason, interactive)? {
+            return Ok(ResumePreparation::Cancelled {
+                selected_label: picker_override_selected_label(reason).to_string(),
+            });
+        }
     }
 
     let Some(config) = load_resume_config(config_path)? else {
-        return Ok(None);
+        return Ok(ResumePreparation::Continue {
+            prepared_volume: None,
+        });
     };
 
-    apply_policy_before_resume(hal, &config)
+    Ok(ResumePreparation::Continue {
+        prepared_volume: apply_policy_before_resume(hal, &config)?,
+    })
 }
 
 fn load_resume_config(config_path: Option<&Path>) -> Result<Option<Config>> {
@@ -58,6 +96,47 @@ fn apply_policy_before_resume(hal: &dyn AudioHal, config: &Config) -> Result<Opt
 
     let _ = daemon_tick(hal, config, DaemonTickReason::Startup).map_err(anyhow::Error::new)?;
     Ok(Some(volume))
+}
+
+fn confirm_resume_after_picker_override(
+    reason: &DaemonPauseReason,
+    interactive: bool,
+) -> Result<bool> {
+    if !interactive {
+        return Ok(true);
+    }
+
+    println!("{}", picker_override_resume_warning(reason));
+    Confirm::new()
+        .with_prompt("Resume auto-routing and switch back to the configured output")
+        .default(false)
+        .interact()
+        .map_err(anyhow::Error::new)
+}
+
+fn picker_override_resume_warning(reason: &DaemonPauseReason) -> String {
+    match reason {
+        DaemonPauseReason::PickerOverride {
+            selected_label,
+            preferred_uid,
+            ..
+        } => {
+            let preferred = preferred_uid
+                .as_deref()
+                .map_or("the configured preferred output".into(), |uid| {
+                    format!("configured preferred output `{uid}`")
+                });
+            format!(
+                "The daemon is paused because you manually picked {selected_label}. Resuming auto-routing will switch back to {preferred}."
+            )
+        }
+    }
+}
+
+fn picker_override_selected_label(reason: &DaemonPauseReason) -> &str {
+    match reason {
+        DaemonPauseReason::PickerOverride { selected_label, .. } => selected_label,
+    }
 }
 
 #[cfg(test)]
@@ -157,5 +236,26 @@ mod tests {
 
         assert_eq!(restored, None);
         assert!(hal.volume_calls().is_empty());
+    }
+
+    #[test]
+    fn test_picker_override_resume_warning_mentions_manual_pick() {
+        let reason = DaemonPauseReason::picker_override(
+            "line-out".into(),
+            "Line Out".into(),
+            Some("hdmi".into()),
+        );
+
+        let warning = picker_override_resume_warning(&reason);
+
+        assert!(warning.contains("manually picked Line Out"));
+        assert!(warning.contains("configured preferred output `hdmi`"));
+    }
+
+    #[test]
+    fn test_picker_override_selected_label() {
+        let reason = DaemonPauseReason::picker_override("line-out".into(), "Line Out".into(), None);
+
+        assert_eq!(picker_override_selected_label(&reason), "Line Out");
     }
 }
