@@ -67,7 +67,7 @@ pub fn ensure_default_config(
     let path = default_config_path_or_err()?;
     let list = hal.list_outputs()?;
     if path.exists() {
-        return update_existing_config(&path, &list.devices, interactive);
+        return reconfigure_or_update_existing_config(&path, hal, &list.devices, interactive);
     }
 
     let preferred_index = if interactive {
@@ -109,6 +109,321 @@ pub fn ensure_default_config(
         volume,
         scalar_webapi_triggers: scalar_webapi.map(|selection| selection.triggers),
     })
+}
+
+fn reconfigure_or_update_existing_config(
+    path: &Path,
+    hal: &dyn AudioHal,
+    devices: &[OutputDevice],
+    interactive: bool,
+) -> Result<ConfigSetupResult, RustyJackError> {
+    let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
+    let mut value = serde_json::from_str::<Value>(&raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+
+    // Keep existing migration behavior (refresh names, offer ScalarWebAPI trigger upgrade, etc.)
+    let migrated = update_existing_config_value(&mut value, devices, interactive)?;
+
+    if interactive {
+        println!("{}", style("Current config").cyan());
+        print_existing_config_summary(&value, devices);
+
+        if Confirm::new()
+            .with_prompt(q(concat!(
+                "Reconfigure this existing config?\n",
+                "If you say yes, Rusty Jack will re-ask the key choices and default to the current values."
+            )))
+            .default(false)
+            .interact()
+            .map_err(|err| RustyJackError::Config(format!("reconfigure prompt failed: {err}")))?
+        {
+            return reconfigure_existing_config(path, hal, devices, value);
+        }
+    }
+
+    // If migration produced changes, persist them.
+    if let Some(migrated) = migrated {
+        std::fs::write(path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
+        return Ok(ConfigSetupResult::Updated {
+            config_path: path_display(path)?,
+            changes: migrated,
+        });
+    }
+
+    // Otherwise canonicalize whitespace/key order without reporting it as an update.
+    let canonical = render_lexicographic_json(&value)?;
+    if canonical != raw {
+        std::fs::write(path, canonical).map_err(RustyJackError::Io)?;
+    }
+    Ok(ConfigSetupResult::Kept {
+        config_path: path_display(path)?,
+    })
+}
+
+fn reconfigure_existing_config(
+    path: &Path,
+    hal: &dyn AudioHal,
+    devices: &[OutputDevice],
+    mut value: Value,
+) -> Result<ConfigSetupResult, RustyJackError> {
+    let mut changes = Vec::new();
+
+    // Preferred device.
+    let default_preferred_uid = preferred_uid_from_value(&value);
+    let preferred_index =
+        prompt_for_preferred_device_with_default_uid(devices, default_preferred_uid.as_deref())?;
+    let preferred = &devices[preferred_index];
+    set_device_selector(
+        &mut value,
+        "preferred_device",
+        preferred,
+        "preferred device",
+        &mut changes,
+    );
+
+    // Volume (keep existing if present, otherwise use current device volume if readable).
+    let volume = value
+        .get("volume")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok())
+        .or_else(|| hal.output_volume_percent(&preferred.uid));
+    if let Some(volume) = volume {
+        if value.get("volume").and_then(Value::as_u64) != Some(volume as u64) {
+            value["volume"] = serde_json::json!(volume);
+            changes.push(format!("set volume to {volume}%"));
+        }
+    }
+
+    // Fallback device.
+    let default_fallback_uid = value
+        .get("fallback_uids")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let fallback_index = prompt_for_fallback_device_with_default_uid(
+        devices,
+        &preferred.uid,
+        default_fallback_uid.as_deref(),
+    )?;
+    match fallback_index {
+        Some(index) => {
+            let uid = devices[index].uid.clone();
+            value["fallback_uids"] = serde_json::json!([uid.clone()]);
+            changes.push(format!(
+                "set fallback device to `{}`",
+                devices[index].friendly_label()
+            ));
+        }
+        None => {
+            // Explicitly clear fallback_uids to allow implicit builtin fallback behavior.
+            if !fallback_uids_empty(&value) {
+                value["fallback_uids"] = serde_json::json!([]);
+                changes.push("cleared explicit fallback".into());
+            }
+        }
+    }
+
+    // ScalarWebAPI configuration.
+    let scalar_webapi_enabled = value
+        .pointer("/scalar_webapi_device/enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if scalar_webapi_enabled {
+        if Confirm::new()
+            .with_prompt(q(
+                "Reconfigure ScalarWebAPI settings (host, Mac output, triggers)?",
+            ))
+            .default(false)
+            .interact()
+            .map_err(|err| {
+                RustyJackError::Config(format!("ScalarWebAPI reconfigure prompt failed: {err}"))
+            })?
+        {
+            // Host.
+            let current_host = value
+                .pointer("/scalar_webapi_device/host")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let host: String = dialoguer::Input::new()
+                .with_prompt(style("ScalarWebAPI device host.\nEnter an IP address or hostname (e.g. 192.168.1.42).").cyan().to_string())
+                .with_initial_text(current_host.clone())
+                .validate_with(|input: &String| if input.trim().is_empty() { Err("host is required") } else { Ok(()) })
+                .interact_text()
+                .map_err(|err| RustyJackError::Config(format!("ScalarWebAPI host prompt failed: {err}")))?;
+            if host.trim() != current_host.trim() {
+                value["scalar_webapi_device"]["host"] = serde_json::json!(host.trim());
+                changes.push("updated ScalarWebAPI host".into());
+            }
+
+            // Mac output selector.
+            let current_mac_uid = value
+                .pointer("/scalar_webapi_device/mac_output/uid")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let mac_output_index =
+                prompt_for_preferred_device_with_default_uid(devices, current_mac_uid.as_deref())?;
+            let mac_output = &devices[mac_output_index];
+            ensure_nested_device_selector(
+                &mut value,
+                &["scalar_webapi_device", "mac_output"],
+                &mac_output.uid,
+                devices,
+                "ScalarWebAPI Mac output",
+                &mut changes,
+            );
+            // Triggers: reuse existing upgrade/toggle UI by forcing a prompt with current defaults.
+            let current_triggers = value
+                .pointer("/scalar_webapi_device/triggers")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let triggers =
+                crate::scalar_webapi_device::maybe_prompt_scalar_webapi_wake_triggers(&value)?
+                    .unwrap_or(current_triggers);
+            value["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
+            changes.push("updated ScalarWebAPI wake triggers".into());
+        }
+    } else if Confirm::new()
+        .with_prompt(q(
+            "Configure ScalarWebAPI speaker wake for this Mac output?",
+        ))
+        .default(false)
+        .interact()
+        .map_err(|err| RustyJackError::Config(format!("ScalarWebAPI add prompt failed: {err}")))?
+    {
+        let selection = prompt_add_scalar_webapi_device(devices, preferred)?;
+        if let Some(selection) = selection {
+            append_scalar_webapi_to_config_json(&mut value, &selection);
+            changes.push("added ScalarWebAPI configuration".into());
+        }
+    }
+
+    std::fs::write(path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
+    Ok(ConfigSetupResult::Updated {
+        config_path: path_display(path)?,
+        changes,
+    })
+}
+
+fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
+    // Preferred device.
+    let preferred_uid = preferred_uid_from_value(value);
+    let preferred_label = preferred_uid
+        .as_deref()
+        .and_then(|uid| devices.iter().find(|d| d.uid == uid))
+        .map(|d| d.friendly_label())
+        .or_else(|| preferred_uid.as_deref().map(|uid| uid.to_string()))
+        .unwrap_or_else(|| "(not set)".into());
+    println!(
+        "  {} {}",
+        style("preferred:").dim(),
+        style(preferred_label).green()
+    );
+
+    // Volume.
+    let volume = value.get("volume").and_then(Value::as_u64);
+    if let Some(volume) = volume {
+        println!(
+            "  {} {}",
+            style("volume:").dim(),
+            style(format!("{volume}%")).green()
+        );
+    }
+
+    // ScalarWebAPI.
+    let scalar_enabled = value
+        .pointer("/scalar_webapi_device/enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if scalar_enabled {
+        let host = value
+            .pointer("/scalar_webapi_device/host")
+            .and_then(Value::as_str)
+            .unwrap_or("(missing host)");
+        let triggers = value
+            .pointer("/scalar_webapi_device/triggers")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| "(none)".into());
+        println!(
+            "  {} {}",
+            style("ScalarWebAPI host:").dim(),
+            style(host).green()
+        );
+        println!(
+            "  {} {}",
+            style("ScalarWebAPI triggers:").dim(),
+            style(triggers).green()
+        );
+    }
+}
+
+fn update_existing_config_value(
+    value: &mut Value,
+    devices: &[OutputDevice],
+    interactive: bool,
+) -> Result<Option<Vec<String>>, RustyJackError> {
+    let mut changes = Vec::new();
+
+    let preferred_uid = preferred_uid_from_value(value);
+    if let Some(uid) = preferred_uid
+        .as_deref()
+        .filter(|uid| !is_placeholder_uid(uid))
+        .map(str::to_string)
+    {
+        ensure_device_selector(value, "preferred_device", &uid, devices, &mut changes);
+    } else if interactive {
+        let preferred_index = prompt_for_preferred_device(devices)?;
+        let preferred = &devices[preferred_index];
+        set_device_selector(
+            value,
+            "preferred_device",
+            preferred,
+            "preferred device",
+            &mut changes,
+        );
+    } else {
+        return Err(RustyJackError::Config(
+            "existing config is missing preferred_device.uid; rerun install interactively".into(),
+        ));
+    }
+
+    if let Some(uid) = value
+        .pointer("/scalar_webapi_device/mac_output/uid")
+        .and_then(Value::as_str)
+        .filter(|uid| !is_placeholder_uid(uid))
+        .map(str::to_string)
+    {
+        ensure_nested_device_selector(
+            value,
+            &["scalar_webapi_device", "mac_output"],
+            &uid,
+            devices,
+            "ScalarWebAPI Mac output",
+            &mut changes,
+        );
+    }
+
+    if interactive {
+        if let Some(triggers) = maybe_prompt_scalar_webapi_wake_triggers(value)? {
+            value["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
+            changes.push("updated ScalarWebAPI wake triggers".into());
+        }
+    }
+
+    Ok((!changes.is_empty()).then_some(changes))
 }
 
 /// Remove or preserve the default config according to uninstall options.
@@ -233,6 +548,80 @@ fn q(prompt: impl AsRef<str>) -> String {
     style(prompt.as_ref()).cyan().to_string()
 }
 
+fn prompt_for_preferred_device_with_default_uid(
+    devices: &[OutputDevice],
+    default_uid: Option<&str>,
+) -> Result<usize, RustyJackError> {
+    let candidates = selectable_alive_indices(devices);
+    if candidates.is_empty() {
+        return Err(RustyJackError::Config(
+            "no selectable output device found".into(),
+        ));
+    }
+    let default = default_uid
+        .and_then(|uid| {
+            candidates
+                .iter()
+                .position(|index| devices[*index].uid == uid)
+        })
+        .unwrap_or_else(|| {
+            default_preferred_device_index(devices)
+                .and_then(|index| candidates.iter().position(|candidate| *candidate == index))
+                .unwrap_or(0)
+        });
+    let labels = candidates
+        .iter()
+        .map(|index| setup_device_label(&devices[*index]))
+        .collect::<Vec<_>>();
+    let selection = Select::new()
+        .with_prompt(q("Pick the preferred output device"))
+        .items(&labels)
+        .default(default)
+        .interact()
+        .map_err(|err| RustyJackError::Config(format!("preferred device prompt failed: {err}")))?;
+    Ok(candidates[selection])
+}
+
+fn prompt_for_fallback_device_with_default_uid(
+    devices: &[OutputDevice],
+    preferred_uid: &str,
+    default_uid: Option<&str>,
+) -> Result<Option<usize>, RustyJackError> {
+    let mut choices = selectable_alive_indices(devices)
+        .into_iter()
+        .filter(|index| devices[*index].uid != preferred_uid)
+        .map(Some)
+        .collect::<Vec<_>>();
+    choices.push(None);
+
+    let default = default_uid
+        .and_then(|uid| {
+            choices
+                .iter()
+                .position(|choice| choice.map(|index| devices[index].uid.as_str()) == Some(uid))
+        })
+        .unwrap_or_else(|| {
+            default_fallback_device_index(devices, preferred_uid)
+                .and_then(|index| choices.iter().position(|choice| *choice == Some(index)))
+                .unwrap_or(choices.len() - 1)
+        });
+
+    let labels = choices
+        .iter()
+        .map(|choice| match choice {
+            Some(index) => setup_device_label(&devices[*index]),
+            None => format!("Use {IMPLICIT_BUILTIN_FALLBACK_LABEL}"),
+        })
+        .collect::<Vec<_>>();
+    let selection = Select::new()
+        .with_prompt(q("Pick a fallback output device"))
+        .items(&labels)
+        .default(default)
+        .interact()
+        .map_err(|err| RustyJackError::Config(format!("fallback device prompt failed: {err}")))?;
+    Ok(choices[selection])
+}
+
 fn prompt_for_preferred_device(devices: &[OutputDevice]) -> Result<usize, RustyJackError> {
     let candidates = selectable_alive_indices(devices);
     if candidates.is_empty() {
@@ -256,6 +645,8 @@ fn prompt_for_preferred_device(devices: &[OutputDevice]) -> Result<usize, RustyJ
     Ok(candidates[selection])
 }
 
+// Legacy helper (kept only for tests that validate config migrations).
+#[cfg(test)]
 fn update_existing_config(
     path: &Path,
     devices: &[OutputDevice],
@@ -264,71 +655,23 @@ fn update_existing_config(
     let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
     let mut value = serde_json::from_str::<Value>(&raw)
         .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
-    let mut changes = Vec::new();
+    let changes = update_existing_config_value(&mut value, devices, interactive)?;
 
-    let preferred_uid = preferred_uid_from_value(&value);
-    if let Some(uid) = preferred_uid
-        .as_deref()
-        .filter(|uid| !is_placeholder_uid(uid))
-        .map(str::to_string)
-    {
-        ensure_device_selector(&mut value, "preferred_device", &uid, devices, &mut changes);
-    } else if interactive {
-        let preferred_index = prompt_for_preferred_device(devices)?;
-        let preferred = &devices[preferred_index];
-        set_device_selector(
-            &mut value,
-            "preferred_device",
-            preferred,
-            "preferred device",
-            &mut changes,
-        );
-    } else {
-        return Err(RustyJackError::Config(
-            "existing config is missing preferred_device.uid; rerun install interactively".into(),
-        ));
-    }
-
-    if let Some(uid) = value
-        .pointer("/scalar_webapi_device/mac_output/uid")
-        .and_then(Value::as_str)
-        .filter(|uid| !is_placeholder_uid(uid))
-        .map(str::to_string)
-    {
-        ensure_nested_device_selector(
-            &mut value,
-            &["scalar_webapi_device", "mac_output"],
-            &uid,
-            devices,
-            "ScalarWebAPI Mac output",
-            &mut changes,
-        );
-    }
-
-    if interactive {
-        if let Some(triggers) = maybe_prompt_scalar_webapi_wake_triggers(&value)? {
-            value["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
-            changes.push("updated ScalarWebAPI wake triggers".into());
-        }
-    }
-
-    // NOTE: fallback prompt is deferred to the end of `rusty-jack install` so that
-    // device selection questions appear after other install steps.
-
-    if changes.is_empty() {
-        let canonical = render_lexicographic_json(&value)?;
-        if canonical != raw {
-            std::fs::write(path, canonical).map_err(RustyJackError::Io)?;
-        }
-        return Ok(ConfigSetupResult::Kept {
+    if let Some(changes) = changes {
+        std::fs::write(path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
+        return Ok(ConfigSetupResult::Updated {
             config_path: path_display(path)?,
+            changes,
         });
     }
 
-    std::fs::write(path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
-    Ok(ConfigSetupResult::Updated {
+    let canonical = render_lexicographic_json(&value)?;
+    if canonical != raw {
+        std::fs::write(path, canonical).map_err(RustyJackError::Io)?;
+    }
+
+    Ok(ConfigSetupResult::Kept {
         config_path: path_display(path)?,
-        changes,
     })
 }
 
@@ -353,6 +696,7 @@ fn fallback_uids_empty(value: &Value) -> bool {
         .is_none_or(Vec::is_empty)
 }
 
+#[allow(dead_code)]
 fn prompt_add_fallback() -> Result<bool, RustyJackError> {
     Confirm::new()
         .with_prompt(q("Add an explicit fallback output to the existing config?"))
@@ -361,65 +705,7 @@ fn prompt_add_fallback() -> Result<bool, RustyJackError> {
         .map_err(|err| RustyJackError::Config(format!("fallback prompt failed: {err}")))
 }
 
-/// Prompt to add a fallback output to the existing config, but only when needed.
-///
-/// This is intended to run at the end of `rusty-jack install`, after other setup steps.
-pub fn maybe_prompt_add_fallback_to_existing_config(
-    hal: &dyn AudioHal,
-    interactive: bool,
-) -> Result<ConfigSetupResult, RustyJackError> {
-    if !interactive {
-        return Ok(ConfigSetupResult::Kept {
-            config_path: default_config_path_or_err().and_then(|path| path_display(&path))?,
-        });
-    }
-
-    let path = default_config_path_or_err()?;
-    if !path.exists() {
-        return Ok(ConfigSetupResult::Kept {
-            config_path: path_display(&path)?,
-        });
-    }
-
-    let raw = std::fs::read_to_string(&path).map_err(RustyJackError::Io)?;
-    let mut value = serde_json::from_str::<Value>(&raw)
-        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
-    if !fallback_uids_empty(&value) {
-        return Ok(ConfigSetupResult::Kept {
-            config_path: path_display(&path)?,
-        });
-    }
-
-    let list = hal.list_outputs()?;
-    let preferred_uid = preferred_uid_from_value(&value);
-    let Some(preferred_uid) = preferred_uid.as_deref() else {
-        return Ok(ConfigSetupResult::Kept {
-            config_path: path_display(&path)?,
-        });
-    };
-
-    if !prompt_add_fallback()? {
-        return Ok(ConfigSetupResult::Kept {
-            config_path: path_display(&path)?,
-        });
-    }
-
-    if let Some(index) = prompt_for_fallback_device(&list.devices, preferred_uid)? {
-        value["fallback_uids"] = serde_json::json!([list.devices[index].uid]);
-        std::fs::write(&path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
-        return Ok(ConfigSetupResult::Updated {
-            config_path: path_display(&path)?,
-            changes: vec![format!(
-                "added fallback device `{}`",
-                list.devices[index].friendly_label()
-            )],
-        });
-    }
-
-    Ok(ConfigSetupResult::Kept {
-        config_path: path_display(&path)?,
-    })
-}
+// NOTE: fallback prompting moved into the interactive reconfigure flow.
 
 fn ensure_device_selector(
     value: &mut Value,
