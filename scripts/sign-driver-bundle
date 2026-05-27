@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Sign RustyJack.driver with a Developer ID Application certificate.
+#
+# Usage:
+#   ./scripts/sign-driver-bundle [path/to/RustyJack.driver]
+#
+# Environment:
+#   CODESIGN_IDENTITY  — full name of the signing identity (optional; auto-picks
+#                        the first "Developer ID Application" identity in Keychain)
+#
+# HAL plugins are loaded by coreaudiod; ad-hoc signatures are rejected on many
+# Macs (AMFI -67050). Use this script before system HAL install or smoke tests.
+#
+# Notarization is separate (required for distribution outside your Mac):
+#   xcrun notarytool submit RustyJack.driver.zip --keychain-profile AC_NOTARY ...
+#   xcrun stapler staple RustyJack.driver
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+BUNDLE="${1:-target/share/rusty-jack/RustyJack.driver}"
+EXEC="${BUNDLE}/Contents/MacOS/RustyJack"
+IDENTITY="${CODESIGN_IDENTITY:-}"
+
+if [[ ! -d "$BUNDLE" ]]; then
+  echo "error: missing bundle: $BUNDLE (run: make driver-bundle)" >&2
+  exit 1
+fi
+
+if [[ ! -x "$EXEC" ]]; then
+  echo "error: missing executable: $EXEC" >&2
+  exit 1
+fi
+
+if ! command -v codesign >/dev/null 2>&1; then
+  echo "error: codesign not found; install Xcode Command Line Tools" >&2
+  exit 1
+fi
+
+if [[ -z "$IDENTITY" ]]; then
+  IDENTITY="$(
+    security find-identity -v -p codesigning 2>/dev/null \
+      | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+  )"
+fi
+
+if [[ -z "$IDENTITY" ]]; then
+  cat >&2 <<'EOF'
+error: no Developer ID Application identity found in the login keychain.
+
+Install the "Developer ID Application" certificate from Apple Developer,
+then either export CODESIGN_IDENTITY or rerun this script.
+
+List identities:
+  security find-identity -v -p codesigning
+EOF
+  exit 1
+fi
+
+echo "Signing bundle: $BUNDLE"
+echo "Identity:       $IDENTITY"
+
+# Sign the dylib first, then the bundle. Do not enable hardened runtime here;
+# CoreAudio HAL plugins are not generic app binaries and --options runtime
+# often breaks load. Timestamp is required for notarization.
+codesign --force --sign "$IDENTITY" --timestamp "$EXEC"
+codesign --force --sign "$IDENTITY" --timestamp --deep "$BUNDLE"
+
+echo "Verifying signature..."
+codesign --verify --verbose=4 "$BUNDLE"
+
+if command -v spctl >/dev/null 2>&1; then
+  if spctl -a -t execute -vv "$BUNDLE" 2>&1; then
+    :
+  else
+    echo "note: spctl may reject the bundle until it is notarized and stapled." >&2
+    echo "      Local HAL testing on your Mac can still work after notarization." >&2
+  fi
+fi
+
+echo "Signed: $BUNDLE"
+echo "Install: sudo cp -R '$BUNDLE' /Library/Audio/Plug-Ins/HAL/"
+echo "         sudo chown -R root:wheel /Library/Audio/Plug-Ins/HAL/RustyJack.driver"
+echo "         sudo killall -9 coreaudiod"

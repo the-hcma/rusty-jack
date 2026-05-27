@@ -160,9 +160,7 @@ unsafe impl Send for PassthroughRing {}
 unsafe impl Sync for PassthroughRing {}
 
 fn ring_path() -> Result<PathBuf, RustyJackError> {
-    let home =
-        std::env::var("HOME").map_err(|_| RustyJackError::Config("HOME is not set".into()))?;
-    Ok(PathBuf::from(home).join("Library/Application Support/rusty-jack/passthrough.ring"))
+    Ok(PathBuf::from(super::PASSTHROUGH_RING_PATH))
 }
 
 #[cfg(all(test, target_os = "macos"))]

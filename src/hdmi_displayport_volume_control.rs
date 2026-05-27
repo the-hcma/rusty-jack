@@ -9,6 +9,8 @@ use serde::Serialize;
 
 pub const RUSTY_JACK_DRIVER_BUNDLE_ID: &str = "com.the-hcma.rusty-jack.driver";
 pub const RUSTY_JACK_DRIVER_NAME: &str = "Rusty Jack";
+/// CoreAudio UID published by the Rusty Jack HAL driver virtual output.
+pub const RUSTY_JACK_VIRTUAL_OUTPUT_UID: &str = "com.the-hcma.rusty-jack.driver.output";
 
 /// What HDMI/DisplayPort volume-control support did for a selected route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -205,9 +207,15 @@ pub fn hdmi_displayport_volume_control_status_for_target(
     let native_driver_stage = native_driver
         .as_ref()
         .and_then(|driver| driver.stage.clone());
-    let native_driver_warning = native_driver
+    let mut native_driver_warning = native_driver
         .as_ref()
         .and_then(|driver| native_driver_warning(driver.stage.as_deref()));
+    if let Some(extra) = native_driver_virtual_output_warning(devices, native_driver.as_ref()) {
+        native_driver_warning = Some(match native_driver_warning {
+            Some(existing) => format!("{existing} {extra}"),
+            None => extra,
+        });
+    }
     let eqmac_app_path = eqmac::eqmac_app_path();
     let eqmac_hal_driver_path = eqmac::eqmac_hal_driver_path();
     let orphaned_eqmac_hal_driver_path = eqmac::orphaned_eqmac_hal_driver_path();
@@ -294,6 +302,23 @@ fn driver_recommendation_reason(
         }
         None => Some("no connected HDMI/DisplayPort output detected".into()),
     }
+}
+
+fn native_driver_virtual_output_warning(
+    devices: &[OutputDevice],
+    driver: Option<&HalDriverInfo>,
+) -> Option<String> {
+    let driver = driver?;
+    if devices
+        .iter()
+        .any(|device| device.uid == RUSTY_JACK_VIRTUAL_OUTPUT_UID)
+    {
+        return None;
+    }
+    let scope = native_driver_scope(&driver.install_path);
+    Some(format!(
+        "CoreAudio has not published the Rusty Jack virtual output yet; use a {scope}-scope install under /Library/Audio/Plug-Ins/HAL/, restart coreaudiod, and a signed driver build for production."
+    ))
 }
 
 fn native_driver_warning(stage: Option<&str>) -> Option<String> {
@@ -430,5 +455,20 @@ mod tests {
                 .unwrap()
                 .contains("passthrough skeleton")
         );
+    }
+
+    #[test]
+    fn test_native_driver_virtual_output_warning_when_bundle_without_device() {
+        let devices = vec![device("hdmi", TransportKind::Hdmi)];
+        let driver = HalDriverInfo {
+            name: "Rusty Jack".into(),
+            bundle_id: RUSTY_JACK_DRIVER_BUNDLE_ID.into(),
+            version: Some("0.1.1".into()),
+            stage: Some(crate::passthrough::PASSTHROUGH_ACTIVE_DRIVER_STAGE.into()),
+            install_path: "/Library/Audio/Plug-Ins/HAL/RustyJack.driver".into(),
+        };
+        let warning = native_driver_virtual_output_warning(&devices, Some(&driver)).unwrap();
+        assert!(warning.contains("virtual output"));
+        assert!(warning.contains("coreaudiod"));
     }
 }

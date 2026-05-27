@@ -1,8 +1,8 @@
 //! `rusty-jack driver` — explicit native-driver test workflows.
 
 use crate::native_driver::{
-    print_driver_swap_in_result, print_driver_swap_out_result, swap_in_for_testing,
-    swap_out_for_testing,
+    print_driver_swap_in_result, print_driver_swap_out_result, print_eqmac_hal_restore_result,
+    restore_eqmac_hal_driver, swap_in_for_testing, swap_out_for_testing,
 };
 use crate::setup::terminal_is_interactive;
 use anyhow::Result;
@@ -36,6 +36,22 @@ pub fn swap_out(json: bool) -> Result<()> {
         println!("{value}");
     } else {
         print_driver_swap_out_result(&result);
+    }
+
+    Ok(())
+}
+
+/// Reinstall eqMac's system HAL driver when the app is installed.
+pub fn restore_eqmac(json: bool) -> Result<()> {
+    let result = restore_eqmac_hal_driver(true).map_err(anyhow::Error::new)?;
+
+    if json {
+        let value = serde_json::to_string_pretty(&serde_json::json!({
+            "eqmac_hal_restore": result,
+        }))?;
+        println!("{value}");
+    } else {
+        print_eqmac_hal_restore_result(&result);
     }
 
     Ok(())

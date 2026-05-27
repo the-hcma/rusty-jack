@@ -15,6 +15,8 @@ pub mod hdmi_displayport_volume_control;
 pub mod launchd;
 pub mod list_fmt;
 pub mod native_driver;
+#[cfg(target_os = "macos")]
+pub mod native_driver_hal_smoke;
 pub mod network;
 pub mod output_device;
 pub mod passthrough;
@@ -50,6 +52,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
         cli::Commands::Driver(args) => match args.command {
             cli::DriverCommand::SwapIn(args) => commands::driver::swap_in(args.json)?,
             cli::DriverCommand::SwapOut(args) => commands::driver::swap_out(args.json)?,
+            cli::DriverCommand::RestoreEqMac(args) => commands::driver::restore_eqmac(args.json)?,
         },
         cli::Commands::Install(args) => {
             let hal = coreaudio::platform_hal()?;

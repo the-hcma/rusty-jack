@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::coreaudio::AudioHal;
 use crate::hdmi_displayport_volume_control::{
     native_driver_info, route_needs_hdmi_displayport_volume_control, RUSTY_JACK_DRIVER_NAME,
+    RUSTY_JACK_VIRTUAL_OUTPUT_UID,
 };
 use crate::output_device::OutputDevice;
 use crate::policy::{select_routing_target, RoutingTarget, RoutingTargetSource, SelectTargetError};
@@ -22,8 +23,13 @@ use serde::Serialize;
 
 pub use gain::{apply_stereo_interleaved_gain, percent_to_scalar};
 
-/// CoreAudio UID for the Rusty Jack virtual output published by the HAL driver.
-pub const RUSTY_JACK_VIRTUAL_OUTPUT_UID: &str = "com.the-hcma.rusty-jack.driver.output";
+#[cfg(target_os = "macos")]
+pub use engine::PassthroughEngine;
+#[cfg(target_os = "macos")]
+pub use ring::PassthroughRing;
+
+/// Shared mmap ring between the HAL driver and daemon (see `driver/RustyJack/passthrough_ring.h`).
+pub const PASSTHROUGH_RING_PATH: &str = "/Library/Application Support/rusty-jack/passthrough.ring";
 
 /// Driver stage while the daemon plans passthrough without live audio I/O.
 pub const PASSTHROUGH_SKELETON_DRIVER_STAGE: &str = "passthrough-skeleton";

@@ -72,6 +72,51 @@ Run `rusty-jack install` interactively with the HDMI/DisplayPort output connecte
 
 ---
 
+## Native driver installed but no “Rusty Jack” output in Sound settings
+
+`rusty-jack status` can report the driver bundle while CoreAudio has not published the virtual output.
+
+1. Install the HAL bundle under **`/Library/Audio/Plug-Ins/HAL/RustyJack.driver`** (not only `~/Library/...`). `rusty-jack driver swap-in` does this with sudo.
+2. Restart CoreAudio: `sudo killall -9 coreaudiod` (wait a few seconds).
+3. Confirm the virtual device: `rusty-jack list` should include **Rusty Jack** with UID `com.the-hcma.rusty-jack.driver.output`.
+4. Rebuild from source (`make install` or `make driver-bundle`) so the bundle is ad-hoc signed and uses the shared ring at `/Library/Application Support/rusty-jack/passthrough.ring`.
+5. Production Macs may require a **Developer ID–signed** driver; ad-hoc signatures are often rejected by AMFI (`signature not valid: -67050` in Console). See [DRIVER_SIGNING.md](./DRIVER_SIGNING.md) and `make sign-driver-bundle`.
+
+To restore eqMac after testing (whether or not a backup exists):
+
+```bash
+rusty-jack driver restore-eqmac
+```
+
+This removes `RustyJack.driver`, restores from the managed backup or reinstalls from `eqMac.app`'s embedded driver, and restarts `coreaudiod`. `rusty-jack driver swap-out` does the same when eqMac is installed.
+
+### Fast HAL smoke test (agents / local iteration)
+
+From a source checkout with the driver bundle built:
+
+```bash
+make driver-bundle
+RUSTY_JACK_DRIVER_BUNDLE="$PWD/target/share/rusty-jack/RustyJack.driver" \
+  RUSTY_JACK_HAL_DRIVER_SMOKE=1 \
+  cargo test --test native_driver_hal_smoke -- --ignored --nocapture
+```
+
+This test quits eqMac, moves its HAL driver aside, installs Rusty Jack under `/Library/Audio/Plug-Ins/HAL/`, polls for the virtual output, opens the shared passthrough ring, and optionally starts the passthrough CoreAudio IO proc for a couple of seconds. Teardown always runs `restore-eqmac` logic when eqMac is installed (pass or fail). **Requires sudo** (password prompt) and an HDMI/DisplayPort monitor connected.
+
+Run only the install/ring check:
+
+```bash
+RUSTY_JACK_HAL_DRIVER_SMOKE=1 cargo test --test native_driver_hal_smoke native_driver_hal_smoke_install -- --ignored --nocapture
+```
+
+Run only the passthrough engine check (after the above passes):
+
+```bash
+RUSTY_JACK_HAL_DRIVER_SMOKE=1 cargo test --test native_driver_hal_smoke native_driver_hal_smoke_passthrough_engine -- --ignored --nocapture
+```
+
+---
+
 ## Built-in speakers work; HDMI does not
 
 Normal. Built-in has CoreAudio volume control. HDMI/DisplayPort needs the Rusty Jack native driver, or installed eqMac as fallback.
