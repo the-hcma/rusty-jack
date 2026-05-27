@@ -82,9 +82,7 @@ pub fn evaluate_policy(
             } else {
                 format!(
                     "active output is {} ({}); preferred is {} ({uid})",
-                    active_device_label
-                        .as_deref()
-                        .unwrap_or("(unknown active)"),
+                    active_device_label.as_deref().unwrap_or("(unknown active)"),
                     active.as_deref().unwrap_or("(none)"),
                     preferred_device_label
                         .as_deref()
@@ -101,9 +99,14 @@ pub fn evaluate_policy(
                 preferred_device.map(|d| d.is_alive),
             )
         }
-        Err(ResolveError::NotSpecified) => {
-            (None, None, "set preferred_device.uid".into(), None, None, None)
-        }
+        Err(ResolveError::NotSpecified) => (
+            None,
+            None,
+            "set preferred_device.uid".into(),
+            None,
+            None,
+            None,
+        ),
         Err(err) => (None, None, err.to_string(), None, None, None),
     };
 

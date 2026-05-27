@@ -266,10 +266,7 @@ fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> Str
     }
 
     if let Some(uid) = &policy.active_device_uid {
-        let label = policy
-            .active_device_label
-            .as_deref()
-            .unwrap_or("(unknown)");
+        let label = policy.active_device_label.as_deref().unwrap_or("(unknown)");
         rows.push(("active", format!("{label} ({uid})")));
     }
 

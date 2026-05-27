@@ -34,7 +34,11 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
             }
         }
 
-        if let Some(api) = config.scalar_webapi_device.as_ref().filter(|api| api.enabled) {
+        if let Some(api) = config
+            .scalar_webapi_device
+            .as_ref()
+            .filter(|api| api.enabled)
+        {
             let selector = api.mac_output.clone().into();
             if let Ok(uid) = resolve_device_selector(&selector, &list.devices) {
                 if let Some(device) = list.devices.iter().find(|d| d.uid == uid) {
