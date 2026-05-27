@@ -1,5 +1,12 @@
 //! ScalarWebAPI wake support for external devices attached to a selected Mac output.
 
+mod install;
+
+pub use install::{
+    append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_wake_triggers,
+    prompt_add_scalar_webapi_device, ScalarWebApiInstallSelection,
+};
+
 use crate::config::{Config, ScalarWebApiDeviceConfig};
 use crate::device_select::resolve_device_selector;
 use crate::output_device::OutputDevice;
@@ -10,9 +17,16 @@ use std::time::Duration;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::Message;
 
-const OUTPUT_SELECTED_TRIGGER: &str = "output_selected";
-const KEYBOARD_TRIGGER: &str = "keyboard";
-const MOUSE_TRIGGER: &str = "mouse";
+/// Wake when the configured Mac output is selected (`apply`, `picker`, daemon routing).
+pub const OUTPUT_SELECTED_TRIGGER: &str = "output_selected";
+/// Wake on daemon idle-to-active transitions (screen unlock, keyboard activity).
+pub const KEYBOARD_TRIGGER: &str = "keyboard";
+/// Wake on daemon idle-to-active transitions (screen unlock, pointer activity).
+pub const MOUSE_TRIGGER: &str = "mouse";
+
+/// Recommended install defaults: unlock/activity plus output selection.
+pub const DEFAULT_WAKE_TRIGGERS: &[&str] =
+    &[KEYBOARD_TRIGGER, MOUSE_TRIGGER, OUTPUT_SELECTED_TRIGGER];
 const SYSTEM_SERVICE: &str = "system";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
@@ -53,6 +67,20 @@ impl ScalarWebApiDeviceEndpoint {
             format!("/{path}/{service}")
         }
     }
+}
+
+/// Return true when every recommended wake trigger is configured.
+#[must_use]
+pub fn has_all_default_wake_triggers(triggers: &[String]) -> bool {
+    DEFAULT_WAKE_TRIGGERS
+        .iter()
+        .all(|trigger| trigger_enabled_slice(triggers, trigger))
+}
+
+fn trigger_enabled_slice(triggers: &[String], trigger: &str) -> bool {
+    triggers
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case(trigger))
 }
 
 /// Try waking the configured ScalarWebAPI device when its Mac output is selected.
@@ -183,9 +211,7 @@ pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(Str
 }
 
 fn trigger_enabled(api: &ScalarWebApiDeviceConfig, trigger: &str) -> bool {
-    api.triggers
-        .iter()
-        .any(|value| value.eq_ignore_ascii_case(trigger))
+    trigger_enabled_slice(&api.triggers, trigger)
 }
 
 fn activity_trigger_enabled(api: &ScalarWebApiDeviceConfig) -> bool {
