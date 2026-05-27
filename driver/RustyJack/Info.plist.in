@@ -35,6 +35,6 @@
     </array>
   </dict>
   <key>RustyJackDriverStage</key>
-  <string>virtual-output-null</string>
+  <string>passthrough-skeleton</string>
 </dict>
 </plist>

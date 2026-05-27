@@ -17,6 +17,7 @@ pub mod list_fmt;
 pub mod native_driver;
 pub mod network;
 pub mod output_device;
+pub mod passthrough;
 pub mod picker;
 pub mod policy;
 pub mod scalar_webapi_device;

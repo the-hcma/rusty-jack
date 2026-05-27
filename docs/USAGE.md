@@ -169,7 +169,7 @@ Packages include the bundle at `share/rusty-jack/RustyJack.driver`. Source insta
 make validate-driver-bundle
 ```
 
-The current bundle exposes a minimal virtual HAL output named **Rusty Jack**, with a stereo output stream plus volume and mute controls. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle. The device is still a null output until the passthrough software-volume pipeline is wired up, so Rusty Jack does not automatically route audio through it yet.
+The current bundle exposes a minimal virtual HAL output named **Rusty Jack**, with a stereo output stream plus volume and mute controls. It lets the installer, upgrader, status checks, and package layout work against a real `.driver` bundle. The device is still a null output until live CoreAudio capture/render lands; the daemon already plans passthrough targets and applies software gain math in `passthrough-skeleton` mode.
 
 Manual smoke test:
 
@@ -182,7 +182,7 @@ rusty-jack uninstall --only-driver
 rusty-jack install
 ```
 
-Check that `rusty-jack status` shows `driver scope: user`, the user HAL path above, a driver version, and `driver stage: virtual-output-null`. Audio MIDI Setup or System Settings should show a **Rusty Jack** output after install and stop showing it after `uninstall --only-driver` once CoreAudio refreshes. Do not select **Rusty Jack** for listening yet; it intentionally remains a null output until passthrough lands.
+Check that `rusty-jack status` shows `driver scope: user`, the user HAL path above, a driver version, and `driver stage: passthrough-skeleton`. Audio MIDI Setup or System Settings should show a **Rusty Jack** output after install and stop showing it after `uninstall --only-driver` once CoreAudio refreshes. Do not select **Rusty Jack** for listening yet; the HAL device is still a null output while the daemon only hosts passthrough planning/gain hooks. When the native driver is installed and policy targets HDMI/DisplayPort, `rusty-jack daemon` logs `passthrough skeleton: armed for …` to stderr.
 
 ### Pause, Resume, Uninstall
 
