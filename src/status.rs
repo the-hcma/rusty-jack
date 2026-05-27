@@ -21,8 +21,14 @@ pub struct PolicyStatus {
     pub config_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_device_name: Option<String>,
+    /// Human-readable label for the resolved preferred device (when connected).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_device_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_device_uid: Option<String>,
+    /// Human-readable label for the active routed device (when known).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_device_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_device_uid: Option<String>,
     pub matches_preferred: Option<bool>,
@@ -251,11 +257,20 @@ fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> Str
     }
 
     if let Some(uid) = &policy.preferred_device_uid {
-        rows.push(("preferred", uid.clone()));
+        let label = policy
+            .preferred_device_label
+            .as_deref()
+            .or(policy.preferred_device_name.as_deref())
+            .unwrap_or("(unknown)");
+        rows.push(("preferred", format!("{label} ({uid})")));
     }
 
     if let Some(uid) = &policy.active_device_uid {
-        rows.push(("active", uid.clone()));
+        let label = policy
+            .active_device_label
+            .as_deref()
+            .unwrap_or("(unknown)");
+        rows.push(("active", format!("{label} ({uid})")));
     }
 
     if let Some(matches) = policy.matches_preferred {
@@ -442,7 +457,9 @@ mod tests {
                 configured: true,
                 config_path: Some("/tmp/c.json".into()),
                 preferred_device_name: Some("HDMI".into()),
+                preferred_device_label: Some("HDMI (DELL U3219Q)".into()),
                 preferred_device_uid: Some("hdmi-1".into()),
+                active_device_label: Some("HDMI (DELL U3219Q)".into()),
                 active_device_uid: Some("hdmi-1".into()),
                 matches_preferred: Some(true),
                 preferred_present: Some(true),
@@ -474,7 +491,9 @@ mod tests {
                 configured: true,
                 config_path: Some("/tmp/c.json".into()),
                 preferred_device_name: Some("HDMI".into()),
+                preferred_device_label: Some("HDMI".into()),
                 preferred_device_uid: Some("hdmi-1".into()),
+                active_device_label: Some("HDMI".into()),
                 active_device_uid: Some("hdmi-1".into()),
                 matches_preferred: Some(true),
                 preferred_present: Some(true),
@@ -487,7 +506,7 @@ mod tests {
         );
         assert!(block.contains("matches"));
         assert!(block.contains("preferred"));
-        assert!(block.contains("hdmi-1"));
+        assert!(block.contains("HDMI (hdmi-1)"));
     }
 
     #[test]
