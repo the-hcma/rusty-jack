@@ -52,14 +52,14 @@ pub fn prompt_add_scalar_webapi_device(
         return Ok(None);
     }
 
+    println!();
+    println!("{}", style("ScalarWebAPI").cyan());
+    println!(
+        "{}",
+        style("Enter the device host (IP address or hostname). Example: 192.168.1.42").dim()
+    );
     let host: String = Input::new()
-        .with_prompt(
-            style(
-                "ScalarWebAPI device host.\nEnter an IP address or hostname (e.g. 192.168.1.42).",
-            )
-            .cyan()
-            .to_string(),
-        )
+        .with_prompt(style("Device host").cyan().to_string())
         .validate_with(|input: &String| {
             if input.trim().is_empty() {
                 Err("host is required")
