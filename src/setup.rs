@@ -4,8 +4,8 @@ use crate::config::{default_config_path, is_placeholder_uid, render_lexicographi
 use crate::coreaudio::AudioHal;
 use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
-    append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_wake_triggers,
-    prompt_add_scalar_webapi_device,
+    append_scalar_webapi_to_config_json, format_scalar_webapi_triggers_for_display,
+    maybe_prompt_scalar_webapi_wake_triggers, prompt_add_scalar_webapi_device,
 };
 use crate::RustyJackError;
 use dialoguer::console::style;
@@ -33,6 +33,8 @@ pub enum ConfigSetupResult {
         volume: Option<u8>,
         #[serde(skip_serializing_if = "Option::is_none")]
         scalar_webapi_triggers: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scalar_webapi_mac_output_label: Option<String>,
     },
     Kept {
         config_path: String,
@@ -100,6 +102,13 @@ pub fn ensure_default_config(
     }
     std::fs::write(&path, config).map_err(RustyJackError::Io)?;
 
+    let scalar_webapi_mac_output_label = scalar_webapi.as_ref().and_then(|selection| {
+        list.devices
+            .iter()
+            .find(|device| device.uid == selection.mac_output_uid)
+            .map(OutputDevice::friendly_label)
+            .or_else(|| Some(selection.mac_output_name.clone()))
+    });
     Ok(ConfigSetupResult::Created {
         config_path: path_display(&path)?,
         preferred_uid: preferred.uid.clone(),
@@ -108,6 +117,7 @@ pub fn ensure_default_config(
         fallback_label: fallback.map(OutputDevice::friendly_label),
         volume,
         scalar_webapi_triggers: scalar_webapi.map(|selection| selection.triggers),
+        scalar_webapi_mac_output_label,
     })
 }
 
@@ -559,33 +569,63 @@ fn summarize_config_diff(before: &Value, after: &Value, devices: &[OutputDevice]
         ));
     }
 
-    let before_triggers = before
-        .pointer("/scalar_webapi_device/triggers")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        });
-    let after_triggers = after
-        .pointer("/scalar_webapi_device/triggers")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        });
+    let before_triggers = scalar_webapi_triggers_from_value(before);
+    let after_triggers = scalar_webapi_triggers_from_value(after);
     if before_triggers != after_triggers {
         lines.push(format!(
             "ScalarWebAPI triggers: {} -> {}",
-            before_triggers.as_deref().unwrap_or("(none)"),
-            after_triggers.as_deref().unwrap_or("(none)")
+            format_scalar_webapi_triggers_for_display(
+                &before_triggers,
+                scalar_webapi_mac_output_label(before, devices).as_deref(),
+            ),
+            format_scalar_webapi_triggers_for_display(
+                &after_triggers,
+                scalar_webapi_mac_output_label(after, devices).as_deref(),
+            ),
         ));
     }
 
     lines
+}
+
+fn scalar_webapi_triggers_from_value(value: &Value) -> Vec<String> {
+    value
+        .pointer("/scalar_webapi_device/triggers")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn scalar_webapi_mac_output_label(value: &Value, devices: &[OutputDevice]) -> Option<String> {
+    if let Some(name) = value
+        .pointer("/scalar_webapi_device/mac_output/name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+    {
+        let uid = value
+            .pointer("/scalar_webapi_device/mac_output/uid")
+            .and_then(Value::as_str);
+        if let Some(uid) = uid {
+            if let Some(device) = devices.iter().find(|device| device.uid == uid) {
+                return Some(device.friendly_label());
+            }
+        }
+        return Some(name.to_string());
+    }
+    value
+        .pointer("/scalar_webapi_device/mac_output/uid")
+        .and_then(Value::as_str)
+        .and_then(|uid| {
+            devices
+                .iter()
+                .find(|device| device.uid == uid)
+                .map(OutputDevice::friendly_label)
+        })
 }
 
 fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
@@ -635,16 +675,10 @@ fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
             .pointer("/scalar_webapi_device/host")
             .and_then(Value::as_str)
             .unwrap_or("(missing host)");
-        let triggers = value
-            .pointer("/scalar_webapi_device/triggers")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_else(|| "(none)".into());
+        let triggers = format_scalar_webapi_triggers_for_display(
+            &scalar_webapi_triggers_from_value(value),
+            scalar_webapi_mac_output_label(value, devices).as_deref(),
+        );
         println!(
             "  {} {}",
             style("ScalarWebAPI Mac output:").dim(),
@@ -769,6 +803,7 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             fallback_label,
             volume,
             scalar_webapi_triggers,
+            scalar_webapi_mac_output_label,
             ..
         } => {
             println!("{}", style("Created config").cyan());
@@ -799,7 +834,11 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
                 println!(
                     "  {} {}",
                     style("ScalarWebAPI triggers:").dim(),
-                    style(triggers.join(", ")).green()
+                    style(format_scalar_webapi_triggers_for_display(
+                        triggers,
+                        scalar_webapi_mac_output_label.as_deref(),
+                    ))
+                    .green()
                 );
             }
         }
