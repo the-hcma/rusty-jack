@@ -11,6 +11,7 @@ use crate::hdmi_displayport_volume_control::{
 };
 use crate::network::{current_network_access_snapshot, NetworkAccessSnapshot};
 use crate::output_device::OutputDevice;
+use crate::passthrough::PassthroughController;
 use crate::policy::{select_fallback_target, select_routing_target, RoutingTarget};
 use crate::scalar_webapi_device::ScalarWebApiDeviceWakeResult;
 use crate::system_default::DeviceList;
@@ -545,6 +546,7 @@ pub fn run_forever(
 ) -> Result<(), RustyJackError> {
     let mut config = load_config(config_path)?;
     let mut state = DaemonState::new();
+    let mut passthrough = PassthroughController::default();
     seed_activity_state(activity, &mut state, &config);
     seed_network_state(&mut state);
     run_tick_logged(
@@ -553,6 +555,7 @@ pub fn run_forever(
         DaemonTickReason::Startup,
         ScalarWebApiDeviceFallbackPermission::Suppressed,
     );
+    sync_passthrough_logged(hal, &mut passthrough, &config);
     let startup_grace_started = Instant::now();
 
     loop {
@@ -584,6 +587,7 @@ pub fn run_forever(
                                 DaemonTickReason::UserActivity,
                                 scalar_webapi_device_fallback,
                             );
+                            sync_passthrough_logged(hal, &mut passthrough, &config);
                         }
                     }
                 }
@@ -605,6 +609,17 @@ pub fn run_forever(
             ScalarWebApiDeviceFallbackPermission::Suppressed
         };
         run_tick_logged(hal, &config, reason, scalar_webapi_device_fallback);
+        sync_passthrough_logged(hal, &mut passthrough, &config);
+    }
+}
+
+fn sync_passthrough_logged(
+    hal: &dyn AudioHal,
+    passthrough: &mut PassthroughController,
+    config: &Config,
+) {
+    if let Err(err) = passthrough.sync(hal, config) {
+        eprintln!("warning: passthrough sync failed: {err}");
     }
 }
 
