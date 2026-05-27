@@ -4,7 +4,8 @@ mod install;
 
 pub use install::{
     append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_wake_triggers,
-    prompt_add_scalar_webapi_device, ScalarWebApiInstallSelection,
+    prompt_add_scalar_webapi_device, prompt_scalar_webapi_wake_triggers,
+    ScalarWebApiInstallSelection,
 };
 
 use crate::config::{Config, ScalarWebApiDeviceConfig};

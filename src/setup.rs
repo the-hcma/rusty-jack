@@ -164,117 +164,159 @@ fn reconfigure_existing_config(
     path: &Path,
     hal: &dyn AudioHal,
     devices: &[OutputDevice],
-    mut value: Value,
+    value: Value,
 ) -> Result<ConfigSetupResult, RustyJackError> {
-    let mut changes = Vec::new();
+    loop {
+        let mut updated = value.clone();
 
-    // Preferred device.
-    let default_preferred_uid = preferred_uid_from_value(&value);
-    let preferred_index =
-        prompt_for_preferred_device_with_default_uid(devices, default_preferred_uid.as_deref())?;
-    let preferred = &devices[preferred_index];
-    set_device_selector(
-        &mut value,
-        "preferred_device",
-        preferred,
-        "preferred device",
-        &mut changes,
-    );
+        // Preferred device.
+        let default_preferred_uid = preferred_uid_from_value(&updated);
+        let preferred_index = prompt_for_preferred_device_with_default_uid(
+            devices,
+            default_preferred_uid.as_deref(),
+        )?;
+        let preferred = &devices[preferred_index];
+        let mut changes = Vec::new();
+        set_device_selector(
+            &mut updated,
+            "preferred_device",
+            preferred,
+            "preferred device",
+            &mut changes,
+        );
 
-    // Volume (keep existing if present, otherwise use current device volume if readable).
-    let volume = value
-        .get("volume")
-        .and_then(Value::as_u64)
-        .and_then(|v| u8::try_from(v).ok())
-        .or_else(|| hal.output_volume_percent(&preferred.uid));
-    if let Some(volume) = volume {
-        if value.get("volume").and_then(Value::as_u64) != Some(volume as u64) {
-            value["volume"] = serde_json::json!(volume);
-            changes.push(format!("set volume to {volume}%"));
-        }
-    }
-
-    // Fallback device.
-    let default_fallback_uid = value
-        .get("fallback_uids")
-        .and_then(Value::as_array)
-        .and_then(|arr| arr.first())
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let fallback_index = prompt_for_fallback_device_with_default_uid(
-        devices,
-        &preferred.uid,
-        default_fallback_uid.as_deref(),
-    )?;
-    match fallback_index {
-        Some(index) => {
-            let uid = devices[index].uid.clone();
-            value["fallback_uids"] = serde_json::json!([uid.clone()]);
-            changes.push(format!(
-                "set fallback device to `{}`",
-                devices[index].friendly_label()
-            ));
-        }
-        None => {
-            // Explicitly clear fallback_uids to allow implicit builtin fallback behavior.
-            if !fallback_uids_empty(&value) {
-                value["fallback_uids"] = serde_json::json!([]);
-                changes.push("cleared explicit fallback".into());
+        // Volume (keep existing if present, otherwise use current device volume if readable).
+        let volume = updated
+            .get("volume")
+            .and_then(Value::as_u64)
+            .and_then(|v| u8::try_from(v).ok())
+            .or_else(|| hal.output_volume_percent(&preferred.uid));
+        if let Some(volume) = volume {
+            if updated.get("volume").and_then(Value::as_u64) != Some(volume as u64) {
+                updated["volume"] = serde_json::json!(volume);
+                changes.push(format!("set volume to {volume}%"));
             }
         }
-    }
 
-    // ScalarWebAPI configuration.
-    let scalar_webapi_enabled = value
-        .pointer("/scalar_webapi_device/enabled")
-        .and_then(Value::as_bool)
-        == Some(true);
-    if scalar_webapi_enabled {
-        if Confirm::new()
-            .with_prompt(q(
-                "Reconfigure ScalarWebAPI settings (host, Mac output, triggers)?",
-            ))
-            .default(false)
-            .interact()
-            .map_err(|err| {
-                RustyJackError::Config(format!("ScalarWebAPI reconfigure prompt failed: {err}"))
-            })?
+        // Fallback device.
+        let default_fallback_uid = updated
+            .get("fallback_uids")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let fallback_index = prompt_for_fallback_device_with_default_uid(
+            devices,
+            &preferred.uid,
+            default_fallback_uid.as_deref(),
+        )?;
+        match fallback_index {
+            Some(index) => {
+                let uid = devices[index].uid.clone();
+                updated["fallback_uids"] = serde_json::json!([uid.clone()]);
+                changes.push(format!(
+                    "set fallback device to `{}`",
+                    devices[index].friendly_label()
+                ));
+            }
+            None => {
+                // Explicitly clear fallback_uids to allow implicit builtin fallback behavior.
+                if !fallback_uids_empty(&updated) {
+                    updated["fallback_uids"] = serde_json::json!([]);
+                    changes.push("cleared explicit fallback".into());
+                }
+            }
+        }
+
+        // ScalarWebAPI configuration.
+        let scalar_webapi_enabled = updated
+            .pointer("/scalar_webapi_device/enabled")
+            .and_then(Value::as_bool)
+            == Some(true);
+        if scalar_webapi_enabled
+            && Confirm::new()
+                .with_prompt(q(
+                    "Reconfigure ScalarWebAPI settings (host, Mac output, triggers)?",
+                ))
+                .default(false)
+                .interact()
+                .map_err(|err| {
+                    RustyJackError::Config(format!("ScalarWebAPI reconfigure prompt failed: {err}"))
+                })?
         {
             // Host.
-            let current_host = value
+            let current_host = updated
                 .pointer("/scalar_webapi_device/host")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            println!();
+            println!("{}", style("ScalarWebAPI").cyan());
+            println!(
+                "{}",
+                style("Enter the device host (IP address or hostname). Example: 192.168.1.42")
+                    .dim()
+            );
             let host: String = dialoguer::Input::new()
-                .with_prompt(style("ScalarWebAPI device host.\nEnter an IP address or hostname (e.g. 192.168.1.42).").cyan().to_string())
+                .with_prompt(style("Device host").cyan().to_string())
                 .with_initial_text(current_host.clone())
-                .validate_with(|input: &String| if input.trim().is_empty() { Err("host is required") } else { Ok(()) })
+                .validate_with(|input: &String| {
+                    if input.trim().is_empty() {
+                        Err("host is required")
+                    } else {
+                        Ok(())
+                    }
+                })
                 .interact_text()
-                .map_err(|err| RustyJackError::Config(format!("ScalarWebAPI host prompt failed: {err}")))?;
+                .map_err(|err| {
+                    RustyJackError::Config(format!("ScalarWebAPI host prompt failed: {err}"))
+                })?;
             if host.trim() != current_host.trim() {
-                value["scalar_webapi_device"]["host"] = serde_json::json!(host.trim());
+                updated["scalar_webapi_device"]["host"] = serde_json::json!(host.trim());
                 changes.push("updated ScalarWebAPI host".into());
             }
 
-            // Mac output selector.
-            let current_mac_uid = value
+            // Mac output selector (avoid asking twice when it's identical to preferred).
+            let current_mac_uid = updated
                 .pointer("/scalar_webapi_device/mac_output/uid")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let mac_output_index =
-                prompt_for_preferred_device_with_default_uid(devices, current_mac_uid.as_deref())?;
-            let mac_output = &devices[mac_output_index];
+            let mac_uid_matches_preferred =
+                current_mac_uid.as_deref() == Some(preferred.uid.as_str());
+            let use_preferred_for_scalar = mac_uid_matches_preferred
+                || Confirm::new()
+                    .with_prompt(q(concat!(
+                        "Use the preferred output as the ScalarWebAPI Mac output?\n",
+                        "This is usually correct when the speaker is connected to the preferred output."
+                    )))
+                    .default(true)
+                    .interact()
+                    .map_err(|err| {
+                        RustyJackError::Config(format!(
+                            "ScalarWebAPI Mac output prompt failed: {err}"
+                        ))
+                    })?;
+
+            let mac_output_uid = if use_preferred_for_scalar {
+                preferred.uid.clone()
+            } else {
+                let mac_output_index = prompt_for_preferred_device_with_default_uid(
+                    devices,
+                    current_mac_uid.as_deref(),
+                )?;
+                devices[mac_output_index].uid.clone()
+            };
             ensure_nested_device_selector(
-                &mut value,
+                &mut updated,
                 &["scalar_webapi_device", "mac_output"],
-                &mac_output.uid,
+                &mac_output_uid,
                 devices,
                 "ScalarWebAPI Mac output",
                 &mut changes,
             );
-            // Triggers: reuse existing upgrade/toggle UI by forcing a prompt with current defaults.
-            let current_triggers = value
+
+            // Triggers: always ask in reconfigure flow.
+            let current_triggers = updated
                 .pointer("/scalar_webapi_device/triggers")
                 .and_then(Value::as_array)
                 .map(|arr| {
@@ -285,31 +327,189 @@ fn reconfigure_existing_config(
                 })
                 .unwrap_or_default();
             let triggers =
-                crate::scalar_webapi_device::maybe_prompt_scalar_webapi_wake_triggers(&value)?
-                    .unwrap_or(current_triggers);
-            value["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
+                crate::scalar_webapi_device::prompt_scalar_webapi_wake_triggers(&current_triggers)?;
+            updated["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
             changes.push("updated ScalarWebAPI wake triggers".into());
+        } else if !scalar_webapi_enabled
+            && Confirm::new()
+                .with_prompt(q(
+                    "Configure ScalarWebAPI speaker wake for this Mac output?",
+                ))
+                .default(false)
+                .interact()
+                .map_err(|err| {
+                    RustyJackError::Config(format!("ScalarWebAPI add prompt failed: {err}"))
+                })?
+        {
+            let selection = prompt_add_scalar_webapi_device(devices, preferred)?;
+            if let Some(selection) = selection {
+                append_scalar_webapi_to_config_json(&mut updated, &selection);
+                changes.push("added ScalarWebAPI configuration".into());
+            }
         }
-    } else if Confirm::new()
-        .with_prompt(q(
-            "Configure ScalarWebAPI speaker wake for this Mac output?",
-        ))
-        .default(false)
-        .interact()
-        .map_err(|err| RustyJackError::Config(format!("ScalarWebAPI add prompt failed: {err}")))?
-    {
-        let selection = prompt_add_scalar_webapi_device(devices, preferred)?;
-        if let Some(selection) = selection {
-            append_scalar_webapi_to_config_json(&mut value, &selection);
-            changes.push("added ScalarWebAPI configuration".into());
+
+        let diff = summarize_config_diff(&value, &updated);
+        if diff.is_empty() {
+            println!("{}", style("No changes.").dim());
+            return Ok(ConfigSetupResult::Kept {
+                config_path: path_display(path)?,
+            });
         }
+
+        println!();
+        println!("{}", style("Proposed config changes").cyan());
+        for line in &diff {
+            println!("  {}", style(line).green());
+        }
+        println!();
+
+        let apply = Confirm::new()
+            .with_prompt(q("Apply these changes to the config file?"))
+            .default(true)
+            .interact()
+            .map_err(|err| {
+                RustyJackError::Config(format!("confirm config changes failed: {err}"))
+            })?;
+        if apply {
+            std::fs::write(path, render_lexicographic_json(&updated)?)
+                .map_err(RustyJackError::Io)?;
+            return Ok(ConfigSetupResult::Updated {
+                config_path: path_display(path)?,
+                changes: diff,
+            });
+        }
+
+        let abandon = Confirm::new()
+            .with_prompt(q("Abandon changes and keep the current config?"))
+            .default(true)
+            .interact()
+            .map_err(|err| RustyJackError::Config(format!("abandon prompt failed: {err}")))?;
+        if abandon {
+            return Ok(ConfigSetupResult::Kept {
+                config_path: path_display(path)?,
+            });
+        }
+
+        // Otherwise loop and go over again.
+        println!();
+        println!("{}", style("OK. Let's go over the options again.").cyan());
+    }
+}
+
+fn summarize_config_diff(before: &Value, after: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    let before_preferred = before
+        .pointer("/preferred_device/uid")
+        .and_then(Value::as_str);
+    let after_preferred = after
+        .pointer("/preferred_device/uid")
+        .and_then(Value::as_str);
+    if before_preferred != after_preferred {
+        lines.push(format!(
+            "preferred: {} -> {}",
+            before_preferred.unwrap_or("(none)"),
+            after_preferred.unwrap_or("(none)")
+        ));
     }
 
-    std::fs::write(path, render_lexicographic_json(&value)?).map_err(RustyJackError::Io)?;
-    Ok(ConfigSetupResult::Updated {
-        config_path: path_display(path)?,
-        changes,
-    })
+    let before_vol = before.get("volume").and_then(Value::as_u64);
+    let after_vol = after.get("volume").and_then(Value::as_u64);
+    if before_vol != after_vol {
+        lines.push(format!(
+            "volume: {} -> {}",
+            before_vol
+                .map(|v| format!("{v}%"))
+                .unwrap_or("(unset)".into()),
+            after_vol
+                .map(|v| format!("{v}%"))
+                .unwrap_or("(unset)".into())
+        ));
+    }
+
+    let before_fb = before
+        .get("fallback_uids")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(Value::as_str);
+    let after_fb = after
+        .get("fallback_uids")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(Value::as_str);
+    if before_fb != after_fb {
+        lines.push(format!(
+            "fallback: {} -> {}",
+            before_fb.unwrap_or("(implicit builtin)"),
+            after_fb.unwrap_or("(implicit builtin)")
+        ));
+    }
+
+    let before_scalar_enabled = before
+        .pointer("/scalar_webapi_device/enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let after_scalar_enabled = after
+        .pointer("/scalar_webapi_device/enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if before_scalar_enabled != after_scalar_enabled {
+        lines.push(format!(
+            "ScalarWebAPI: {} -> {}",
+            if before_scalar_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            if after_scalar_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ));
+    }
+
+    let before_host = before
+        .pointer("/scalar_webapi_device/host")
+        .and_then(Value::as_str);
+    let after_host = after
+        .pointer("/scalar_webapi_device/host")
+        .and_then(Value::as_str);
+    if before_host != after_host {
+        lines.push(format!(
+            "ScalarWebAPI host: {} -> {}",
+            before_host.unwrap_or("(unset)"),
+            after_host.unwrap_or("(unset)")
+        ));
+    }
+
+    let before_triggers = before
+        .pointer("/scalar_webapi_device/triggers")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        });
+    let after_triggers = after
+        .pointer("/scalar_webapi_device/triggers")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        });
+    if before_triggers != after_triggers {
+        lines.push(format!(
+            "ScalarWebAPI triggers: {} -> {}",
+            before_triggers.as_deref().unwrap_or("(none)"),
+            after_triggers.as_deref().unwrap_or("(none)")
+        ));
+    }
+
+    lines
 }
 
 fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
@@ -343,6 +543,18 @@ fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
         .and_then(Value::as_bool)
         == Some(true);
     if scalar_enabled {
+        let mac_output_uid = value
+            .pointer("/scalar_webapi_device/mac_output/uid")
+            .and_then(Value::as_str);
+        let mac_output_label = mac_output_uid
+            .and_then(|uid| {
+                devices
+                    .iter()
+                    .find(|d| d.uid == uid)
+                    .map(|d| d.friendly_label())
+            })
+            .or_else(|| mac_output_uid.map(|uid| uid.to_string()))
+            .unwrap_or_else(|| "(not set)".into());
         let host = value
             .pointer("/scalar_webapi_device/host")
             .and_then(Value::as_str)
@@ -357,6 +569,16 @@ fn print_existing_config_summary(value: &Value, devices: &[OutputDevice]) {
                     .join(", ")
             })
             .unwrap_or_else(|| "(none)".into());
+        println!(
+            "  {} {}",
+            style("ScalarWebAPI Mac output:").dim(),
+            style(mac_output_label).green()
+        );
+        println!(
+            "  {}",
+            style("This Mac output should be physically connected to the ScalarWebAPI speaker.")
+                .dim()
+        );
         println!(
             "  {} {}",
             style("ScalarWebAPI host:").dim(),

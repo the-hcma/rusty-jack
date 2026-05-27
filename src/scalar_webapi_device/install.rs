@@ -52,14 +52,14 @@ pub fn prompt_add_scalar_webapi_device(
         return Ok(None);
     }
 
+    println!();
+    println!("{}", style("ScalarWebAPI").cyan());
+    println!(
+        "{}",
+        style("Enter the device host (IP address or hostname). Example: 192.168.1.42").dim()
+    );
     let host: String = Input::new()
-        .with_prompt(
-            style(
-                "ScalarWebAPI device host.\nEnter an IP address or hostname (e.g. 192.168.1.42).",
-            )
-            .cyan()
-            .to_string(),
-        )
+        .with_prompt(style("Device host").cyan().to_string())
         .validate_with(|input: &String| {
             if input.trim().is_empty() {
                 Err("host is required")
@@ -124,6 +124,15 @@ pub fn maybe_prompt_scalar_webapi_wake_triggers(
     }
 
     Ok(Some(prompt_wake_triggers_with_defaults(&triggers)?))
+}
+
+/// Prompt for ScalarWebAPI wake triggers using `current` as the defaults.
+///
+/// This is used by the install reconfigure flow to explicitly revisit triggers.
+pub fn prompt_scalar_webapi_wake_triggers(
+    current: &[String],
+) -> Result<Vec<String>, RustyJackError> {
+    prompt_wake_triggers_with_defaults(current)
 }
 
 pub fn scalar_webapi_install_to_config(
