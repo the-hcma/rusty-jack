@@ -3,6 +3,10 @@
 use crate::config::{default_config_path, is_placeholder_uid, render_lexicographic_json};
 use crate::coreaudio::AudioHal;
 use crate::output_device::OutputDevice;
+use crate::scalar_webapi_device::{
+    append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_wake_triggers,
+    prompt_add_scalar_webapi_device,
+};
 use crate::RustyJackError;
 use dialoguer::{Confirm, Select};
 use serde::Serialize;
@@ -26,6 +30,8 @@ pub enum ConfigSetupResult {
         fallback_label: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         volume: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scalar_webapi_triggers: Option<Vec<String>>,
     },
     Kept {
         config_path: String,
@@ -77,7 +83,16 @@ pub fn ensure_default_config(
     };
     let fallback = fallback_index.map(|index| &list.devices[index]);
     let volume = hal.output_volume_percent(&preferred.uid);
-    let config = render_config_json(preferred, fallback, volume)?;
+    let scalar_webapi = if interactive {
+        prompt_add_scalar_webapi_device(&list.devices, preferred)?
+    } else {
+        None
+    };
+    let mut value = render_config_value(preferred, fallback, volume)?;
+    if let Some(selection) = scalar_webapi.as_ref() {
+        append_scalar_webapi_to_config_json(&mut value, selection);
+    }
+    let config = render_lexicographic_json(&value)?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
@@ -91,6 +106,7 @@ pub fn ensure_default_config(
         fallback_uid: fallback.map(|device| device.uid.clone()),
         fallback_label: fallback.map(OutputDevice::friendly_label),
         volume,
+        scalar_webapi_triggers: scalar_webapi.map(|selection| selection.triggers),
     })
 }
 
@@ -138,6 +154,7 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             preferred_label,
             fallback_label,
             volume,
+            scalar_webapi_triggers,
             ..
         } => {
             println!("Created config");
@@ -151,6 +168,9 @@ pub fn print_config_setup_result(result: &ConfigSetupResult) {
             );
             if let Some(volume) = volume {
                 println!("  volume:    {volume}%");
+            }
+            if let Some(triggers) = scalar_webapi_triggers {
+                println!("  ScalarWebAPI triggers: {}", triggers.join(", "));
             }
         }
         ConfigSetupResult::Kept { config_path } => {
@@ -262,6 +282,13 @@ fn update_existing_config(
             "ScalarWebAPI Mac output",
             &mut changes,
         );
+    }
+
+    if interactive {
+        if let Some(triggers) = maybe_prompt_scalar_webapi_wake_triggers(&value)? {
+            value["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
+            changes.push("updated ScalarWebAPI wake triggers".into());
+        }
     }
 
     if interactive && fallback_uids_empty(&value) && prompt_add_fallback()? {
@@ -446,7 +473,7 @@ pub(crate) fn default_fallback_device_index(
         })
 }
 
-fn setup_device_label(device: &OutputDevice) -> String {
+pub(crate) fn setup_device_label(device: &OutputDevice) -> String {
     let active = if device.is_active { "active, " } else { "" };
     format!(
         "{} — {}{} — {}",
@@ -457,11 +484,20 @@ fn setup_device_label(device: &OutputDevice) -> String {
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn render_config_json(
     preferred: &OutputDevice,
     fallback: Option<&OutputDevice>,
     volume: Option<u8>,
 ) -> Result<String, RustyJackError> {
+    render_lexicographic_json(&render_config_value(preferred, fallback, volume)?)
+}
+
+fn render_config_value(
+    preferred: &OutputDevice,
+    fallback: Option<&OutputDevice>,
+    volume: Option<u8>,
+) -> Result<Value, RustyJackError> {
     let fallback_uids = fallback
         .map(|device| vec![device.uid.clone()])
         .unwrap_or_default();
@@ -482,7 +518,7 @@ pub(crate) fn render_config_json(
     if let Some(volume) = volume {
         value["volume"] = serde_json::json!(volume);
     }
-    render_lexicographic_json(&value)
+    Ok(value)
 }
 
 fn default_config_path_or_err() -> Result<PathBuf, RustyJackError> {
@@ -615,6 +651,16 @@ mod tests {
         assert!(updated.contains(r#""name": "External Headphones""#));
         assert!(updated.contains(r#""host": "speaker.local""#));
         assert!(updated.contains(r#""volume": 80"#));
+    }
+
+    #[test]
+    fn test_default_scalar_webapi_wake_triggers() {
+        assert!(!crate::scalar_webapi_device::has_all_default_wake_triggers(
+            &["output_selected".into()]
+        ));
+        assert!(crate::scalar_webapi_device::has_all_default_wake_triggers(
+            &["keyboard".into(), "mouse".into(), "output_selected".into()]
+        ));
     }
 
     #[test]
