@@ -29,6 +29,8 @@ pub enum Commands {
     Daemon,
     /// Uninstall the launchd LaunchAgent (stop, disable, remove plist)
     Disable(DisableArgs),
+    /// Test native driver by swapping eqMac's HAL driver out and back in
+    Driver(DriverArgs),
     /// Install and start the launchd LaunchAgent for this user
     Install(InstallArgs),
     /// List audio output devices
@@ -45,6 +47,27 @@ pub enum Commands {
     Uninstall(UninstallArgs),
     /// Refresh the LaunchAgent to the current binary when needed
     Upgrade(UpgradeArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct DriverArgs {
+    #[command(subcommand)]
+    pub command: DriverCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DriverCommand {
+    /// Back up eqMac's HAL driver and install Rusty Jack's driver
+    SwapIn(DriverSwapArgs),
+    /// Remove Rusty Jack's driver and restore the backed-up eqMac driver
+    SwapOut(DriverSwapArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct DriverSwapArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -232,6 +255,27 @@ mod tests {
         match cli.command {
             Commands::Disable(args) => assert!(args.json),
             _ => panic!("expected disable"),
+        }
+    }
+
+    #[test]
+    fn test_driver_swap_flags() {
+        let cli = Cli::try_parse_from(["rusty-jack", "driver", "swap-in", "--json"]).unwrap();
+        match cli.command {
+            Commands::Driver(args) => match args.command {
+                DriverCommand::SwapIn(args) => assert!(args.json),
+                _ => panic!("expected swap-in"),
+            },
+            _ => panic!("expected driver"),
+        }
+
+        let cli = Cli::try_parse_from(["rusty-jack", "driver", "swap-out", "--json"]).unwrap();
+        match cli.command {
+            Commands::Driver(args) => match args.command {
+                DriverCommand::SwapOut(args) => assert!(args.json),
+                _ => panic!("expected swap-out"),
+            },
+            _ => panic!("expected driver"),
         }
     }
 

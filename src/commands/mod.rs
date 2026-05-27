@@ -3,6 +3,7 @@
 pub mod apply;
 pub mod daemon;
 pub mod disable;
+pub mod driver;
 pub mod install;
 pub mod list;
 pub mod pause;

@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, eqMac compatibility fallback when eqMac is already installed, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and ScalarWebAPI-compatible device wake support.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, an explicit eqMac/Rusty Jack driver swap test workflow, eqMac compatibility fallback when eqMac is already installed, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and ScalarWebAPI-compatible device wake support.
 
 ## Global options
 
@@ -65,6 +65,29 @@ The daemon reloads config before each scheduled poll, resolves the preferred/fal
 | `switch_delay_ms` | `500` | Delay after a daemon switch before wake hooks |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that counts as away |
 | `activity_poll_interval_ms` | `1000` | How often the daemon samples macOS idle time |
+
+---
+
+## `driver`
+
+Explicit native-driver testing workflows. These commands do not run automatically during `install`; use them only when you want to temporarily move eqMac's system HAL driver aside and test Rusty Jack's user-scoped driver in its place.
+
+```bash
+rusty-jack driver swap-in [--json]
+rusty-jack driver swap-out [--json]
+```
+
+`swap-in` backs up `/Library/Audio/Plug-Ins/HAL/eqMac.driver` to:
+
+```text
+~/.config/rusty-jack/driver-backups/eqMac.driver
+```
+
+It also writes backup metadata next to that bundle, then installs or refreshes `~/Library/Audio/Plug-Ins/HAL/RustyJack.driver` from the packaged Rusty Jack bundle. Moving the system eqMac driver requires interactive confirmation and uses `sudo mv`; installing the user Rusty Jack driver does not need `sudo`.
+
+`swap-out` removes the user Rusty Jack driver and restores the managed eqMac backup to `/Library/Audio/Plug-Ins/HAL/eqMac.driver` with `sudo mv`. It is idempotent: if the Rusty Jack driver is already absent and eqMac is already restored, it reports up to date. If both the original eqMac driver and the managed backup exist, the command skips and asks you to inspect the state instead of overwriting anything.
+
+In `--json` mode, Rusty Jack will not move or restore the system eqMac driver because that operation needs interactive confirmation. The JSON result includes a retry command such as `rusty-jack driver swap-in`. `rusty-jack status` shows the managed eqMac backup and the `rusty-jack driver swap-out` restore command when a backup exists.
 
 ---
 
@@ -263,7 +286,7 @@ Policy block fields (aligned columns):
 - `config volume`, `volume` (current effective %)
 - `note` (human-readable policy message)
 
-HDMI/DisplayPort Volume Control block fields include whether a connected HDMI/DP output is detected, whether the Rusty Jack native driver is installed, whether the driver is recommended for the current hardware, whether eqMac fallback is installed, and a recommendation when a connected HDMI/DP route needs volume control.
+HDMI/DisplayPort Volume Control block fields include whether a connected HDMI/DP output is detected, whether the Rusty Jack native driver is installed, whether the driver is recommended for the current hardware, whether eqMac fallback is installed, any managed eqMac backup created by `rusty-jack driver swap-in`, and a recommendation when a connected HDMI/DP route needs volume control.
 
 Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, and PID when available. State values:
 

@@ -1,6 +1,6 @@
 //! HDMI/DisplayPort audio volume control routing support.
 
-use crate::eqmac::{self, EqMacEnsureAction, EqMacInstallState};
+use crate::eqmac::{self, EqMacDriverBackupInfo, EqMacEnsureAction, EqMacInstallState};
 use crate::output_device::OutputDevice;
 use crate::system_default::HalDriverInfo;
 use crate::transport::TransportKind;
@@ -59,6 +59,8 @@ pub struct HdmiDisplayPortVolumeControlStatus {
     pub eqmac_hal_driver_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orphaned_eqmac_hal_driver_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eqmac_driver_backup: Option<EqMacDriverBackupInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommendation: Option<String>,
 }
@@ -209,6 +211,7 @@ pub fn hdmi_displayport_volume_control_status_for_target(
     let eqmac_app_path = eqmac::eqmac_app_path();
     let eqmac_hal_driver_path = eqmac::eqmac_hal_driver_path();
     let orphaned_eqmac_hal_driver_path = eqmac::orphaned_eqmac_hal_driver_path();
+    let eqmac_driver_backup = eqmac::eqmac_driver_backup_info();
     let eqmac_installed = eqmac_app_path.is_some();
     let recommendation = if native_driver_recommended {
         Some(driver_offer_message(eqmac_installed))
@@ -230,6 +233,7 @@ pub fn hdmi_displayport_volume_control_status_for_target(
         eqmac_app_path,
         eqmac_hal_driver_path,
         orphaned_eqmac_hal_driver_path,
+        eqmac_driver_backup,
         recommendation,
     }
 }

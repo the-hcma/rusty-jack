@@ -159,6 +159,18 @@ fn test_daemon_subcommand_in_help() {
 }
 
 #[test]
+fn test_driver_subcommand_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("driver")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("swap-in"))
+        .stdout(predicate::str::contains("swap-out"));
+}
+
+#[test]
 fn test_uninstall_subcommand_in_help() {
     Command::cargo_bin("rusty-jack")
         .unwrap()
