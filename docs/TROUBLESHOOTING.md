@@ -103,7 +103,7 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.stdout.log"
 2. Confirm `scalar_webapi_device.triggers` includes `keyboard` and `mouse` if you expect wake on screen unlock (re-run interactive `install` to upgrade a partial trigger list).
 3. Confirm the device is reachable by hostname/IP and has its network standby/wake option enabled.
 4. Run `rusty-jack picker` and look for the ScalarWebAPI power-state note on the configured output.
-5. Check daemon logs for wake errors or discovery warnings.
+5. Check daemon logs for wake errors or discovery warnings. `No route to host` right after unlock usually means Wi-Fi was not ready yet; the daemon defers wake until macOS reports the host reachable and retries after network changes.
 
 Rusty Jack uses ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
 
