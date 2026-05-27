@@ -364,6 +364,23 @@ Optional block for waking a ScalarWebAPI-compatible device. When enabled and `tr
 
 Other devices should work if they expose the same ScalarWebAPI service.
 
+#### ScalarWebAPI references
+
+Sony’s Developer World pages for the Audio Control API / ScalarWebAPI have been archived and may no longer be publicly accessible. These links are still useful:
+
+- **Community forum**: [Sony Developer World forum — Audio Control API](https://techforum.developer.sony.com/category/7/audio-control-api)
+- **Archived examples**: [`sonydevworld/audio_control_api_examples`](https://github.com/sonydevworld/audio_control_api_examples)
+
+#### UPnP device description (canonical per-device “documentation”)
+
+In practice, the most accurate reference is whatever your device advertises on your LAN:
+
+- **SSDP search target**: `urn:schemas-sony-com:service:ScalarWebAPI:1`
+- **Device description XML** (from SSDP `LOCATION:`) typically includes:
+  - `X_ScalarWebAPI_BaseURL` (for example `http://<ip>:10000/sony`)
+  - `X_ScalarWebAPI_ServiceList` (service groups like `system`, `audio`, `avContent`, ...)
+- **SCPD / action list**: the UPnP service description may reference `ScalarWebApiSCPD.xml` which lists supported actions for that device/firmware.
+
 ### Reserved example keys
 
 `match`, `exclude`, and `logging` appear in `config.example.json` as roadmap placeholders. The current loader ignores unknown keys and does not apply those settings.
