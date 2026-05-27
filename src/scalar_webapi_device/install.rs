@@ -126,6 +126,15 @@ pub fn maybe_prompt_scalar_webapi_wake_triggers(
     Ok(Some(prompt_wake_triggers_with_defaults(&triggers)?))
 }
 
+/// Prompt for ScalarWebAPI wake triggers using `current` as the defaults.
+///
+/// This is used by the install reconfigure flow to explicitly revisit triggers.
+pub fn prompt_scalar_webapi_wake_triggers(
+    current: &[String],
+) -> Result<Vec<String>, RustyJackError> {
+    prompt_wake_triggers_with_defaults(current)
+}
+
 pub fn scalar_webapi_install_to_config(
     selection: &ScalarWebApiInstallSelection,
 ) -> ScalarWebApiDeviceConfig {
