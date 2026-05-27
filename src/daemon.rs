@@ -78,6 +78,11 @@ impl DaemonState {
         true
     }
 
+    /// Allow an immediate ScalarWebAPI activity wake after network recovery.
+    pub fn reset_scalar_webapi_device_wake_cooldown(&mut self) {
+        self.last_scalar_webapi_device_activity_wake = None;
+    }
+
     pub fn observe_network_access(
         &mut self,
         snapshot: Option<NetworkAccessSnapshot>,
@@ -575,12 +580,14 @@ pub fn run_forever(
                             Ok(updated) => config = updated,
                             Err(err) => eprintln!("warning: could not reload config: {err}"),
                         }
+                        let network_change = observe_current_network_access(&mut state);
+                        if network_change == NetworkAccessChange::Changed {
+                            state.reset_scalar_webapi_device_wake_cooldown();
+                        }
                         let cooldown = scalar_webapi_device_wake_cooldown(&config);
                         if state.allow_scalar_webapi_device_wake(Instant::now(), cooldown) {
                             let scalar_webapi_device_fallback =
-                                scalar_webapi_device_fallback_permission(
-                                    observe_current_network_access(&mut state),
-                                );
+                                scalar_webapi_device_fallback_permission(network_change);
                             run_tick_logged(
                                 hal,
                                 &config,
@@ -596,6 +603,10 @@ pub fn run_forever(
         }
 
         config = load_config(config_path)?;
+        let network_change = observe_current_network_access(&mut state);
+        if network_change == NetworkAccessChange::Changed {
+            state.reset_scalar_webapi_device_wake_cooldown();
+        }
         let reason = if startup_grace_started.elapsed()
             < scalar_webapi_device_startup_fallback_grace(&config)
         {
@@ -604,7 +615,7 @@ pub fn run_forever(
             DaemonTickReason::Scheduled
         };
         let scalar_webapi_device_fallback = if reason == DaemonTickReason::Scheduled {
-            scalar_webapi_device_fallback_permission(observe_current_network_access(&mut state))
+            scalar_webapi_device_fallback_permission(network_change)
         } else {
             ScalarWebApiDeviceFallbackPermission::Suppressed
         };

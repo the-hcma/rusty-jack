@@ -1,4 +1,4 @@
-//! Best-effort network access fingerprint for daemon routing decisions.
+//! Best-effort network access fingerprint and ScalarWebAPI reachability checks.
 
 use crate::RustyJackError;
 use std::process::Command;
@@ -12,6 +12,31 @@ pub struct NetworkAccessSnapshot {
 
 pub fn current_network_access_snapshot() -> Result<Option<NetworkAccessSnapshot>, RustyJackError> {
     platform_network_access_snapshot()
+}
+
+/// Return true when the Mac has a default route and interface address suitable for LAN wake.
+#[must_use]
+pub fn lan_connectivity_ready() -> bool {
+    current_network_access_snapshot()
+        .ok()
+        .flatten()
+        .is_some_and(|snapshot| {
+            snapshot
+                .ip_address
+                .as_ref()
+                .is_some_and(|ip| !ip.is_empty())
+        })
+}
+
+/// Return true when ScalarWebAPI wake traffic should be attempted for `host`.
+pub fn host_ready_for_scalar_webapi_wake(host: Option<&str>) -> Result<bool, RustyJackError> {
+    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
+        return Ok(false);
+    };
+    if !lan_connectivity_ready() {
+        return Ok(false);
+    }
+    host_is_reachable(host)
 }
 
 #[cfg(target_os = "macos")]
@@ -41,6 +66,32 @@ fn platform_network_access_snapshot() -> Result<Option<NetworkAccessSnapshot>, R
 #[cfg(not(target_os = "macos"))]
 fn platform_network_access_snapshot() -> Result<Option<NetworkAccessSnapshot>, RustyJackError> {
     Ok(None)
+}
+
+fn host_is_reachable(host: &str) -> Result<bool, RustyJackError> {
+    platform_host_is_reachable(host)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_host_is_reachable(host: &str) -> Result<bool, RustyJackError> {
+    use std::ffi::CString;
+
+    use system_configuration::network_reachability::{ReachabilityFlags, SCNetworkReachability};
+
+    let host = CString::new(host)
+        .map_err(|_| RustyJackError::Config("ScalarWebAPI host is not valid UTF-8".into()))?;
+    let Some(reachability) = SCNetworkReachability::from_host(&host) else {
+        return Ok(false);
+    };
+    let flags = reachability
+        .reachability()
+        .map_err(|err| RustyJackError::Config(format!("reachability flags for {host:?}: {err}")))?;
+    Ok(flags.intersects(ReachabilityFlags::REACHABLE))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_host_is_reachable(_host: &str) -> Result<bool, RustyJackError> {
+    Ok(true)
 }
 
 #[cfg(target_os = "macos")]
@@ -90,5 +141,11 @@ destination: default
             Some("192.168.86.1")
         );
         assert_eq!(parse_route_value(output, "missing"), None);
+    }
+
+    #[test]
+    fn test_host_ready_for_scalar_webapi_wake_requires_host() {
+        assert!(!host_ready_for_scalar_webapi_wake(None).unwrap());
+        assert!(!host_ready_for_scalar_webapi_wake(Some("")).unwrap());
     }
 }

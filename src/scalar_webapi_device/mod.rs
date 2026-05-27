@@ -103,16 +103,7 @@ pub fn wake_on_output_selected(
         return Ok(None);
     }
 
-    let previous_status = current_power_status(api).ok();
-    if previous_status
-        .as_deref()
-        .is_some_and(|status| status.eq_ignore_ascii_case("active"))
-    {
-        return Ok(None);
-    }
-    let mut result = send_wake_command(api)?;
-    result.previous_status = previous_status;
-    Ok(Some(result))
+    try_wake_scalar_webapi_device(api)
 }
 
 /// Log ScalarWebAPI wake failures as warnings so audio routing still succeeds.
@@ -141,6 +132,16 @@ pub fn wake_on_activity(
     let api_output_uid = resolve_device_selector(&selector, devices)
         .map_err(|err| RustyJackError::Config(format!("scalar_webapi_device.mac_output: {err}")))?;
     if api_output_uid != active_uid {
+        return Ok(None);
+    }
+
+    try_wake_scalar_webapi_device(api)
+}
+
+fn try_wake_scalar_webapi_device(
+    api: &ScalarWebApiDeviceConfig,
+) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
+    if !crate::network::host_ready_for_scalar_webapi_wake(api.host.as_deref())? {
         return Ok(None);
     }
 
