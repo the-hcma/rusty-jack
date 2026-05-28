@@ -24,6 +24,7 @@ pub mod picker;
 pub mod policy;
 pub mod scalar_webapi_device;
 pub mod setup;
+pub mod state;
 pub mod status;
 pub mod system_default;
 pub mod transport;
@@ -89,6 +90,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             args.remove_config,
             args.keep_config,
             args.only_driver,
+            args.no_restore_audio,
         )?,
         cli::Commands::Upgrade(args) => commands::upgrade::run(args.json, args.force)?,
     }

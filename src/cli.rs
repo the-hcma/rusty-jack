@@ -183,6 +183,10 @@ pub struct UninstallArgs {
     /// Only remove the native audio driver; keep LaunchAgent, binary, and config
     #[arg(long)]
     pub only_driver: bool,
+
+    /// Skip restoring the pre-install default output device, if present
+    #[arg(long)]
+    pub no_restore_audio: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -409,6 +413,7 @@ mod tests {
                 assert!(args.only_driver);
                 assert!(!args.remove_config);
                 assert!(!args.keep_config);
+                assert!(!args.no_restore_audio);
             }
             _ => panic!("expected uninstall"),
         }
@@ -420,6 +425,15 @@ mod tests {
             "--remove-config",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn test_uninstall_no_restore_audio_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "uninstall", "--no-restore-audio"]).unwrap();
+        match cli.command {
+            Commands::Uninstall(args) => assert!(args.no_restore_audio),
+            _ => panic!("expected uninstall"),
+        }
     }
 
     #[test]
