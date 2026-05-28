@@ -4,6 +4,8 @@ use crate::activity::ActivityMonitor;
 use crate::apply::{preferred_uid, switch_output, ApplyResult, SwitchOptions};
 use crate::config::{load_config, Config};
 use crate::coreaudio::AudioHal;
+#[cfg(target_os = "macos")]
+use crate::coreaudio::{CoreAudioEvent, CoreAudioListener};
 use crate::hdmi_displayport_volume_control::{
     ensure_hdmi_displayport_volume_control_for_target, format_ensure_messages,
     recover_hdmi_displayport_volume_control_for_target, HdmiDisplayPortVolumeControlEnsureAction,
@@ -579,6 +581,8 @@ pub fn run_forever(
     let mut config = load_config(config_path)?;
     let mut state = DaemonState::new();
     let mut passthrough = PassthroughController::default();
+    #[cfg(target_os = "macos")]
+    let listener = CoreAudioListener::new().ok();
     seed_activity_state(activity, &mut state, &config);
     seed_network_state(&mut state);
     run_tick_logged(
@@ -597,6 +601,41 @@ pub fn run_forever(
 
         while started.elapsed() < poll_interval {
             let remaining = poll_interval.saturating_sub(started.elapsed());
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(listener) = &listener {
+                    if let Ok(event) = listener
+                        .receiver()
+                        .recv_timeout(activity_interval.min(remaining))
+                    {
+                        // Best-effort: run an extra tick and then continue waiting for the scheduled poll.
+                        if matches!(
+                            event,
+                            CoreAudioEvent::DevicesChanged | CoreAudioEvent::DefaultOutputChanged
+                        ) {
+                            match load_config(config_path) {
+                                Ok(updated) => config = updated,
+                                Err(err) => eprintln!("warning: could not reload config: {err}"),
+                            }
+                            let network_change = observe_current_network_access(&mut state);
+                            if network_change == NetworkAccessChange::Changed {
+                                state.reset_scalar_webapi_device_wake_cooldown();
+                            }
+                            run_tick_logged(
+                                hal,
+                                &config,
+                                DaemonTickReason::Scheduled,
+                                scalar_webapi_device_fallback_permission(network_change),
+                            );
+                            sync_passthrough_logged(hal, &mut passthrough, &config);
+                            continue;
+                        }
+                    }
+                } else {
+                    thread::sleep(activity_interval.min(remaining));
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
             thread::sleep(activity_interval.min(remaining));
 
             let idle_threshold = Duration::from_millis(config.activity_idle_threshold_ms);

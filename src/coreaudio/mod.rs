@@ -7,6 +7,8 @@ mod display;
 #[cfg(target_os = "macos")]
 mod hal;
 #[cfg(target_os = "macos")]
+mod listener;
+#[cfg(target_os = "macos")]
 mod property;
 
 mod active;
@@ -15,6 +17,8 @@ mod system_default;
 #[cfg(target_os = "macos")]
 pub mod volume;
 pub use active::resolve_active_uid;
+#[cfg(target_os = "macos")]
+pub use listener::{CoreAudioEvent, CoreAudioListener};
 #[cfg(target_os = "macos")]
 pub use system_default::build_system_default_info;
 
