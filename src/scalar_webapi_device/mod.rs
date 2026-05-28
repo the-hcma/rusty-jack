@@ -257,7 +257,7 @@ fn activity_trigger_enabled(api: &ScalarWebApiDeviceConfig) -> bool {
     trigger_enabled(api, KEYBOARD_TRIGGER) || trigger_enabled(api, MOUSE_TRIGGER)
 }
 
-fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, RustyJackError> {
+pub fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, RustyJackError> {
     let endpoint = match discover_scalar_webapi_device_endpoint(api)? {
         Some(endpoint) => endpoint,
         None => configured_endpoint(api)?,

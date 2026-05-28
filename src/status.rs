@@ -7,6 +7,7 @@ use crate::hdmi_displayport_volume_control::{
 use crate::launchd::DaemonStatus;
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
+use crate::scalar_webapi_device;
 use crate::system_default::DeviceList;
 use anyhow::Result;
 use serde::Serialize;
@@ -56,7 +57,18 @@ pub struct StatusSnapshot {
     pub volume_percent: Option<u8>,
     pub hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub scalar_webapi: Option<ScalarWebApiStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScalarWebApiStatus {
+    pub enabled: bool,
+    pub host: Option<String>,
+    pub mac_output_uid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power_status: Option<String>,
 }
 
 /// Build a status snapshot from a device list and optional config.
@@ -83,6 +95,7 @@ pub fn build_status(
         .or(policy.active_device_uid.as_deref());
     let hdmi_displayport_volume_control =
         hdmi_displayport_volume_control_status_for_target(&list.devices, selected_uid);
+    let scalar_webapi = build_scalar_webapi_status(config);
 
     StatusSnapshot {
         devices: list.devices,
@@ -90,8 +103,54 @@ pub fn build_status(
         policy,
         volume_percent,
         hdmi_displayport_volume_control,
+        scalar_webapi,
         daemon,
     }
+}
+
+fn build_scalar_webapi_status(config: Option<&Config>) -> Option<ScalarWebApiStatus> {
+    let api = config
+        .and_then(|c| c.scalar_webapi_device.as_ref())
+        .filter(|api| api.enabled)?;
+    Some(ScalarWebApiStatus {
+        enabled: api.enabled,
+        host: api.host.clone(),
+        mac_output_uid: api.mac_output.uid.clone(),
+        power_status: scalar_webapi_device::current_power_status(api).ok(),
+    })
+}
+
+fn format_scalar_webapi_block(status: &ScalarWebApiStatus) -> String {
+    let rows: Vec<(&str, String)> = vec![
+        (
+            "enabled",
+            if status.enabled {
+                "yes".into()
+            } else {
+                "no".into()
+            },
+        ),
+        (
+            "host",
+            status.host.clone().unwrap_or_else(|| "(unset)".into()),
+        ),
+        (
+            "mac output",
+            status
+                .mac_output_uid
+                .clone()
+                .unwrap_or_else(|| "(unset)".into()),
+        ),
+        (
+            "power",
+            status
+                .power_status
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+    ];
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    format_labeled_section("ScalarWebAPI", "  ", &borrowed)
 }
 
 fn format_hdmi_displayport_volume_control_block(
@@ -330,6 +389,10 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
     if let Some(daemon) = &snapshot.daemon {
         writeln!(out)?;
         writeln!(out, "{}", format_daemon_block(daemon))?;
+    }
+    if let Some(scalar) = &snapshot.scalar_webapi {
+        writeln!(out)?;
+        writeln!(out, "{}", format_scalar_webapi_block(scalar))?;
     }
     Ok(())
 }
