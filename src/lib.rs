@@ -44,6 +44,15 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             let hal = coreaudio::platform_hal()?;
             commands::apply::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
+        cli::Commands::Config(args) => match args.command {
+            cli::ConfigCommand::Init(args) => {
+                let hal = coreaudio::platform_hal()?;
+                commands::config::init(hal.as_ref(), args.json, cli.config.as_deref())?;
+            }
+            cli::ConfigCommand::Validate(args) => {
+                commands::config::validate(args.json, cli.config.as_deref())?;
+            }
+        },
         cli::Commands::Daemon => {
             let hal = coreaudio::platform_hal()?;
             commands::daemon::run(hal.as_ref(), cli.config.as_deref())?;

@@ -67,9 +67,18 @@ pub fn ensure_default_config(
     interactive: bool,
 ) -> Result<ConfigSetupResult, RustyJackError> {
     let path = default_config_path_or_err()?;
+    ensure_config_at_path(&path, hal, interactive)
+}
+
+/// Ensure a config exists at the given path, prompting for devices when possible.
+pub fn ensure_config_at_path(
+    path: &Path,
+    hal: &dyn AudioHal,
+    interactive: bool,
+) -> Result<ConfigSetupResult, RustyJackError> {
     let list = hal.list_outputs()?;
     if path.exists() {
-        return reconfigure_or_update_existing_config(&path, hal, &list.devices, interactive);
+        return reconfigure_or_update_existing_config(path, hal, &list.devices, interactive);
     }
 
     let preferred_index = if interactive {
@@ -100,7 +109,7 @@ pub fn ensure_default_config(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
     }
-    std::fs::write(&path, config).map_err(RustyJackError::Io)?;
+    std::fs::write(path, config).map_err(RustyJackError::Io)?;
 
     let scalar_webapi_mac_output_label = scalar_webapi.as_ref().and_then(|selection| {
         list.devices
@@ -110,7 +119,7 @@ pub fn ensure_default_config(
             .or_else(|| Some(selection.mac_output_name.clone()))
     });
     Ok(ConfigSetupResult::Created {
-        config_path: path_display(&path)?,
+        config_path: path_display(path)?,
         preferred_uid: preferred.uid.clone(),
         preferred_label: preferred.friendly_label(),
         fallback_uid: fallback.map(|device| device.uid.clone()),
