@@ -54,6 +54,9 @@ pub fn switch_output(
     if current.as_deref() == Some(target.uid.as_str()) {
         return Ok(no_change_result(target, "default output already on target"));
     }
+    if let Some(uid) = current.as_deref() {
+        let _ = crate::state::remember_pre_install_default_if_missing(uid);
+    }
 
     if let Some(percent) = options.volume {
         // Set the target before the route becomes audible, then verify again after switching.

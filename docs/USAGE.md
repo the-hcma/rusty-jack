@@ -117,7 +117,7 @@ rusty-jack disable [--json]
 rusty-jack install [--json]
 rusty-jack pause [--json]
 rusty-jack resume [--json]
-rusty-jack uninstall [--json] [--only-driver]
+rusty-jack uninstall [--json] [--only-driver] [--no-restore-audio]
 rusty-jack upgrade [--json] [--force]
 ```
 
