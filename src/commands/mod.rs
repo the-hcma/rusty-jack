@@ -1,6 +1,7 @@
 //! CLI command implementations.
 
 pub mod apply;
+pub mod config;
 pub mod daemon;
 pub mod disable;
 pub mod driver;

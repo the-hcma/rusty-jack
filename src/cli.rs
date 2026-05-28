@@ -25,6 +25,8 @@ pub struct Cli {
 pub enum Commands {
     /// Apply config policy once
     Apply(ApplyArgs),
+    /// Manage configuration (init, validate)
+    Config(ConfigArgs),
     /// Run the background supervisor loop (used by launchd)
     Daemon,
     /// Uninstall the launchd LaunchAgent (stop, disable, remove plist)
@@ -85,6 +87,34 @@ pub struct ListArgs {
 
 #[derive(Parser, Debug)]
 pub struct ApplyArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Create the config file when missing (prompts in interactive mode)
+    Init(ConfigInitArgs),
+    /// Validate and canonicalize a config file
+    Validate(ConfigValidateArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ConfigInitArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ConfigValidateArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
     pub json: bool,
@@ -257,6 +287,30 @@ mod tests {
         match cli.command {
             Commands::Disable(args) => assert!(args.json),
             _ => panic!("expected disable"),
+        }
+    }
+
+    #[test]
+    fn test_config_init_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "config", "init", "--json"]).unwrap();
+        match cli.command {
+            Commands::Config(args) => match args.command {
+                ConfigCommand::Init(args) => assert!(args.json),
+                _ => panic!("expected init"),
+            },
+            _ => panic!("expected config"),
+        }
+    }
+
+    #[test]
+    fn test_config_validate_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "config", "validate", "--json"]).unwrap();
+        match cli.command {
+            Commands::Config(args) => match args.command {
+                ConfigCommand::Validate(args) => assert!(args.json),
+                _ => panic!("expected validate"),
+            },
+            _ => panic!("expected config"),
         }
     }
 

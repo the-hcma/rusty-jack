@@ -25,6 +25,23 @@ Environment:
 
 ---
 
+## `config`
+
+Helpers for creating and validating config files.
+
+```bash
+rusty-jack config init
+rusty-jack config init --json
+
+rusty-jack config validate
+rusty-jack config validate --json
+```
+
+- `config init` creates the config file when it is missing. In an interactive terminal it prompts for preferred output (and optional fallback and ScalarWebAPI settings). In non-interactive mode it picks defaults.
+- `config validate` loads the config, validates it, and rewrites it in canonical JSON key order when needed.
+
+---
+
 ## `apply`
 
 One-shot apply of config policy: resolve preferred device (or fallback), ensure HDMI/DisplayPort volume control if the target is an HDMI/DP output, switch default output.
