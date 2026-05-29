@@ -1,6 +1,7 @@
 # Code Review Findings
 
 This document consolidates 20 code review issues identified across the repository.
+Findings reflect a review snapshot taken on 2026-05-29.
 
 ## Summary Table
 
@@ -67,7 +68,7 @@ This document consolidates 20 code review issues identified across the repositor
 
 ### 8) Reachability check ignoring `CONNECTION_REQUIRED`
 - **Affected file(s):** `src/network.rs`
-- **Explanation:** Reachability currently checks only `REACHABLE`, not whether additional connection setup is required.
+- **Explanation:** Reachability currently checks only `ReachabilityFlags::REACHABLE` (SystemConfiguration reachability API), not whether additional connection setup is required.
 - **Impact:** Wake attempts may run when network is not actually ready, increasing timeouts/latency.
 - **Suggested fix:** Require `REACHABLE` and reject `CONNECTION_REQUIRED` in readiness logic.
 
@@ -83,7 +84,7 @@ This document consolidates 20 code review issues identified across the repositor
 - **Affected file(s):** `src/activity.rs`
 - **Explanation:** Activity poll spawns `ioreg -c IOHIDSystem` each interval (default 1s).
 - **Impact:** Repeated subprocess + registry traversal adds avoidable CPU overhead.
-- **Suggested fix:** Replace with direct idle-time API (`CGEventSourceSecondsSinceLastEventType` or IOKit equivalent).
+- **Suggested fix:** Replace with direct idle-time API (`CGEventSourceSecondsSinceLastEventType` or IOKit equivalent), and confirm compatibility with the project's supported macOS versions.
 
 ### 11) Possible drift between `volume_for_target` and passthrough equivalent
 - **Affected file(s):** `src/apply.rs`, `src/passthrough.rs`
