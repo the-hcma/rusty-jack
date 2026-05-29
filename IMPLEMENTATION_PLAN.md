@@ -17,10 +17,10 @@ This document mixes shipped architecture and roadmap notes. For the exact user-f
 | Manual selection | Implemented: `picker`, `picker --index N`, ScalarWebAPI power notes |
 | eqMac integration | Implemented: launch only when installed, report app/driver/orphaned-driver state |
 | Config volume | Implemented on real switches with retry/readback |
-| Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
+| Daemon | Implemented as a polling loop with config reload, idle-to-active activity sampling, and CoreAudio property-listener wake-ups |
 | LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, status reporting |
 | ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
-| Native HDMI/DP software volume without eqMac | In progress: packaged AudioServerPlugIn with minimal virtual output, stereo stream, and controls; passthrough planned |
+| Native HDMI/DP software volume without eqMac | Implemented: virtual HAL capture (`WriteMix`) + daemon passthrough render to physical output; remaining follow-up is uninstall restore/test hardening |
 
 ---
 
@@ -924,13 +924,13 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 ### Phase 3 — Config + policy (1 day)
 
 - [x] JSON config load/validate
-- [ ] `config init` / `config validate` helpers
+- [x] `config init` / `config validate` helpers
 - [x] Policy engine + `apply` respects `preferred_device`, legacy `preferred_device_uid`, and fallbacks
 - [x] **Tests:** `config.rs`, `policy.rs`, command smoke tests
 
 ### Phase 4 — Daemon + listeners + poll (2–3 days)
 
-- [ ] Property listeners + run loop thread
+- [x] Property listeners for device/default-output changes (best-effort daemon wake-ups)
 - [x] Poll timer with `poll_interval_ms`, `switch_delay_ms`, and config reload
 - [x] `daemon` subcommand
 - [x] Idle-to-active activity sampling for ScalarWebAPI wake triggers
@@ -941,7 +941,7 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 - [x] Plist template + `install` / `pause` / `resume` / `disable` / `uninstall` / `upgrade`
 - [ ] LaunchAgent status helper
 - [ ] Full purge flow for config/log removal
-- [ ] State file `pre_install_default.json` on first switch
+- [x] Persist pre-install default output state on first switch (implemented as `~/.local/state/rusty-jack/pre-install-default.json`)
 - [ ] Homebrew formula lifecycle hooks
 - [x] README/usage/troubleshooting: install / uninstall / upgrade flow
 - [x] **Tests:** `launchd.rs` path/result serialization and command wrappers
@@ -963,7 +963,7 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 - [x] `driver install` / `driver uninstall` lifecycle via `rusty-jack install`, `upgrade`, and `uninstall`
 - [x] Daemon **passthrough loop**: capture on virtual `WriteMix` ring, apply **software volume**, render to configured physical UID via CoreAudio IO proc
 - [x] Set virtual device as **default output** + **default system output** when driver is active and passthrough is armed
-- [ ] `uninstall` removes driver and restores prior physical default
+- [x] `uninstall` removes driver and restores prior physical default
 - [ ] **Tests:** ring-buffer / gain math unit tests; mock render path; driver property handlers where testable off-hardware
 
 **Definition of done (Phase 7):** User selects HDMI/DP monitor; **F10/F11/F12 change audible volume**; `rusty-jack list` shows virtual + physical devices; clean uninstall restores pre-install audio stack.
@@ -987,7 +987,7 @@ Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and th
 
 **Future:** Wake-on-LAN from `getSystemInformation` MAC; input select on ScalarWebAPI device if needed; native event tap if idle polling proves too coarse.
 
-**Remaining estimate:** LaunchAgent helpers and packaging are small follow-up work; native virtual driver remains the largest remaining feature.
+**Remaining estimate:** Main remaining work is follow-up hardening/documentation tasks: LaunchAgent helper/purge/homebrew lifecycle polish, QA matrix completion, and additional passthrough/driver test coverage.
 
 **Definition of done (every phase):** feature code + unit tests for touched modules + green `cargo test`.
 
