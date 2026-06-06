@@ -1,8 +1,6 @@
 //! User activity detection for daemon wake triggers.
 
 use crate::RustyJackError;
-#[cfg(target_os = "macos")]
-use std::process::Command;
 use std::time::Duration;
 
 /// Source of host idle time for the daemon.
@@ -22,18 +20,29 @@ impl ActivityMonitor for PlatformActivityMonitor {
 
 #[cfg(target_os = "macos")]
 fn platform_idle_duration() -> Result<Duration, RustyJackError> {
-    let output = Command::new("ioreg")
-        .args(["-c", "IOHIDSystem"])
-        .output()
-        .map_err(RustyJackError::Io)?;
-    if !output.status.success() {
-        return Err(RustyJackError::AppLaunch(
-            "failed to read macOS HID idle time with ioreg".into(),
-        ));
+    let seconds = macos_idle_seconds();
+    if seconds.is_finite() && seconds >= 0.0 {
+        Ok(Duration::from_secs_f64(seconds))
+    } else {
+        Err(RustyJackError::AppLaunch(
+            "invalid idle time from CGEventSource".into(),
+        ))
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_hid_idle_duration(&stdout)
-        .ok_or_else(|| RustyJackError::AppLaunch("ioreg output did not include HIDIdleTime".into()))
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn macos_idle_seconds() -> f64 {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+    }
+
+    const COMBINED_SESSION_STATE: i32 = 0;
+    const ANY_INPUT_EVENT_TYPE: u32 = 0xFFFF_FFFF;
+
+    // SAFETY: CoreGraphics documents this call as safe from any thread.
+    unsafe { CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION_STATE, ANY_INPUT_EVENT_TYPE) }
 }
 
 #[cfg(not(target_os = "macos"))]
