@@ -222,7 +222,7 @@ fn daemon_tick_with_hooks(
                 | DaemonTickReason::StartupRetry
                 | DaemonTickReason::Scheduled
         ) {
-            let checked_target = scalar_webapi_device_checked_current_target_or_fallback(
+            let checked_target = scalar_webapi_device_checked_target_or_fallback(
                 config,
                 &list.devices,
                 target.clone(),
@@ -477,36 +477,6 @@ fn recover_hdmi_displayport_volume_control_for_daemon_target(
 }
 
 fn scalar_webapi_device_checked_target_or_fallback(
-    config: &Config,
-    devices: &[crate::output_device::OutputDevice],
-    target: RoutingTarget,
-    reason: DaemonTickReason,
-    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
-    wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
-) -> RoutingTarget {
-    match wake_on_output_selected(config, devices, &target.uid) {
-        Ok(Some(result)) => eprintln!(
-            "{}",
-            crate::scalar_webapi_device::format_wake_message(&result)
-        ),
-        Ok(None) => {}
-        Err(err) => {
-            eprintln!("warning: {err}");
-            if allow_scalar_webapi_device_fallback(reason, scalar_webapi_device_fallback) {
-                if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
-                    eprintln!(
-                        "warning: using fallback output {} ({}) because the selected ScalarWebAPI device is unreachable",
-                        fallback.name, fallback.uid
-                    );
-                    return fallback;
-                }
-            }
-        }
-    }
-    target
-}
-
-fn scalar_webapi_device_checked_current_target_or_fallback(
     config: &Config,
     devices: &[crate::output_device::OutputDevice],
     target: RoutingTarget,
