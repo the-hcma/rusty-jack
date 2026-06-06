@@ -250,16 +250,18 @@ fn daemon_tick_with_hooks(
                 return Ok((DaemonTickResult::Switched(result), list));
             }
         }
-        if let Some(result) = recover_hdmi_displayport_volume_control_for_daemon_target(
-            hal,
-            config,
-            &list,
-            &target,
-            hdmi_uid,
-            preferred_uid.as_deref(),
-            reason,
-            &hooks.hdmi_displayport_volume_control,
-        )? {
+        if let Some(result) =
+            recover_hdmi_displayport_volume_control_for_daemon_target(RecoverHdmiVolumeContext {
+                hal,
+                config,
+                list: &list,
+                target: &target,
+                hdmi_uid,
+                preferred_uid: preferred_uid.as_deref(),
+                reason,
+                volume_control_hooks: &hooks.hdmi_displayport_volume_control,
+            })?
+        {
             return Ok((DaemonTickResult::Switched(result), list));
         }
         ensure_startup_volume(hal, config, reason, &target, &physical, &preferred_uid)?;
@@ -284,16 +286,18 @@ fn daemon_tick_with_hooks(
     };
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
-        if let Some(result) = recover_hdmi_displayport_volume_control_for_daemon_target(
-            hal,
-            config,
-            &list,
-            &target,
-            hdmi_uid,
-            preferred_uid.as_deref(),
-            reason,
-            &hooks.hdmi_displayport_volume_control,
-        )? {
+        if let Some(result) =
+            recover_hdmi_displayport_volume_control_for_daemon_target(RecoverHdmiVolumeContext {
+                hal,
+                config,
+                list: &list,
+                target: &target,
+                hdmi_uid,
+                preferred_uid: preferred_uid.as_deref(),
+                reason,
+                volume_control_hooks: &hooks.hdmi_displayport_volume_control,
+            })?
+        {
             return Ok((DaemonTickResult::Switched(result), list));
         }
         ensure_startup_volume(hal, config, reason, &target, &physical, &preferred_uid)?;
@@ -422,34 +426,37 @@ fn ensure_hdmi_displayport_volume_control_for_daemon_target(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn recover_hdmi_displayport_volume_control_for_daemon_target(
-    hal: &dyn AudioHal,
-    config: &Config,
-    list: &DeviceList,
-    target: &RoutingTarget,
-    hdmi_uid: &str,
-    preferred_uid: Option<&str>,
+struct RecoverHdmiVolumeContext<'a> {
+    hal: &'a dyn AudioHal,
+    config: &'a Config,
+    list: &'a DeviceList,
+    target: &'a RoutingTarget,
+    hdmi_uid: &'a str,
+    preferred_uid: Option<&'a str>,
     reason: DaemonTickReason,
-    volume_control_hooks: &HdmiDisplayPortVolumeControlHooks<'_>,
+    volume_control_hooks: &'a HdmiDisplayPortVolumeControlHooks<'a>,
+}
+
+fn recover_hdmi_displayport_volume_control_for_daemon_target(
+    ctx: RecoverHdmiVolumeContext<'_>,
 ) -> Result<Option<ApplyResult>, RustyJackError> {
-    if reason != DaemonTickReason::Startup {
+    if ctx.reason != DaemonTickReason::Startup {
         ensure_hdmi_displayport_volume_control_for_daemon_target(
-            &list.devices,
-            hdmi_uid,
-            reason,
-            volume_control_hooks.ensure,
+            &ctx.list.devices,
+            ctx.hdmi_uid,
+            ctx.reason,
+            ctx.volume_control_hooks.ensure,
         )?;
         return Ok(None);
     }
 
-    let volume_control = (volume_control_hooks.recover)(&list.devices, hdmi_uid)?;
+    let volume_control = (ctx.volume_control_hooks.recover)(&ctx.list.devices, ctx.hdmi_uid)?;
     let recovered = matches!(
         volume_control.action,
         HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted
     );
     let should_log = recovered
-        || (reason == DaemonTickReason::Startup
+        || (ctx.reason == DaemonTickReason::Startup
             && matches!(
                 volume_control.action,
                 HdmiDisplayPortVolumeControlEnsureAction::NativeDriverRecommended
@@ -462,21 +469,28 @@ fn recover_hdmi_displayport_volume_control_for_daemon_target(
 
     if recovered {
         let result = switch_daemon_target(
-            hal,
-            config,
-            list,
-            target,
-            hdmi_uid,
-            preferred_uid,
-            volume_control_hooks.ensure,
+            ctx.hal,
+            ctx.config,
+            ctx.list,
+            ctx.target,
+            ctx.hdmi_uid,
+            ctx.preferred_uid,
+            ctx.volume_control_hooks.ensure,
         )?;
         let physical = RoutingTarget {
-            uid: hdmi_uid.to_string(),
-            name: target.name.clone(),
-            source: target.source.clone(),
+            uid: ctx.hdmi_uid.to_string(),
+            name: ctx.target.name.clone(),
+            source: ctx.target.source.clone(),
         };
-        let preferred_uid = preferred_uid.map(str::to_string);
-        ensure_startup_volume(hal, config, reason, target, &physical, &preferred_uid)?;
+        let preferred_uid = ctx.preferred_uid.map(str::to_string);
+        ensure_startup_volume(
+            ctx.hal,
+            ctx.config,
+            ctx.reason,
+            ctx.target,
+            &physical,
+            &preferred_uid,
+        )?;
         return Ok(Some(result));
     }
 
