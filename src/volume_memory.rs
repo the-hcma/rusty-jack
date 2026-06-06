@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+const ENV_STATE_DIR: &str = "RUSTY_JACK_STATE_DIR";
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct VolumeMemory {
     #[serde(default)]
@@ -15,13 +17,19 @@ struct VolumeMemory {
 
 #[must_use]
 fn memory_path() -> Option<PathBuf> {
+    Some(state_dir()?.join("device-volumes.json"))
+}
+
+fn state_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(ENV_STATE_DIR) {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
     if cfg!(test) {
         return None;
     }
-    crate::config::default_config_path().and_then(|path| {
-        path.parent()
-            .map(|parent| parent.join("device-volumes.json"))
-    })
+    crate::config::default_config_path().and_then(|path| path.parent().map(PathBuf::from))
 }
 
 fn load_memory() -> VolumeMemory {
@@ -77,6 +85,20 @@ pub fn remember_active_non_preferred(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coreaudio::mock::MockHal;
+    use crate::output_device::OutputDevice;
+    use crate::transport::TransportKind;
+    use std::sync::{Mutex, MutexGuard};
+
+    fn with_state_dir<T>(f: impl FnOnce() -> T) -> T {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard: MutexGuard<'_, ()> = LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var(ENV_STATE_DIR, dir.path());
+        let result = f();
+        std::env::remove_var(ENV_STATE_DIR);
+        result
+    }
 
     #[test]
     fn test_memory_round_trip_in_struct() {
@@ -85,5 +107,29 @@ mod tests {
         let raw = serde_json::to_string(&memory).unwrap();
         let parsed: VolumeMemory = serde_json::from_str(&raw).unwrap();
         assert_eq!(parsed.devices.get("builtin"), Some(&33));
+    }
+
+    #[test]
+    fn test_remembered_volume_persists_to_state_dir() {
+        with_state_dir(|| {
+            let devices = vec![OutputDevice {
+                id: 1,
+                uid: "active-uid".into(),
+                name: "Active".into(),
+                transport: TransportKind::BuiltIn,
+                is_alive: true,
+                is_default: true,
+                is_active: true,
+            }];
+            let hal = MockHal::new(devices).with_output_volume(42);
+            remember_active_non_preferred(
+                &hal,
+                &hal.list_outputs().unwrap().devices,
+                Some("preferred"),
+                "target",
+            )
+            .unwrap();
+            assert_eq!(remembered_volume("active-uid"), Some(42));
+        });
     }
 }
