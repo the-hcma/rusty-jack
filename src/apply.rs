@@ -145,7 +145,7 @@ pub fn label_for_uid(list: &DeviceList, uid: &str) -> String {
     uid.to_string()
 }
 
-/// Print human-readable apply/picker result.
+/// Print human-readable apply/picker result using stored device names.
 pub fn print_text(result: &ApplyResult, list: &DeviceList) {
     match result {
         ApplyResult::Switched {
@@ -221,11 +221,11 @@ mod tests {
     use crate::system_default::DeviceList;
     use crate::transport::TransportKind;
 
-    fn hdmi_device(uid: &str, _monitor: &str) -> OutputDevice {
+    fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
-            name: "HDMI".into(),
+            name: monitor.into(),
             transport: TransportKind::Hdmi,
             is_alive: true,
             is_default: false,
@@ -321,7 +321,7 @@ mod tests {
             devices: vec![hdmi_device("hdmi-1", "DELL U3219Q")],
             system_default: None,
         };
-        assert_eq!(label_for_uid(&list, "hdmi-1"), "HDMI");
+        assert_eq!(label_for_uid(&list, "hdmi-1"), "DELL U3219Q");
     }
 
     #[test]
