@@ -668,7 +668,10 @@ pub fn run_forever(
             }
         }
 
-        config = load_config(config_path)?;
+        match load_config(config_path) {
+            Ok(updated) => config = updated,
+            Err(err) => eprintln!("warning: could not reload config: {err}"),
+        }
         let network_change = observe_current_network_access(&mut state);
         if network_change == NetworkAccessChange::Changed {
             state.reset_scalar_webapi_device_wake_cooldown();
