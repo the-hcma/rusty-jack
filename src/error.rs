@@ -13,6 +13,9 @@ pub enum RustyJackError {
     #[error("launchd error: {0}")]
     Launchd(String),
 
+    #[error("app launch error: {0}")]
+    AppLaunch(String),
+
     #[error("speaker wake error: {0}")]
     Speaker(String),
 
