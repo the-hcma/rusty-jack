@@ -58,12 +58,7 @@ mod tests {
     use super::*;
     use crate::transport::TransportKind;
 
-    fn device(
-        uid: &str,
-        name: &str,
-        _monitor: Option<&str>,
-        transport: TransportKind,
-    ) -> OutputDevice {
+    fn device(uid: &str, name: &str, transport: TransportKind) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
@@ -77,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_direct_default_match() {
-        let devices = vec![device("builtin", "Speakers", None, TransportKind::BuiltIn)];
+        let devices = vec![device("builtin", "Speakers", TransportKind::BuiltIn)];
         assert_eq!(
             resolve_active_uid("builtin", "Speakers", &devices).as_deref(),
             Some("builtin")
@@ -87,8 +82,8 @@ mod tests {
     #[test]
     fn test_eqmac_virtual_maps_to_device_name() {
         let devices = vec![
-            device("hdmi", "HDMI", None, TransportKind::Hdmi),
-            device("dp", "DisplayPort", None, TransportKind::DisplayPort),
+            device("hdmi", "HDMI", TransportKind::Hdmi),
+            device("dp", "DisplayPort", TransportKind::DisplayPort),
         ];
         assert_eq!(
             resolve_active_uid("EQMOutputCapture", "HDMI (eqMac)", &devices).as_deref(),
@@ -98,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_eqmac_virtual_maps_to_monitor_name() {
-        let devices = vec![device("hdmi", "DELL U3219Q", None, TransportKind::Hdmi)];
+        let devices = vec![device("hdmi", "DELL U3219Q", TransportKind::Hdmi)];
         assert_eq!(
             resolve_active_uid("EQMOutputCapture", "DELL U3219Q (eqMac)", &devices).as_deref(),
             Some("hdmi")
@@ -108,8 +103,8 @@ mod tests {
     #[test]
     fn test_eqmac_internal_speakers_maps_to_builtin() {
         let devices = vec![
-            device("builtin", "Built-in Output", None, TransportKind::BuiltIn),
-            device("hdmi", "HDMI", Some("DELL U3219Q"), TransportKind::Hdmi),
+            device("builtin", "Built-in Output", TransportKind::BuiltIn),
+            device("hdmi", "DELL U3219Q", TransportKind::Hdmi),
         ];
         assert_eq!(
             resolve_active_uid("EQMOutputCapture", "Internal Speakers (eqMac)", &devices,)
@@ -120,12 +115,7 @@ mod tests {
 
     #[test]
     fn test_eqmac_built_in_output_maps_to_builtin() {
-        let devices = vec![device(
-            "builtin",
-            "Built-in Output",
-            None,
-            TransportKind::BuiltIn,
-        )];
+        let devices = vec![device("builtin", "Built-in Output", TransportKind::BuiltIn)];
         assert_eq!(
             resolve_active_uid("EQMOutputCapture", "Built-in Output (eqMac)", &devices,).as_deref(),
             Some("builtin")
