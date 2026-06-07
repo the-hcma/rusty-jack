@@ -122,7 +122,12 @@ pub fn daemon_tick(
     config: &Config,
     reason: DaemonTickReason,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
-    daemon_tick_with_hooks(hal, config, reason, &daemon_hooks())
+    daemon_tick_with_hooks(
+        hal,
+        config,
+        reason,
+        &daemon_hooks(ScalarWebApiDeviceFallbackPermission::Allowed),
+    )
 }
 
 type HdmiDisplayPortVolumeControlEnsureFn<'a> = dyn Fn(&[OutputDevice], &str) -> Result<HdmiDisplayPortVolumeControlEnsureResult, RustyJackError>
@@ -162,14 +167,16 @@ struct DaemonHooks<'a> {
     scalar_webapi_device: ScalarWebApiDeviceHooks<'a>,
 }
 
-fn daemon_hooks<'a>() -> DaemonHooks<'a> {
+fn daemon_hooks(
+    scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
+) -> DaemonHooks<'static> {
     DaemonHooks {
         hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlHooks {
             ensure: &ensure_hdmi_displayport_volume_control_for_target,
             recover: &recover_hdmi_displayport_volume_control_for_target,
         },
         scalar_webapi_device: ScalarWebApiDeviceHooks {
-            fallback: ScalarWebApiDeviceFallbackPermission::Allowed,
+            fallback: scalar_webapi_device_fallback,
             wake_on_output_selected: &crate::scalar_webapi_device::wake_on_output_selected,
             wake_on_activity: &crate::scalar_webapi_device::wake_on_activity,
         },
@@ -692,17 +699,7 @@ fn run_tick_logged(
     reason: DaemonTickReason,
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
 ) {
-    let hooks = DaemonHooks {
-        hdmi_displayport_volume_control: HdmiDisplayPortVolumeControlHooks {
-            ensure: &ensure_hdmi_displayport_volume_control_for_target,
-            recover: &recover_hdmi_displayport_volume_control_for_target,
-        },
-        scalar_webapi_device: ScalarWebApiDeviceHooks {
-            fallback: scalar_webapi_device_fallback,
-            wake_on_output_selected: &crate::scalar_webapi_device::wake_on_output_selected,
-            wake_on_activity: &crate::scalar_webapi_device::wake_on_activity,
-        },
-    };
+    let hooks = daemon_hooks(scalar_webapi_device_fallback);
     match daemon_tick_with_hooks(hal, config, reason, &hooks) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
