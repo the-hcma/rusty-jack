@@ -11,7 +11,7 @@ use crate::passthrough::{
 };
 use crate::policy::{RoutingTarget, RoutingTargetSource};
 use crate::system_default::DeviceList;
-use crate::volume_memory::{remember_active_non_preferred, remembered_volume};
+use crate::volume_memory::remember_active_non_preferred;
 use crate::volume_result::VolumeEnsureResult;
 use crate::RustyJackError;
 use serde::Serialize;
@@ -123,20 +123,6 @@ pub fn preferred_uid(
     crate::device_select::resolve_device_selector(&config.preferred_selector(), devices).ok()
 }
 
-#[must_use]
-pub fn volume_for_target(
-    config: &Config,
-    target: &RoutingTarget,
-    preferred_uid: &Option<String>,
-) -> Option<u8> {
-    if preferred_uid.as_deref() == Some(target.uid.as_str())
-        || matches!(target.source, RoutingTargetSource::Preferred)
-    {
-        return config.volume;
-    }
-    remembered_volume(&target.uid)
-}
-
 fn no_change_result(target: &RoutingTarget, reason: &str) -> ApplyResult {
     ApplyResult::NoChange {
         uid: target.uid.clone(),
@@ -170,7 +156,7 @@ pub fn print_text(result: &ApplyResult, list: &DeviceList) {
             also_set_system_output,
             volume,
         } => {
-            let to = friendly_label(device_name);
+            let to = device_name.to_string();
             let from = from_uid
                 .as_deref()
                 .map(|uid| label_for_uid(list, uid))
@@ -219,16 +205,11 @@ pub fn print_text(result: &ApplyResult, list: &DeviceList) {
             device_name,
             reason,
         } => {
-            let label = friendly_label(device_name);
+            let label = device_name.to_string();
             println!("No change: {reason}");
             println!("  device: {label}");
         }
     }
-}
-
-#[must_use]
-fn friendly_label(name: &str) -> String {
-    name.to_string()
 }
 
 #[cfg(test)]
