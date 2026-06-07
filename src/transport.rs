@@ -1,7 +1,5 @@
 //! CoreAudio transport type (FourCC) parsing and HDMI-related classification.
 
-#![allow(non_upper_case_globals)]
-
 use serde::Serialize;
 use std::fmt;
 
@@ -37,6 +35,7 @@ pub enum TransportKind {
 
 impl TransportKind {
     #[must_use]
+    #[allow(non_upper_case_globals)]
     pub fn from_fourcc(code: u32) -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -106,6 +105,7 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
+    #[allow(non_upper_case_globals)]
     fn test_hdmi_constant() {
         assert_eq!(
             TransportKind::from_fourcc(kAudioDeviceTransportTypeHDMI),
