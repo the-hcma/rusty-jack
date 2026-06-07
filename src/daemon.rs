@@ -335,7 +335,20 @@ fn ensure_startup_volume(
         return Ok(());
     }
     if let Some(volume) = volume_for_effective_target(config, target, physical, preferred_uid) {
-        let _ = hal.set_output_volume(&target.uid, volume)?;
+        let result = hal.set_output_volume(&target.uid, volume)?;
+        if !result.verified {
+            if let Some(actual) = result.actual {
+                eprintln!(
+                    "warning: startup volume target {}% but read back {}% after {} attempts",
+                    result.target, actual, result.attempts
+                );
+            } else {
+                eprintln!(
+                    "warning: could not verify startup volume {}% after {} attempts",
+                    result.target, result.attempts
+                );
+            }
+        }
     }
     Ok(())
 }
