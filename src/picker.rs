@@ -474,11 +474,11 @@ mod tests {
     use crate::coreaudio::mock::MockHal;
     use crate::transport::TransportKind;
 
-    fn hdmi_device(uid: &str, _monitor: &str) -> OutputDevice {
+    fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
-            name: "HDMI".into(),
+            name: monitor.into(),
             transport: TransportKind::Hdmi,
             is_alive: true,
             is_default: false,

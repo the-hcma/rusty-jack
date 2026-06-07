@@ -249,11 +249,11 @@ mod tests {
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
 
-    fn hdmi(uid: &str, _monitor: &str, active: bool) -> OutputDevice {
+    fn hdmi(uid: &str, monitor: &str, active: bool) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
-            name: "HDMI".into(),
+            name: monitor.into(),
             transport: TransportKind::Hdmi,
             is_alive: true,
             is_default: false,
@@ -328,7 +328,7 @@ mod tests {
         );
         assert_eq!(policy.matches_preferred, Some(true));
         assert_eq!(policy.preferred_device_uid.as_deref(), Some("hdmi-1"));
-        assert!(policy.message.contains("HDMI"));
+        assert!(policy.message.contains("DELL U3219Q"));
     }
 
     #[test]
