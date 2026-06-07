@@ -47,7 +47,7 @@ impl OutputDevice {
         is_internal_builtin_output(self)
     }
 
-    /// Human-readable device label.
+    /// Human-readable device label (currently the CoreAudio device name).
     #[must_use]
     pub fn friendly_label(&self) -> String {
         self.name.clone()
