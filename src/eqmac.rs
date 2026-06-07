@@ -6,7 +6,7 @@ use crate::RustyJackError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const EQMAC_APP_NAME: &str = "eqMac";
 const EQMAC_APP_PATH: &str = "/Applications/eqMac.app";
@@ -15,6 +15,7 @@ pub const EQMAC_EMBEDDED_DRIVER_PATH: &str =
     "/Applications/eqMac.app/Contents/Resources/Embedded/eqMac.driver";
 pub const EQMAC_HAL_DRIVER_PATH: &str = "/Library/Audio/Plug-Ins/HAL/eqMac.driver";
 const EQMAC_STARTUP_WAIT: Duration = Duration::from_millis(1500);
+const EQMAC_STARTUP_POLL: Duration = Duration::from_millis(100);
 const EQMAC_DRIVER_BACKUP_DIR_NAME: &str = "driver-backups";
 const EQMAC_DRIVER_BACKUP_METADATA_NAME: &str = "eqMac.driver.json";
 
@@ -218,6 +219,28 @@ pub fn ensure_eqmac_for_target(
     ensure_eqmac_running()
 }
 
+fn wait_for_eqmac_running(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if eqmac_is_running() {
+            return true;
+        }
+        thread::sleep(EQMAC_STARTUP_POLL);
+    }
+    eqmac_is_running()
+}
+
+fn wait_for_eqmac_shutdown(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !eqmac_is_running() {
+            return true;
+        }
+        thread::sleep(EQMAC_STARTUP_POLL);
+    }
+    !eqmac_is_running()
+}
+
 /// Start eqMac when installed but not running.
 ///
 /// # Errors
@@ -239,7 +262,7 @@ pub fn ensure_eqmac_running() -> Result<EqMacEnsureResult, RustyJackError> {
 
     match launch_eqmac_app()? {
         EqMacLaunchAction::Launched => {
-            thread::sleep(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
             Ok(EqMacEnsureResult {
                 action: EqMacEnsureAction::Launched,
             })
@@ -272,16 +295,16 @@ pub fn restart_eqmac_for_target(
 
     if eqmac_is_running() {
         quit_eqmac_app();
-        thread::sleep(EQMAC_STARTUP_WAIT);
+        let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
         if eqmac_is_running() {
             kill_eqmac_app();
-            thread::sleep(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
         }
     }
 
     match launch_eqmac_app()? {
         EqMacLaunchAction::Launched => {
-            thread::sleep(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
             Ok(EqMacEnsureResult {
                 action: EqMacEnsureAction::Restarted,
             })
