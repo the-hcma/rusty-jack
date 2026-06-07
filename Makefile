@@ -20,7 +20,8 @@ INSTALLED_BIN := $(INSTALL_BIN_DIR)/$(BIN_NAME)
 # Keep make from invoking cargo when nothing changed.
 # Use git to enumerate tracked Rust sources (fast + includes new files when added to git).
 RUST_SOURCES := $(shell git ls-files '*.rs' 2>/dev/null)
-RUST_BUILD_INPUTS := Cargo.toml Cargo.lock $(RUST_SOURCES)
+RUST_BUILD_INPUTS := Cargo.toml Cargo.lock build.rs $(RUST_SOURCES)
+GIT_COMMIT_STAMP := target/.rusty-jack-git-commit
 
 DRIVER_BUNDLE_OUTPUT ?= target/share/rusty-jack
 DRIVER_BUNDLE := $(DRIVER_BUNDLE_OUTPUT)/RustyJack.driver
@@ -40,7 +41,11 @@ build: check-cargo
 
 build-release: $(RELEASE_BIN)
 
-$(RELEASE_BIN): $(RUST_BUILD_INPUTS)
+$(GIT_COMMIT_STAMP):
+	@mkdir -p target
+	@git rev-parse HEAD > "$@"
+
+$(RELEASE_BIN): $(RUST_BUILD_INPUTS) $(GIT_COMMIT_STAMP)
 	@$(MAKE) check-cargo
 	$(CARGO) build --release
 
