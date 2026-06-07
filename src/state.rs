@@ -26,10 +26,11 @@ pub fn load_pre_install_default() -> Result<Option<PreInstallDefault>, RustyJack
     let Some(path) = state_path() else {
         return Ok(None);
     };
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).map_err(RustyJackError::Io)?;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(RustyJackError::Io(err)),
+    };
     serde_json::from_str::<PreInstallDefault>(&raw)
         .map(Some)
         .map_err(|err| RustyJackError::Config(format!("pre-install default JSON: {err}")))
@@ -39,9 +40,6 @@ pub fn remember_pre_install_default_if_missing(uid: &str) -> Result<bool, RustyJ
     let Some(path) = state_path() else {
         return Ok(false);
     };
-    if path.exists() {
-        return Ok(false);
-    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
     }
@@ -56,19 +54,30 @@ pub fn remember_pre_install_default_if_missing(uid: &str) -> Result<bool, RustyJ
     let raw = serde_json::to_string_pretty(&value)
         .map(|json| format!("{json}\n"))
         .map_err(|err| RustyJackError::Config(format!("pre-install default JSON: {err}")))?;
-    std::fs::write(path, raw).map_err(RustyJackError::Io)?;
-    Ok(true)
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(raw.as_bytes()).map_err(RustyJackError::Io)?;
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(err) => Err(RustyJackError::Io(err)),
+    }
 }
 
 pub fn clear_pre_install_default() -> Result<bool, RustyJackError> {
     let Some(path) = state_path() else {
         return Ok(false);
     };
-    if !path.exists() {
-        return Ok(false);
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(RustyJackError::Io(err)),
     }
-    std::fs::remove_file(path).map_err(RustyJackError::Io)?;
-    Ok(true)
 }
 
 #[cfg(test)]
