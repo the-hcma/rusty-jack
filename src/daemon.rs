@@ -62,6 +62,7 @@ impl DaemonState {
     }
 
     /// Return true only on an idle -> active transition.
+    #[must_use]
     pub fn observe_idle_duration(
         &mut self,
         idle_duration: Duration,
@@ -73,6 +74,7 @@ impl DaemonState {
         became_active
     }
 
+    #[must_use]
     pub fn allow_scalar_webapi_device_wake(&mut self, now: Instant, cooldown: Duration) -> bool {
         if self
             .last_scalar_webapi_device_activity_wake
@@ -801,11 +803,11 @@ mod tests {
     use crate::transport::TransportKind;
     use std::sync::Mutex;
 
-    fn hdmi_device(uid: &str, _monitor: &str) -> OutputDevice {
+    fn hdmi_device(uid: &str, monitor: &str) -> OutputDevice {
         OutputDevice {
             id: 1,
             uid: uid.into(),
-            name: "HDMI".into(),
+            name: monitor.into(),
             transport: TransportKind::Hdmi,
             is_alive: true,
             is_default: false,
