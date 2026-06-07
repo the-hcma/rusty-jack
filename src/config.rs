@@ -4,6 +4,7 @@ use crate::device_select::DeviceSelector;
 use crate::RustyJackError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const ENV_CONFIG: &str = "RUSTY_JACK_CONFIG";
@@ -242,8 +243,28 @@ fn rewrite_config_if_needed(path: &Path, raw: &str) -> Result<(), RustyJackError
         .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
     let canonical = render_lexicographic_json(&value)?;
     if raw != canonical {
-        std::fs::write(path, canonical).map_err(RustyJackError::Io)?;
+        atomic_write(path, &canonical)?;
     }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, contents: &str) -> Result<(), RustyJackError> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
+    let file_name = path.file_name().ok_or_else(|| {
+        RustyJackError::Config(format!("config path has no file name: {}", path.display()))
+    })?;
+    let temp_path = parent.join(format!(".{}.tmp", file_name.to_string_lossy()));
+    {
+        let mut file = std::fs::File::create(&temp_path).map_err(RustyJackError::Io)?;
+        file.write_all(contents.as_bytes())
+            .map_err(RustyJackError::Io)?;
+        file.sync_all().map_err(RustyJackError::Io)?;
+    }
+    std::fs::rename(&temp_path, path).map_err(RustyJackError::Io)?;
     Ok(())
 }
 
