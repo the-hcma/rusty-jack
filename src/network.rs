@@ -86,7 +86,8 @@ fn platform_host_is_reachable(host: &str) -> Result<bool, RustyJackError> {
     let flags = reachability
         .reachability()
         .map_err(|err| RustyJackError::Config(format!("reachability flags for {host:?}: {err}")))?;
-    Ok(flags.intersects(ReachabilityFlags::REACHABLE))
+    Ok(flags.intersects(ReachabilityFlags::REACHABLE)
+        && !flags.intersects(ReachabilityFlags::CONNECTION_REQUIRED))
 }
 
 #[cfg(not(target_os = "macos"))]

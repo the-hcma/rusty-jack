@@ -4,6 +4,7 @@ use crate::device_select::DeviceSelector;
 use crate::RustyJackError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const ENV_CONFIG: &str = "RUSTY_JACK_CONFIG";
@@ -221,10 +222,12 @@ pub fn default_config_path() -> Option<PathBuf> {
 /// Returns an error when the file exists but cannot be read or parsed.
 pub fn load_config(path: &Path) -> Result<Config, RustyJackError> {
     let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
-    let config: Config = serde_json::from_str(&raw)
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+    let config: Config = serde_json::from_value(value.clone())
         .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
     validate_config(&config)?;
-    rewrite_config_if_needed(path, &raw)?;
+    rewrite_config_if_needed(path, &raw, &value)?;
     Ok(config)
 }
 
@@ -237,13 +240,31 @@ pub fn render_lexicographic_json(value: &Value) -> Result<String, RustyJackError
         .map_err(|err| RustyJackError::Config(format!("could not render config: {err}")))
 }
 
-fn rewrite_config_if_needed(path: &Path, raw: &str) -> Result<(), RustyJackError> {
-    let value: Value = serde_json::from_str(raw)
-        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
-    let canonical = render_lexicographic_json(&value)?;
+fn rewrite_config_if_needed(path: &Path, raw: &str, value: &Value) -> Result<(), RustyJackError> {
+    let canonical = render_lexicographic_json(value)?;
     if raw != canonical {
-        std::fs::write(path, canonical).map_err(RustyJackError::Io)?;
+        atomic_write(path, &canonical)?;
     }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, contents: &str) -> Result<(), RustyJackError> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
+    let file_name = path.file_name().ok_or_else(|| {
+        RustyJackError::Config(format!("config path has no file name: {}", path.display()))
+    })?;
+    let temp_path = parent.join(format!(".{}.tmp", file_name.to_string_lossy()));
+    {
+        let mut file = std::fs::File::create(&temp_path).map_err(RustyJackError::Io)?;
+        file.write_all(contents.as_bytes())
+            .map_err(RustyJackError::Io)?;
+        file.sync_all().map_err(RustyJackError::Io)?;
+    }
+    std::fs::rename(&temp_path, path).map_err(RustyJackError::Io)?;
     Ok(())
 }
 
@@ -275,16 +296,20 @@ fn sort_json_keys(value: &mut Value) {
 ///
 /// Returns an error when `explicit` is true and the file is missing, or when the file exists but is invalid.
 pub fn load_config_optional(path: &Path, explicit: bool) -> Result<Option<Config>, RustyJackError> {
-    if !path.exists() {
-        if explicit {
-            return Err(RustyJackError::Config(format!(
-                "config file not found: {}",
-                path.display()
-            )));
+    match load_config(path) {
+        Ok(config) => Ok(Some(config)),
+        Err(RustyJackError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            if explicit {
+                Err(RustyJackError::Config(format!(
+                    "config file not found: {}",
+                    path.display()
+                )))
+            } else {
+                Ok(None)
+            }
         }
-        return Ok(None);
+        Err(err) => Err(err),
     }
-    load_config(path).map(Some)
 }
 
 fn validate_config(config: &Config) -> Result<(), RustyJackError> {
