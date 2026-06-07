@@ -74,11 +74,23 @@ Hardware-mutating tests are ignored by default. Do not enable them unless you in
 - **Worktree-per-stack.** Every new stack is created via `start-development --worktree <name> --no-interactive`.
 - Never work directly on `main`.
 - Keep each branch focused on one logical change.
-- Before publishing/submitting any PR, run the required local gates (see **Pre-Commit Checklist** below).
+- Before publishing/submitting any PR, run the required local gates (see **Pre-Commit Checklist** below). **Do not run `gt submit --no-interactive --publish` until fmt, clippy, and tests pass locally.**
 - Submit with `gt submit --no-interactive --publish` when using Graphite.
 - To merge, add the `merge-it` label. Never use `gh pr merge` directly.
 - Follow **Conventional Commits** for branch commits when practical: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
 - PR descriptions must include **Summary** and **Test plan** at minimum.
+
+### Stacked PRs: fix bottom-up before publish
+
+Each PR in a Graphite stack is CI-tested against its merge base. A fmt, clippy, or test failure in an early branch fails the entire stack on GitHub Actions.
+
+Before publishing a stack:
+
+1. Check out the **bottom** branch (closest to `main`).
+2. Run the **Pre-Commit Checklist** gates.
+3. Fix failures, then `gt modify` and `gt restack`.
+4. Repeat on each subsequent branch until the stack tip passes all gates.
+5. Only then run `gt submit --no-interactive --publish`.
 
 ---
 
