@@ -106,8 +106,22 @@ uninstall: check-cargo
 universal: check-cargo
 	./scripts/build-universal
 
-upgrade: install
-	rusty-jack upgrade --force
+upgrade: check-cargo
+	@mkdir -p "$(INSTALL_BIN_DIR)"
+	@mkdir -p "$(INSTALL_SHARE_DIR)"
+	@$(MAKE) build-release
+	@PREV_VER=""; \
+	if [ -f "$(INSTALLED_BIN)" ]; then \
+		PREV_VER=$$("$(INSTALLED_BIN)" --version 2>/dev/null | tr -d '\n'); \
+	fi; \
+	if [ -f "$(INSTALLED_BIN)" ] && cmp -s "$(RELEASE_BIN)" "$(INSTALLED_BIN)"; then \
+		echo "rusty-jack already installed: $(INSTALLED_BIN)"; \
+	else \
+		echo "Installing rusty-jack to $(INSTALLED_BIN)"; \
+		install -m 755 "$(RELEASE_BIN)" "$(INSTALLED_BIN)"; \
+	fi; \
+	$(MAKE) driver-bundle DRIVER_BUNDLE_OUTPUT="$(INSTALL_SHARE_DIR)"; \
+	RUSTY_JACK_UPGRADE_PREVIOUS_VERSION="$$PREV_VER" rusty-jack upgrade --force
 
 validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
 	./scripts/validate-driver-bundle "$(DRIVER_BUNDLE)"

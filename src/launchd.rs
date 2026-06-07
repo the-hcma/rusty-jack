@@ -372,9 +372,8 @@ fn write_and_load_daemon(
     let previous_binary_path = existing_plist
         .as_deref()
         .and_then(launch_agent_binary_path_from_plist);
-    let previous_binary_version = previous_binary_path
-        .as_deref()
-        .and_then(binary_version_from_path);
+    let previous_binary_version =
+        previous_binary_version_from_env_or_path(previous_binary_path.as_deref());
     let plist = render_launch_agent_plist(&binary_path, &home_display);
     let binary_version = BinaryVersion::current();
     let plist_display = plist_path_display(&plist_path)?;
@@ -484,6 +483,24 @@ fn binary_version_from_path(path: &str) -> Option<BinaryVersion> {
         return None;
     }
     parse_binary_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn previous_binary_version_from_env_or_path(path: Option<&str>) -> Option<BinaryVersion> {
+    if let Ok(raw) = std::env::var("RUSTY_JACK_UPGRADE_PREVIOUS_VERSION") {
+        if let Some(version) = previous_binary_version_from_snapshot(Some(raw.as_str())) {
+            return Some(version);
+        }
+    }
+    path.and_then(binary_version_from_path)
+}
+
+fn previous_binary_version_from_snapshot(raw: Option<&str>) -> Option<BinaryVersion> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let output = raw.strip_prefix("rusty-jack ").unwrap_or(raw);
+    parse_binary_version_output(output)
 }
 
 fn parse_binary_version_output(output: &str) -> Option<BinaryVersion> {
@@ -919,6 +936,17 @@ mod tests {
             Some(BinaryVersion {
                 version: "0.1.0".into(),
                 commit: "abc1234".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_previous_binary_version_from_snapshot() {
+        assert_eq!(
+            previous_binary_version_from_snapshot(Some("rusty-jack 0.1.0 (commit old1234)")),
+            Some(BinaryVersion {
+                version: "0.1.0".into(),
+                commit: "old1234".into(),
             })
         );
     }
