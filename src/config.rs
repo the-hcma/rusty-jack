@@ -222,10 +222,12 @@ pub fn default_config_path() -> Option<PathBuf> {
 /// Returns an error when the file exists but cannot be read or parsed.
 pub fn load_config(path: &Path) -> Result<Config, RustyJackError> {
     let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
-    let config: Config = serde_json::from_str(&raw)
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+    let config: Config = serde_json::from_value(value.clone())
         .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
     validate_config(&config)?;
-    rewrite_config_if_needed(path, &raw)?;
+    rewrite_config_if_needed(path, &raw, &value)?;
     Ok(config)
 }
 
@@ -238,10 +240,8 @@ pub fn render_lexicographic_json(value: &Value) -> Result<String, RustyJackError
         .map_err(|err| RustyJackError::Config(format!("could not render config: {err}")))
 }
 
-fn rewrite_config_if_needed(path: &Path, raw: &str) -> Result<(), RustyJackError> {
-    let value: Value = serde_json::from_str(raw)
-        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
-    let canonical = render_lexicographic_json(&value)?;
+fn rewrite_config_if_needed(path: &Path, raw: &str, value: &Value) -> Result<(), RustyJackError> {
+    let canonical = render_lexicographic_json(value)?;
     if raw != canonical {
         atomic_write(path, &canonical)?;
     }
@@ -296,16 +296,20 @@ fn sort_json_keys(value: &mut Value) {
 ///
 /// Returns an error when `explicit` is true and the file is missing, or when the file exists but is invalid.
 pub fn load_config_optional(path: &Path, explicit: bool) -> Result<Option<Config>, RustyJackError> {
-    if !path.exists() {
-        if explicit {
-            return Err(RustyJackError::Config(format!(
-                "config file not found: {}",
-                path.display()
-            )));
+    match load_config(path) {
+        Ok(config) => Ok(Some(config)),
+        Err(RustyJackError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            if explicit {
+                Err(RustyJackError::Config(format!(
+                    "config file not found: {}",
+                    path.display()
+                )))
+            } else {
+                Ok(None)
+            }
         }
-        return Ok(None);
+        Err(err) => Err(err),
     }
-    load_config(path).map(Some)
 }
 
 fn validate_config(config: &Config) -> Result<(), RustyJackError> {
