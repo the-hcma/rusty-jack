@@ -27,13 +27,13 @@ fn platform_idle_duration() -> Result<Duration, RustyJackError> {
         .output()
         .map_err(RustyJackError::Io)?;
     if !output.status.success() {
-        return Err(RustyJackError::Launchd(
+        return Err(RustyJackError::AppLaunch(
             "failed to read macOS HID idle time with ioreg".into(),
         ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_hid_idle_duration(&stdout)
-        .ok_or_else(|| RustyJackError::Launchd("ioreg output did not include HIDIdleTime".into()))
+        .ok_or_else(|| RustyJackError::AppLaunch("ioreg output did not include HIDIdleTime".into()))
 }
 
 #[cfg(not(target_os = "macos"))]

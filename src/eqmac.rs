@@ -330,7 +330,7 @@ fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchActio
         return Ok(EqMacLaunchAction::NotInstalled);
     }
 
-    Err(RustyJackError::Launchd(format!(
+    Err(RustyJackError::AppLaunch(format!(
         "failed to launch eqMac: {stderr}"
     )))
 }
@@ -427,6 +427,6 @@ mod tests {
     #[test]
     fn test_other_eqmac_launch_failure_stays_fatal() {
         let err = classify_eqmac_launch(false, "permission denied").unwrap_err();
-        assert!(matches!(err, RustyJackError::Launchd(_)));
+        assert!(matches!(err, RustyJackError::AppLaunch(_)));
     }
 }
