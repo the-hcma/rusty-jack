@@ -10,7 +10,14 @@ pub struct PreInstallDefault {
     pub saved_at_unix_seconds: u64,
 }
 
+const ENV_STATE_DIR: &str = "RUSTY_JACK_STATE_DIR";
+
 fn state_path() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(ENV_STATE_DIR) {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir).join("pre-install-default.json"));
+        }
+    }
     if cfg!(test) {
         return None;
     }
