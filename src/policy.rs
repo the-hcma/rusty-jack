@@ -186,10 +186,7 @@ impl std::fmt::Display for SelectTargetError {
 }
 
 fn alive_device<'a>(devices: &'a [OutputDevice], uid: &str) -> Option<&'a OutputDevice> {
-    devices
-        .iter()
-        .find(|d| d.uid == uid && d.is_alive)
-        .or_else(|| devices.iter().find(|d| d.uid == uid))
+    devices.iter().find(|d| d.uid == uid && d.is_alive)
 }
 
 fn to_routing_target(device: &OutputDevice, source: RoutingTargetSource) -> RoutingTarget {
@@ -208,10 +205,7 @@ pub fn select_routing_target(
     match resolve_device_selector(&config.preferred_selector(), devices) {
         Ok(uid) => {
             if let Some(device) = alive_device(devices, &uid) {
-                if device.is_alive {
-                    return Ok(to_routing_target(device, RoutingTargetSource::Preferred));
-                }
-                // fall through to fallbacks when preferred is unplugged
+                return Ok(to_routing_target(device, RoutingTargetSource::Preferred));
             }
         }
         Err(err @ ResolveError::NotSpecified) => {
@@ -235,12 +229,10 @@ pub fn select_fallback_target(config: &Config, devices: &[OutputDevice]) -> Opti
             continue;
         }
         if let Some(device) = alive_device(devices, fallback_uid) {
-            if device.is_alive {
-                return Some(to_routing_target(
-                    device,
-                    RoutingTargetSource::Fallback { index },
-                ));
-            }
+            return Some(to_routing_target(
+                device,
+                RoutingTargetSource::Fallback { index },
+            ));
         }
     }
 
