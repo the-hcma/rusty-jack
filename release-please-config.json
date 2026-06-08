@@ -3,7 +3,8 @@
     ".": {
       "release-type": "rust",
       "package-name": "rusty-jack",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-labels": ["release-please"]
     }
   }
 }
