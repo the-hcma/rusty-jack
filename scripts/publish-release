@@ -118,7 +118,13 @@ publish_github_release() {
   release_lib_run_release_please github-release "${REPO}"
 
   if ! TAG="$(release_lib_resolve_release_tag "${REPO}" "${VERSION}")"; then
-    echo "error: release-please did not create a release for version ${VERSION}" >&2
+    echo "release-please had no pending release; creating GitHub release via gh fallback..."
+    release_lib_create_github_release_fallback "${REPO}" "${VERSION}"
+    TAG="$(release_lib_resolve_release_tag "${REPO}" "${VERSION}")"
+  fi
+
+  if [[ -z "${TAG}" ]]; then
+    echo "error: could not create GitHub release for version ${VERSION}" >&2
     exit 1
   fi
   ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
@@ -167,14 +173,15 @@ update_homebrew_tap() {
     ARCHIVE_URL="${ARCHIVE_URL}" \
     ARCHIVE_SHA256="${archive_sha256}" \
     >"${tap_dir}/Formula/rusty-jack.rb"
+  if ! head -n1 "${tap_dir}/Formula/rusty-jack.rb" | grep -q '^class RustyJack'; then
+    echo "error: rendered formula does not look like valid Ruby; check make render-homebrew-formula" >&2
+    head -n5 "${tap_dir}/Formula/rusty-jack.rb" >&2
+    exit 1
+  fi
 
   (
     cd "${tap_dir}"
-    git config user.name "$(gh api user --jq .login)"
-    git config user.email "$(gh api user --jq .email // empty)"
-    if [[ -z "$(git config user.email)" ]]; then
-      git config user.email "$(gh api user --jq .id)@users.noreply.github.com"
-    fi
+    release_lib_configure_git_identity
     git checkout -B "${TAP_BRANCH}"
     git add Formula/rusty-jack.rb
     if git diff --cached --quiet; then
@@ -182,7 +189,7 @@ update_homebrew_tap() {
       exit 0
     fi
     git commit -m "rusty-jack ${TAG}"
-    git push --force-with-lease origin "${TAP_BRANCH}"
+    git push --force origin "${TAP_BRANCH}"
   )
 
   rm -rf "${tap_dir}" "${archive_path}"
@@ -196,17 +203,7 @@ update_homebrew_tap() {
 EOF
 )"
 
-  if gh pr view "${TAP_BRANCH}" --repo "${TAP_REPO}" >/dev/null 2>&1; then
-    gh pr edit "${TAP_BRANCH}" --repo "${TAP_REPO}" --title "rusty-jack ${TAG}" --body "${body}"
-  else
-    gh pr create \
-      --repo "${TAP_REPO}" \
-      --base main \
-      --head "${TAP_BRANCH}" \
-      --title "rusty-jack ${TAG}" \
-      --body "${body}"
-  fi
-  gh pr merge "${TAP_BRANCH}" --repo "${TAP_REPO}" --squash --auto --delete-branch
+  release_lib_open_tap_pr "${TAP_REPO}" "${TAP_BRANCH}" "rusty-jack ${TAG}" "${body}"
   echo "Opened tap update PR for ${TAG} (auto-merge enabled)"
 }
 
