@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::hdmi_displayport_volume_control::{
     hdmi_displayport_volume_control_status_for_target, HdmiDisplayPortVolumeControlStatus,
 };
-use crate::launchd::{DaemonLogPaths, DaemonStatus};
+use crate::launchd::{DaemonLogPaths, DaemonStatus, DaemonVersionCheck};
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
 use crate::scalar_webapi_device::{self, ScalarWebApiMacOutputLink};
@@ -48,6 +48,17 @@ pub struct PolicyStatus {
     pub message: String,
 }
 
+/// Daemon-related fields collected for [`build_status`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StatusDaemonContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon: Option<DaemonStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_version: Option<DaemonVersionCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_logs: Option<DaemonLogPaths>,
+}
+
 /// Snapshot returned by `rusty-jack status`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StatusSnapshot {
@@ -65,6 +76,8 @@ pub struct StatusSnapshot {
     pub scalar_webapi_mac_output: Option<ScalarWebApiMacOutputLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_version: Option<DaemonVersionCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_logs: Option<DaemonLogPaths>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,8 +107,7 @@ pub fn build_status(
     config: Option<&Config>,
     config_path: Option<&Path>,
     volume_percent: Option<u8>,
-    daemon: Option<DaemonStatus>,
-    daemon_logs: Option<DaemonLogPaths>,
+    daemon_context: StatusDaemonContext,
     activity: Option<ActivitySnapshot>,
 ) -> StatusSnapshot {
     let policy = evaluate_policy(
@@ -127,8 +139,9 @@ pub fn build_status(
         hdmi_displayport_volume_control,
         scalar_webapi,
         scalar_webapi_mac_output,
-        daemon,
-        daemon_logs,
+        daemon: daemon_context.daemon,
+        daemon_version: daemon_context.daemon_version,
+        daemon_logs: daemon_context.daemon_logs,
         activity,
         binary_version: BinaryVersion::current(),
     }
@@ -286,7 +299,11 @@ fn format_driver_recommended(status: &HdmiDisplayPortVolumeControlStatus) -> Str
         .map_or_else(|| value.into(), |reason| format!("{value} ({reason})"))
 }
 
-fn format_daemon_block(daemon: &DaemonStatus, daemon_logs: Option<&DaemonLogPaths>) -> String {
+fn format_daemon_block(
+    daemon: &DaemonStatus,
+    daemon_version: Option<&DaemonVersionCheck>,
+    daemon_logs: Option<&DaemonLogPaths>,
+) -> String {
     let mut rows: Vec<(&str, String)> = vec![];
     match daemon {
         DaemonStatus::Running {
@@ -350,8 +367,64 @@ fn format_daemon_block(daemon: &DaemonStatus, daemon_logs: Option<&DaemonLogPath
         rows.push(("log", logs.file.clone()));
     }
 
+    if let Some(check) = daemon_version {
+        if let Some(version) = check
+            .running_binary_version
+            .as_ref()
+            .or(check.plist_binary_version.as_ref())
+        {
+            rows.push(("daemon binary", version.display()));
+        }
+        if check.stale {
+            rows.push(("daemon stale", "yes".into()));
+            rows.push(("note", daemon_stale_note(check)));
+        }
+    }
+
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     format_labeled_section("Daemon", "  ", &borrowed)
+}
+
+fn daemon_stale_note(check: &DaemonVersionCheck) -> String {
+    let current = check.cli_version.display();
+    if let Some(running) = check
+        .running_binary_version
+        .as_ref()
+        .filter(|version| !version.matches(&check.cli_version))
+    {
+        return format!(
+            "running daemon is {} but CLI is {}; run `{}`",
+            running.display(),
+            current,
+            check.refresh_command
+        );
+    }
+    if check
+        .plist_binary_path
+        .as_deref()
+        .is_some_and(|path| path != check.cli_binary_path)
+    {
+        return format!(
+            "LaunchAgent points at a different binary than this CLI; run `{}`",
+            check.refresh_command
+        );
+    }
+    if let Some(plist_version) = check
+        .plist_binary_version
+        .as_ref()
+        .filter(|version| !version.matches(&check.cli_version))
+    {
+        return format!(
+            "LaunchAgent binary is {} but CLI is {}; run `{}`",
+            plist_version.display(),
+            current,
+            check.refresh_command
+        );
+    }
+    format!(
+        "daemon is stale; CLI is {}; run `{}`",
+        current, check.refresh_command
+    )
 }
 
 fn format_daemon_logs_block(logs: &DaemonLogPaths) -> String {
@@ -518,7 +591,11 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
         writeln!(
             out,
             "{}",
-            format_daemon_block(daemon, snapshot.daemon_logs.as_ref())
+            format_daemon_block(
+                daemon,
+                snapshot.daemon_version.as_ref(),
+                snapshot.daemon_logs.as_ref(),
+            )
         )?;
     } else if let Some(logs) = &snapshot.daemon_logs {
         writeln!(out)?;
@@ -567,6 +644,14 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+
+    fn empty_daemon_context() -> StatusDaemonContext {
+        StatusDaemonContext {
+            daemon: None,
+            daemon_version: None,
+            daemon_logs: None,
+        }
+    }
 
     fn hdmi_device(active: bool) -> OutputDevice {
         OutputDevice {
@@ -618,8 +703,7 @@ mod tests {
             None,
             None,
             Some(42),
-            None,
-            None,
+            empty_daemon_context(),
             None,
         );
         assert!(!snapshot.policy.configured);
@@ -658,8 +742,7 @@ mod tests {
             Some(&config),
             Some(Path::new("/tmp/config.json")),
             Some(13),
-            None,
-            None,
+            empty_daemon_context(),
             None,
         );
         assert!(snapshot.policy.configured);
@@ -695,8 +778,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
+            empty_daemon_context(),
             None,
         );
         assert!(snapshot.system_default.is_some());
@@ -772,8 +854,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
+            empty_daemon_context(),
             None,
         );
         assert!(!snapshot.binary_version.version.is_empty());
@@ -852,8 +933,7 @@ mod tests {
             Some(&config),
             None,
             None,
-            None,
-            None,
+            empty_daemon_context(),
             None,
         );
         assert_eq!(
@@ -887,6 +967,40 @@ mod tests {
     }
 
     #[test]
+    fn test_format_daemon_block_flags_stale_daemon() {
+        use crate::launchd::DaemonVersionCheck;
+
+        let check = DaemonVersionCheck {
+            cli_binary_path: "/opt/homebrew/bin/rusty-jack".into(),
+            cli_version: BinaryVersion {
+                version: "0.4.2".into(),
+                commit: "newcommit".into(),
+            },
+            plist_binary_path: Some("/opt/homebrew/Cellar/rusty-jack/0.4.1/bin/rusty-jack".into()),
+            plist_binary_version: Some(BinaryVersion {
+                version: "0.4.1".into(),
+                commit: "oldcommit".into(),
+            }),
+            running_binary_version: None,
+            stale: true,
+            refresh_command: crate::launchd::DAEMON_REFRESH_COMMAND,
+        };
+        let block = format_daemon_block(
+            &DaemonStatus::Running {
+                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                plist_path: "/tmp/test.plist".into(),
+                service: "gui/501/com.example.rusty-jack".into(),
+                pid: Some(123),
+            },
+            Some(&check),
+            None,
+        );
+        assert!(block.contains("daemon stale"));
+        assert!(block.contains("rusty-jack upgrade --force"));
+        assert!(block.contains("0.4.1 (commit oldcommit)"));
+    }
+
+    #[test]
     fn test_format_daemon_block_shows_status_flags() {
         fn has_row(block: &str, label: &str, value: &str) -> bool {
             block.lines().any(|line| {
@@ -909,6 +1023,7 @@ mod tests {
                 service: "gui/501/com.example.rusty-jack".into(),
                 pid: Some(123),
             },
+            None,
             Some(&logs),
         );
         assert!(has_row(&running, "installed", "yes"));
@@ -927,6 +1042,7 @@ mod tests {
                     Some("hdmi-1".into()),
                 )),
             },
+            None,
             Some(&logs),
         );
         assert!(has_row(&paused, "installed", "yes"));
@@ -939,6 +1055,7 @@ mod tests {
             &DaemonStatus::NotInstalled {
                 plist_path: "/tmp/test.plist".into(),
             },
+            None,
             Some(&logs),
         );
         assert!(has_row(&not_installed, "installed", "no"));
@@ -1053,8 +1170,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
+            empty_daemon_context(),
             None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
@@ -1073,15 +1189,18 @@ mod tests {
             None,
             None,
             Some(13),
-            Some(DaemonStatus::Running {
-                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
-                plist_path: "/tmp/test.plist".into(),
-                service: "gui/501/com.example.rusty-jack".into(),
-                pid: Some(123),
-            }),
-            Some(crate::launchd::DaemonLogPaths {
-                file: "/tmp/rusty-jack.log".into(),
-            }),
+            StatusDaemonContext {
+                daemon: Some(DaemonStatus::Running {
+                    label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                    plist_path: "/tmp/test.plist".into(),
+                    service: "gui/501/com.example.rusty-jack".into(),
+                    pid: Some(123),
+                }),
+                daemon_version: None,
+                daemon_logs: Some(crate::launchd::DaemonLogPaths {
+                    file: "/tmp/rusty-jack.log".into(),
+                }),
+            },
             None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();

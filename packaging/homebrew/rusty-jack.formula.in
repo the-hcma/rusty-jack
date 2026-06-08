@@ -22,17 +22,32 @@ class RustyJack < Formula
     safe_system bin/"rusty-jack", "disable", "--json"
   end
 
+  def post_install
+    ohai "Refresh the LaunchAgent after every install or upgrade"
+    puts "  rusty-jack upgrade --force"
+    puts
+    puts "Then verify with:"
+    puts "  rusty-jack status"
+    puts
+    puts "First-time setup in each macOS user account:"
+    puts "  rusty-jack install"
+  end
+
   def caveats
     <<~EOS
       After installing the formula, set up config and the per-user LaunchAgent:
         rusty-jack install
 
+      After every `brew install` or `brew upgrade`, refresh the LaunchAgent:
+        rusty-jack upgrade --force
+
       Check routing, daemon state, activity polling, and log path:
         rusty-jack status
 
+      `status` flags a stale daemon when the running LaunchAgent binary does not
+      match the installed CLI version/commit.
+
       Daemon logs: ~/Library/Logs/rusty-jack.log (one file; rotated by the app).
-      After upgrading from older releases, refresh the LaunchAgent once:
-        rusty-jack upgrade --force
 
       Each macOS user who wants auto-routing should run `rusty-jack install`
       in their own account (Homebrew is shared; the LaunchAgent is per-user).

@@ -2,7 +2,7 @@
 
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
-use crate::status::{build_status, print_json, print_text};
+use crate::status::{build_status, print_json, print_text, StatusDaemonContext};
 use anyhow::Result;
 use std::path::Path;
 
@@ -24,6 +24,11 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         .map(|d| d.uid.as_str());
     let volume_percent = active_uid.and_then(|uid| hal.output_volume_percent(uid));
     let daemon = crate::launchd::daemon_status().ok();
+    let running_pid = daemon.as_ref().and_then(|status| match status {
+        crate::launchd::DaemonStatus::Running { pid, .. } => *pid,
+        _ => None,
+    });
+    let daemon_version = crate::launchd::daemon_version_check(running_pid).ok();
     let daemon_logs = crate::launchd::daemon_log_paths().ok();
     let activity = crate::state::load_activity_snapshot().ok().flatten();
     let snapshot = build_status(
@@ -31,8 +36,11 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         config.as_ref(),
         resolved.as_deref(),
         volume_percent,
-        daemon,
-        daemon_logs,
+        StatusDaemonContext {
+            daemon,
+            daemon_version,
+            daemon_logs,
+        },
         activity,
     );
 
