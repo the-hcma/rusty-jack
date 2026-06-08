@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.5.0...rusty-jack-v0.6.0) (2026-06-08)
+
+
+### Features
+
+* flag stale daemon in status and brew post_install guidance ([#98](https://github.com/the-hcma/rusty-jack/issues/98)) ([bd18b89](https://github.com/the-hcma/rusty-jack/commit/bd18b89e93890957cdb141f63c54f536b6ef767d))
+
 ## [0.5.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.4.1...rusty-jack-v0.5.0) (2026-06-08)
 
 
