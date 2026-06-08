@@ -5,6 +5,7 @@ use crate::config::{load_config, resolve_config_path};
 use crate::coreaudio::AudioHal;
 use crate::device_select::resolve_device_selector;
 use crate::logging::{init_daemon, DaemonLoggingOptions};
+use crate::version::BinaryVersion;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -57,9 +58,12 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
         }
     }
 
+    let binary_version = BinaryVersion::current();
     tracing::info!(
         target: "daemon",
-        "[daemon] started poll={}ms activity_poll={}ms",
+        "[daemon] started version={} commit={} poll={}ms activity_poll={}ms",
+        binary_version.version,
+        binary_version.commit,
         config.poll_interval_ms,
         config.activity_poll_interval_ms
     );
