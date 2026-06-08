@@ -15,6 +15,7 @@ REPO="${RUSTY_JACK_REPO:-the-hcma/rusty-jack}"
 TAP_REPO="${RUSTY_JACK_TAP_REPO:-the-hcma/homebrew-tap}"
 TAP_ONLY=0
 DRY_RUN=0
+TAP_PR_URL=""
 
 usage() {
   cat <<'EOF'
@@ -28,9 +29,10 @@ Options:
   -h, --help   Show this help.
 
 Environment:
-  GH_TOKEN              GitHub token (defaults to `gh auth token`)
-  RUSTY_JACK_REPO       Source repository (default: the-hcma/rusty-jack)
-  RUSTY_JACK_TAP_REPO   Homebrew tap repository (default: the-hcma/homebrew-tap)
+  GH_TOKEN                         GitHub token (defaults to `gh auth token`)
+  RUSTY_JACK_REPO                  Source repository (default: the-hcma/rusty-jack)
+  RUSTY_JACK_TAP_REPO              Homebrew tap repository (default: the-hcma/homebrew-tap)
+  RUSTY_JACK_TAP_MERGE_TIMEOUT_SECS  Max seconds to wait for tap PR merge (default: 1800)
 
 Requires: gh, curl, git, make, and npx (Node.js) for release-please.
 
@@ -151,6 +153,7 @@ update_homebrew_tap() {
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "[dry-run] would download archive for rusty-jack-v${VERSION} or v${VERSION}"
     echo "[dry-run] would render Formula/rusty-jack.rb and open tap PR ${TAP_BRANCH}"
+    echo "[dry-run] would wait for tap PR checks and merge before finishing"
     return 0
   fi
 
@@ -181,18 +184,25 @@ update_homebrew_tap() {
     exit 1
   fi
 
+  local unchanged_marker="${tap_dir}/.formula-unchanged"
   (
     cd "${tap_dir}"
     release_lib_configure_git_identity
     git checkout -B "${TAP_BRANCH}"
     git add Formula/rusty-jack.rb
     if git diff --cached --quiet; then
-      echo "Homebrew formula already current for ${TAG}"
+      touch "${unchanged_marker}"
       exit 0
     fi
     git commit -m "rusty-jack ${TAG}"
     git push --force origin "${TAP_BRANCH}"
   )
+
+  if [[ -f "${unchanged_marker}" ]]; then
+    echo "Homebrew formula already current for ${TAG}"
+    rm -rf "${tap_dir}" "${archive_path}"
+    return 0
+  fi
 
   rm -rf "${tap_dir}" "${archive_path}"
 
@@ -205,8 +215,21 @@ update_homebrew_tap() {
 EOF
 )"
 
-  release_lib_open_tap_pr "${TAP_REPO}" "${TAP_BRANCH}" "rusty-jack ${TAG}" "${body}"
+  TAP_PR_URL="$(release_lib_open_tap_pr "${TAP_REPO}" "${TAP_BRANCH}" "rusty-jack ${TAG}" "${body}")"
   echo "Opened tap update PR for ${TAG} (auto-merge enabled)"
+  release_lib_wait_for_tap_pr_merge "${TAP_REPO}" "${TAP_PR_URL}"
+}
+
+publish_release_print_last_line() {
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "[dry-run] tap PR URL would be printed here after merge"
+    return 0
+  fi
+  if [[ -n "${TAP_PR_URL}" ]]; then
+    echo "${TAP_PR_URL}"
+    return 0
+  fi
+  echo "Homebrew formula already current; no tap PR needed."
 }
 
 if [[ "${TAP_ONLY}" -eq 0 ]]; then
@@ -216,3 +239,4 @@ fi
 update_homebrew_tap
 
 echo "Done."
+publish_release_print_last_line

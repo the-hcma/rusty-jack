@@ -128,6 +128,24 @@ release_lib_find_unpublished_release() {
   printf '%s|%s|%s' "${version}" "${pr_number}" "${pr_url}"
 }
 
+# Return URL of the open release-please PR, or empty when none exists.
+release_lib_open_release_pr_url() {
+  local repo="$1"
+  local pr_url
+
+  pr_url="$(gh pr list --repo "${repo}" --state open --label release-please \
+    --json url --jq '.[0].url // empty')"
+  if [[ -n "${pr_url}" ]]; then
+    echo "${pr_url}"
+    return 0
+  fi
+
+  pr_url="$(gh pr list --repo "${repo}" --state open \
+    --search "release rusty-jack in:title" \
+    --json url --jq '.[0].url // empty')"
+  echo "${pr_url}"
+}
+
 release_lib_publish_pending_release_if_needed() {
   local repo="$1"
   local dry_run="${2:-0}"
@@ -215,14 +233,66 @@ release_lib_open_tap_pr() {
   local branch="$2"
   local title="$3"
   local body="$4"
-  local pr_number
+  local pr_number pr_url
 
   pr_number="$(gh pr list --repo "${tap_repo}" --head "${branch}" --state open --json number \
     --jq '.[0].number // empty')"
   if [[ -n "${pr_number}" ]]; then
-    gh pr edit "${pr_number}" --repo "${tap_repo}" --title "${title}" --body "${body}"
+    gh pr edit "${pr_number}" --repo "${tap_repo}" --title "${title}" --body "${body}" >/dev/null
   else
-    gh pr create --repo "${tap_repo}" --base main --head "${branch}" --title "${title}" --body "${body}"
+    gh pr create --repo "${tap_repo}" --base main --head "${branch}" --title "${title}" --body "${body}" >/dev/null
+    pr_number="$(gh pr list --repo "${tap_repo}" --head "${branch}" --state open --json number \
+      --jq '.[0].number // empty')"
   fi
-  gh pr merge "${branch}" --repo "${tap_repo}" --squash --auto --delete-branch
+  if [[ -z "${pr_number}" ]]; then
+    echo "error: could not find open tap PR for branch ${branch}" >&2
+    return 1
+  fi
+  gh pr merge "${pr_number}" --repo "${tap_repo}" --squash --auto --delete-branch
+  pr_url="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json url --jq .url)"
+  echo "${pr_url}"
+}
+
+# Block until the tap PR merges (after CI passes and auto-merge runs).
+release_lib_wait_for_tap_pr_merge() {
+  local tap_repo="$1"
+  local pr_url="$2"
+  local pr_number state interval=15
+  local timeout_secs="${RUSTY_JACK_TAP_MERGE_TIMEOUT_SECS:-1800}"
+  local start
+
+  if [[ -z "${pr_url}" ]]; then
+    return 0
+  fi
+
+  pr_number="$(gh pr view "${pr_url}" --repo "${tap_repo}" --json number --jq .number)"
+  state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state)"
+  if [[ "${state}" == "MERGED" ]]; then
+    echo "Tap PR already merged."
+    return 0
+  fi
+
+  echo "Watching tap PR checks (${pr_url})..."
+  if ! gh pr checks "${pr_number}" --repo "${tap_repo}" --watch --fail-fast; then
+    echo "error: tap PR checks failed: ${pr_url}" >&2
+    return 1
+  fi
+
+  echo "Waiting for tap PR to merge..."
+  start="${SECONDS}"
+  while (( SECONDS - start < timeout_secs )); do
+    state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state)"
+    if [[ "${state}" == "MERGED" ]]; then
+      echo "Tap PR merged."
+      return 0
+    fi
+    if [[ "${state}" != "OPEN" ]]; then
+      echo "error: tap PR is ${state}, expected MERGED (${pr_url})" >&2
+      return 1
+    fi
+    sleep "${interval}"
+  done
+
+  echo "error: timed out after ${timeout_secs}s waiting for tap PR merge: ${pr_url}" >&2
+  return 1
 }
