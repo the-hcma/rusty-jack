@@ -21,13 +21,13 @@ Then choose the preferred output, optionally choose an explicit fallback, and st
 
 ```bash
 rusty-jack list
-rusty-jack install   # pick preferred + optional fallback outputs; starts the daemon
+rusty-jack install   # pick outputs; may discover ScalarWebAPI speakers; starts the daemon
 rusty-jack status    # includes daemon log paths
 ```
 
 If `~/.config/rusty-jack/config.json` already exists, `install` preserves it and migrates it in place. It updates readable device `name` labels for known UIDs and offers additive choices, without dropping custom settings such as `scalar_webapi_device`.
 
-For **HDMI/DP volume keys**, Rusty Jack offers its native audio driver when a connected HDMI/DisplayPort output is present. If [eqMac](https://eqmac.app) is already installed, Rusty Jack can use it as a compatibility fallback. For **ScalarWebAPI-compatible speakers**, configure `scalar_webapi_device` so Rusty Jack can wake the device when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#scalar_webapi_device).
+For **HDMI/DP volume keys**, Rusty Jack offers its native audio driver when a connected HDMI/DisplayPort output is present. If [eqMac](https://eqmac.app) is already installed, Rusty Jack can use it as a compatibility fallback. For **ScalarWebAPI-compatible speakers**, interactive `install` can scan the LAN, propose discovered network speakers (not TVs), and write `scalar_webapi_device` so Rusty Jack can wake the speaker when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#scalarwebapi-speaker-wake-interactive-install).
 
 Full command reference: [docs/USAGE.md](./docs/USAGE.md). Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
@@ -188,7 +188,7 @@ Minimal example:
 
 ScalarWebAPI device example: [`config.example.scalar-webapi-device.json`](./config.example.scalar-webapi-device.json). Other devices should work if they expose the same ScalarWebAPI service; Rusty Jack discovers the advertised endpoint and uses `system.getPowerStatus` / `system.setPowerStatus`.
 
-Expected compatible Sony devices include Sony `SRS-ZR5` (the model this integration has been tested with), `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`. This list is not exhaustive; compatibility depends on the device advertising a ScalarWebAPI endpoint on the local network.
+Example ScalarWebAPI-compatible speakers tested with Rusty Jack include `SRS-ZR5`, `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`. This list is not exhaustive; compatibility depends on the device advertising a ScalarWebAPI endpoint on the local network. Rusty Jack targets network speakers for wake-on-activity, not TVs.
 
 ### ScalarWebAPI references
 
@@ -204,7 +204,7 @@ ScalarWebAPI support and method availability vary by device and firmware. The mo
 - **SSDP search target**: `urn:schemas-sony-com:service:ScalarWebAPI:1`
 - **Device description XML** (from SSDP `LOCATION:`) typically includes:
   - `X_ScalarWebAPI_BaseURL` (for example `http://<ip>:10000/sony`)
-  - `X_ScalarWebAPI_ServiceList` (service groups like `system`, `audio`, `avContent`, ...)
+  - `X_ScalarWebAPI_ServiceList` (service groups like `system`, `audio`, ...)
 - **SCPD / action list**: the UPnP service description may reference `ScalarWebApiSCPD.xml` which lists supported actions for that device/firmware.
 
 ---
@@ -252,7 +252,7 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain. Structured daemon logs go to `~/Library/Logs/rusty-jack.log`.
+`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. On first-time interactive setup it can also scan the LAN for ScalarWebAPI network speakers, propose a discovered device, ask how that speaker is connected to this Mac (HDMI/DisplayPort, headphone/line-out, USB, or another output), and configure wake triggers. TV-class ScalarWebAPI endpoints such as Bravia displays are skipped during that install scan. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain. Structured daemon logs go to `~/Library/Logs/rusty-jack.log`. See [docs/USAGE.md](./docs/USAGE.md#scalarwebapi-speaker-wake-interactive-install) for the full install flow.
 
 Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. If `picker` paused the daemon after a manual non-preferred selection, interactive `resume` asks before switching back to the configured output. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `rusty-jack uninstall --only-driver` to remove only the native audio driver, or `disable` for daemon-only removal that always keeps config and logs.
 

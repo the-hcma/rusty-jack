@@ -6,6 +6,7 @@ use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
     append_scalar_webapi_to_config_json, format_scalar_webapi_triggers_for_display,
     maybe_prompt_scalar_webapi_wake_triggers, prompt_add_scalar_webapi_device,
+    prompt_scalar_webapi_host_selection,
 };
 use crate::RustyJackError;
 use dialoguer::console::style;
@@ -145,17 +146,28 @@ fn reconfigure_or_update_existing_config(
 
     if interactive {
         println!("{}", style("Current config").cyan());
+        println!(
+            "  {} {}",
+            style("path:").dim(),
+            style(path_display(path)?).green()
+        );
         print_existing_config_summary(&value, devices);
 
         if Confirm::new()
             .with_prompt(q(concat!(
                 "Reconfigure this existing config?\n",
-                "If you say yes, Rusty Jack will re-ask the key choices and default to the current values."
+                "If you say yes, Rusty Jack will save a backup, then re-ask the key choices and default to the current values."
             )))
             .default(false)
             .interact()
             .map_err(|err| RustyJackError::Config(format!("reconfigure prompt failed: {err}")))?
         {
+            let backup_path = backup_config_for_reconfigure(path, &raw)?;
+            println!(
+                "  {} {}",
+                style("backup:").dim(),
+                style(path_display(&backup_path)?).green()
+            );
             return reconfigure_existing_config(path, hal, devices, value);
         }
     }
@@ -202,7 +214,7 @@ fn reconfigure_existing_config(
             (ReconfigureSection::Fallback, "fallback output"),
             (
                 ReconfigureSection::ScalarWebApi,
-                "ScalarWebAPI (Sony speaker wake)",
+                "ScalarWebAPI speaker wake",
             ),
         ];
         let defaults = [false, false, false, true];
@@ -319,36 +331,29 @@ fn reconfigure_existing_config(
                     RustyJackError::Config(format!("ScalarWebAPI reconfigure prompt failed: {err}"))
                 })?
         {
-            // Host.
             let current_host = updated
                 .pointer("/scalar_webapi_device/host")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            println!();
-            println!("{}", style("ScalarWebAPI").cyan());
-            println!(
-                "{}",
-                style("Enter the device host (IP address or hostname). Example: 192.168.1.42")
-                    .dim()
-            );
-            let host: String = dialoguer::Input::new()
-                .with_prompt(style("Device host").cyan().to_string())
-                .with_initial_text(current_host.clone())
-                .validate_with(|input: &String| {
-                    if input.trim().is_empty() {
-                        Err("host is required")
-                    } else {
-                        Ok(())
-                    }
-                })
-                .interact_text()
-                .map_err(|err| {
-                    RustyJackError::Config(format!("ScalarWebAPI host prompt failed: {err}"))
-                })?;
-            if host.trim() != current_host.trim() {
-                updated["scalar_webapi_device"]["host"] = serde_json::json!(host.trim());
+                .map(str::to_string);
+            let current_model = updated
+                .pointer("/scalar_webapi_device/model")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let Some((host, model)) = prompt_scalar_webapi_host_selection(
+                current_host.as_deref(),
+                current_model.as_deref(),
+                false,
+            )?
+            else {
+                continue;
+            };
+            if current_host.as_deref() != Some(host.as_str()) {
+                updated["scalar_webapi_device"]["host"] = serde_json::json!(host);
                 changes.push("updated ScalarWebAPI host".into());
+            }
+            if current_model.as_deref() != Some(model.as_str()) {
+                updated["scalar_webapi_device"]["model"] = serde_json::json!(model);
+                changes.push("updated ScalarWebAPI model".into());
             }
 
             // Mac output selector (avoid asking twice when it's identical to preferred).
@@ -1235,6 +1240,24 @@ fn path_display(path: &Path) -> Result<String, RustyJackError> {
         .ok_or_else(|| RustyJackError::Config("config path is not valid UTF-8".into()))
 }
 
+fn backup_config_for_reconfigure(path: &Path, raw: &str) -> Result<PathBuf, RustyJackError> {
+    let parent = path.parent().ok_or_else(|| {
+        RustyJackError::Config(format!("config path has no parent: {}", path.display()))
+    })?;
+    let backup_dir = parent.join("config-backups");
+    std::fs::create_dir_all(&backup_dir).map_err(RustyJackError::Io)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| RustyJackError::Config(format!("system clock before UNIX epoch: {err}")))?;
+    let backup_path = backup_dir.join(format!(
+        "config-{}.{:09}.json",
+        timestamp.as_secs(),
+        timestamp.subsec_nanos()
+    ));
+    std::fs::write(&backup_path, raw).map_err(RustyJackError::Io)?;
+    Ok(backup_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1252,6 +1275,25 @@ mod tests {
             is_default: active,
             is_active: active,
         }
+    }
+
+    #[test]
+    fn test_backup_config_for_reconfigure_writes_timestamped_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(&config_path, r#"{"version":1}"#).unwrap();
+
+        let backup_path = backup_config_for_reconfigure(&config_path, r#"{"version":1}"#).unwrap();
+
+        assert!(backup_path.starts_with(dir.path().join("config-backups")));
+        assert!(backup_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("config-") && name.ends_with(".json")));
+        assert_eq!(
+            std::fs::read_to_string(&backup_path).unwrap(),
+            r#"{"version":1}"#
+        );
     }
 
     #[test]
