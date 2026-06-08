@@ -22,7 +22,7 @@ Then choose the preferred output, optionally choose an explicit fallback, and st
 ```bash
 rusty-jack list
 rusty-jack install   # pick preferred + optional fallback outputs; starts the daemon
-rusty-jack status
+rusty-jack status    # includes daemon log paths
 ```
 
 If `~/.config/rusty-jack/config.json` already exists, `install` preserves it and migrates it in place. It updates readable device `name` labels for known UIDs and offers additive choices, without dropping custom settings such as `scalar_webapi_device`.
