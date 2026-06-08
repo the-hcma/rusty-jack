@@ -162,8 +162,6 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.log"
 
 Rusty Jack uses ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
 
-`rusty-jack status` does not run LAN discovery; it only uses cached/configured endpoint details. Refresh cache with `rusty-jack list --discover` before troubleshooting stale host/model metadata.
-
 ### Verify ScalarWebAPI on your LAN (UPnP + JSON-RPC)
 
 ScalarWebAPI “documentation” is served by the device itself. The reliable way to find the correct endpoints is UPnP/SSDP discovery:

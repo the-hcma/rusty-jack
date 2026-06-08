@@ -4,13 +4,8 @@ use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
 use crate::list_fmt;
 use crate::output_device::filter_hdmi_devices;
-use crate::scalar_webapi_device::{
-    attach_scalar_webapi_mac_output, discover_scalar_webapi_devices_on_lan,
-    refresh_scalar_webapi_discovery_cache, should_show_distinct_speaker_model,
-    DiscoveredScalarWebApiDevice,
-};
+use crate::scalar_webapi_device::attach_scalar_webapi_mac_output;
 use anyhow::Result;
-use serde::Serialize;
 use std::path::Path;
 
 /// List output devices, optionally filtered to HDMI-class transports.
@@ -18,7 +13,6 @@ pub fn run(
     hal: &dyn AudioHal,
     hdmi_only: bool,
     json: bool,
-    discover: bool,
     config_path: Option<&Path>,
 ) -> Result<()> {
     let resolved = resolve_config_path(config_path);
@@ -36,71 +30,10 @@ pub fn run(
         list.devices = filter_hdmi_devices(&list.devices);
     }
 
-    let mut scalar_webapi_discovered: Option<Vec<DiscoveredScalarWebApiDevice>> = None;
-    let mut configured_discovery: Option<DiscoveredScalarWebApiDevice> = None;
-    let mut configured_model: Option<String> = None;
-    let mut configured_host: Option<String> = None;
-    if discover {
-        eprintln!("Discovering ScalarWebAPI speakers on your local network...");
-        let timeout_ms = config
-            .as_ref()
-            .and_then(|cfg| cfg.scalar_webapi_device.as_ref())
-            .map(|api| api.request_timeout_ms)
-            .unwrap_or(3_000);
-        let mut discovered = discover_scalar_webapi_devices_on_lan(timeout_ms)?;
-        if let Some(api) = config
-            .as_ref()
-            .and_then(|cfg| cfg.scalar_webapi_device.as_ref())
-            .filter(|api| api.enabled)
-        {
-            configured_model = Some(api.model.clone());
-            configured_host = api.host.clone();
-            configured_discovery = refresh_scalar_webapi_discovery_cache(api)?;
-            if let Some(configured_hit) = configured_discovery.as_ref() {
-                if !discovered.iter().any(|hit| hit.host == configured_hit.host) {
-                    discovered.push(configured_hit.clone());
-                }
-            }
-        }
-        scalar_webapi_discovered = Some(discovered);
-    }
-
     if json {
-        if let Some(discovered) = scalar_webapi_discovered {
-            #[derive(Serialize)]
-            struct ListJsonOutput {
-                #[serde(flatten)]
-                list: crate::system_default::DeviceList,
-                scalar_webapi_discovered: Vec<DiscoveredScalarWebApiDevice>,
-            }
-            let value = ListJsonOutput {
-                list,
-                scalar_webapi_discovered: discovered,
-            };
-            println!("{}", serde_json::to_string_pretty(&value)?);
-        } else {
-            list_fmt::print_json(&list)?;
-        }
+        list_fmt::print_json(&list)?;
     } else {
         list_fmt::print_table(&list, hdmi_only)?;
-        if let Some(discovered) = scalar_webapi_discovered.as_ref() {
-            let configured_hardware_model = configured_discovery.as_ref().and_then(|hit| {
-                let hardware = hit.model.as_deref()?;
-                let show = configured_model.as_deref().is_none_or(|config_model| {
-                    should_show_distinct_speaker_model(config_model, hardware)
-                });
-                show.then_some(hardware)
-            });
-            println!();
-            println!(
-                "{}",
-                list_fmt::format_scalar_webapi_discovery_footer(
-                    discovered.len(),
-                    configured_host.as_deref(),
-                    configured_hardware_model,
-                )
-            );
-        }
     }
 
     Ok(())
@@ -148,6 +81,6 @@ mod tests {
     #[test]
     fn test_run_json_does_not_panic() {
         let hal = MockHal::new(fixture_devices());
-        run(&hal, false, true, false, None).unwrap();
+        run(&hal, false, true, None).unwrap();
     }
 }
