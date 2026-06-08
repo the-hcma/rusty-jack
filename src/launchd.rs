@@ -41,6 +41,8 @@ pub enum UpgradeResult {
         binary_version: BinaryVersion,
         previous_binary_path: Option<String>,
         previous_binary_version: Option<BinaryVersion>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        previous_running_daemon_version: Option<BinaryVersion>,
         was_loaded: bool,
         resumed_after_upgrade: bool,
     },
@@ -352,6 +354,7 @@ struct LoadDaemonResult {
     binary_version: BinaryVersion,
     previous_binary_path: Option<String>,
     previous_binary_version: Option<BinaryVersion>,
+    previous_running_daemon_version: Option<BinaryVersion>,
     was_loaded: bool,
     had_plist: bool,
     changed: bool,
@@ -383,10 +386,13 @@ fn write_and_load_daemon(
     let previous_binary_path = existing_plist
         .as_deref()
         .and_then(launch_agent_binary_path_from_plist);
-    let previous_binary_version = existing_plist
-        .as_deref()
-        .and_then(daemon_version_from_plist)
-        .or_else(|| previous_binary_version_from_env_or_path(previous_binary_path.as_deref()));
+    let (previous_binary_version, previous_running_daemon_version) =
+        previous_daemon_versions_before_upgrade(
+            &domain,
+            was_loaded,
+            existing_plist.as_deref(),
+            previous_binary_path.as_deref(),
+        );
     let binary_version = BinaryVersion::current();
     let plist = render_launch_agent_plist(&binary_path, &home_display, &binary_version);
     let plist_display = plist_path_display(&plist_path)?;
@@ -409,6 +415,7 @@ fn write_and_load_daemon(
             binary_version,
             previous_binary_path,
             previous_binary_version,
+            previous_running_daemon_version,
             was_loaded,
             had_plist,
             changed: false,
@@ -454,6 +461,7 @@ fn write_and_load_daemon(
         binary_version,
         previous_binary_path,
         previous_binary_version,
+        previous_running_daemon_version,
         was_loaded,
         had_plist,
         changed: true,
@@ -676,6 +684,7 @@ pub fn upgrade_daemon(force_reload: bool) -> Result<UpgradeResult, RustyJackErro
             binary_version: result.binary_version,
             previous_binary_path: result.previous_binary_path,
             previous_binary_version: result.previous_binary_version,
+            previous_running_daemon_version: result.previous_running_daemon_version,
             was_loaded: result.was_loaded,
             resumed_after_upgrade: result.resumed_after_upgrade,
         })
@@ -782,6 +791,28 @@ fn parse_launchctl_pid(output: &str) -> Option<u32> {
             .strip_prefix("pid = ")
             .and_then(|value| value.parse::<u32>().ok())
     })
+}
+
+fn running_daemon_pid(domain: &str) -> Option<u32> {
+    let output = launchctl_print_service(domain, LAUNCH_AGENT_LABEL).ok()??;
+    parse_launchctl_pid(&output)
+}
+
+fn previous_daemon_versions_before_upgrade(
+    domain: &str,
+    was_loaded: bool,
+    existing_plist: Option<&str>,
+    previous_binary_path: Option<&str>,
+) -> (Option<BinaryVersion>, Option<BinaryVersion>) {
+    let previous_plist_version = existing_plist.and_then(daemon_version_from_plist);
+    let previous_running_daemon_version = if was_loaded {
+        running_daemon_pid(domain).and_then(daemon_version_from_process_env)
+    } else {
+        None
+    };
+    let previous_binary_version = previous_plist_version
+        .or_else(|| previous_binary_version_from_env_or_path(previous_binary_path));
+    (previous_binary_version, previous_running_daemon_version)
 }
 
 /// Stop the daemon and prevent launchd from restarting it (`pause`). Keeps the plist installed.
@@ -928,14 +959,26 @@ pub fn print_upgrade_result(result: &UpgradeResult) {
             binary_version,
             previous_binary_path,
             previous_binary_version,
+            previous_running_daemon_version,
             was_loaded,
             resumed_after_upgrade,
         } => {
             println!("Upgraded rusty-jack daemon LaunchAgent ({label})");
-            println!(
-                "  before:     {}",
-                version_display(previous_binary_version.as_ref())
-            );
+            if *was_loaded {
+                println!(
+                    "  daemon before: {}",
+                    version_display(previous_running_daemon_version.as_ref())
+                );
+            }
+            if let Some(configured) = previous_binary_version.as_ref() {
+                if !*was_loaded {
+                    println!("  before:     {}", configured.display());
+                } else if previous_running_daemon_version.as_ref() != Some(configured) {
+                    println!("  plist before:  {}", configured.display());
+                }
+            } else if !*was_loaded {
+                println!("  before:     {}", version_display(None));
+            }
             if let Some(path) = previous_binary_path {
                 println!("  old binary: {path}");
             }
@@ -1221,6 +1264,10 @@ mod tests {
             previous_binary_path: Some("/tmp/old-rusty-jack".into()),
             previous_binary_version: Some(BinaryVersion {
                 version: "0.1.0".into(),
+                commit: "plist1234".into(),
+            }),
+            previous_running_daemon_version: Some(BinaryVersion {
+                version: "0.1.0".into(),
                 commit: "old1234".into(),
             }),
             was_loaded: true,
@@ -1229,6 +1276,7 @@ mod tests {
         .unwrap();
         assert!(json.contains("\"status\":\"upgraded\""));
         assert!(json.contains("\"resumed_after_upgrade\":true"));
+        assert!(json.contains("\"previous_running_daemon_version\""));
     }
 
     #[test]
