@@ -114,13 +114,28 @@ test: check-cargo
 uninstall: check-cargo
 	-@command -v rusty-jack >/dev/null 2>&1 && rusty-jack uninstall || true
 	-@$(CARGO) uninstall rusty-jack 2>/dev/null || true
-	@if [ -f "$(INSTALLED_BIN)" ]; then \
-		echo "Removing $(INSTALLED_BIN)"; \
-		rm -f "$(INSTALLED_BIN)"; \
-	fi
-	@if [ -d "$(INSTALL_SHARE_DIR)" ]; then \
-		echo "Removing $(INSTALL_SHARE_DIR)"; \
-		rm -rf "$(INSTALL_SHARE_DIR)"; \
+	@if [ -f "$(INSTALLED_BIN)" ] || [ -d "$(INSTALL_SHARE_DIR)" ]; then \
+		if [ "$(YES)" != "1" ]; then \
+			if [ ! -t 0 ]; then \
+				echo "Refusing to remove installed files without confirmation."; \
+				echo "Re-run with: make uninstall YES=1"; \
+				exit 1; \
+			fi; \
+			echo "The following will be removed:"; \
+			[ -f "$(INSTALLED_BIN)" ] && echo "  $(INSTALLED_BIN)"; \
+			[ -d "$(INSTALL_SHARE_DIR)" ] && echo "  $(INSTALL_SHARE_DIR)"; \
+			printf "Continue? [y/N] "; \
+			read -r confirm; \
+			case "$$confirm" in y|Y|yes|YES) ;; *) echo "Uninstall cancelled."; exit 0;; esac; \
+		fi; \
+		if [ -f "$(INSTALLED_BIN)" ]; then \
+			echo "Removing $(INSTALLED_BIN)"; \
+			rm -f "$(INSTALLED_BIN)"; \
+		fi; \
+		if [ -d "$(INSTALL_SHARE_DIR)" ]; then \
+			echo "Removing $(INSTALL_SHARE_DIR)"; \
+			rm -rf "$(INSTALL_SHARE_DIR)"; \
+		fi; \
 	fi
 
 universal: check-cargo
