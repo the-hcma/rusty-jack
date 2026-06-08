@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.3...rusty-jack-v0.7.0) (2026-06-08)
+
+
+### Features
+
+* log daemon version on startup ([#111](https://github.com/the-hcma/rusty-jack/issues/111)) ([8a55726](https://github.com/the-hcma/rusty-jack/commit/8a55726fa549cf4699fd8751b1eccd38407add95))
+
+
+### Bug Fixes
+
+* print PR merged line once at end of publish-release ([#110](https://github.com/the-hcma/rusty-jack/issues/110)) ([275715d](https://github.com/the-hcma/rusty-jack/commit/275715deadc36ab544eff09c3994485dbf01daef))
+
 ## [0.6.3](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.2...rusty-jack-v0.6.3) (2026-06-08)
 
 
