@@ -592,6 +592,7 @@ mod tests {
             also_set_system_output: true,
             volume: None,
             scalar_webapi_device: None,
+            ..Default::default()
         };
         assert_eq!(
             preferred_uid_from_config(Some(&config), &devices).as_deref(),
@@ -676,6 +677,7 @@ mod tests {
             also_set_system_output: true,
             volume: Some(13),
             scalar_webapi_device: None,
+            ..Default::default()
         };
         assert_eq!(
             volume_for_preferred_pick(Some(&config), &devices, "hdmi-1"),

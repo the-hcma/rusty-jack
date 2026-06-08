@@ -13,10 +13,6 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
-    <key>StandardOutPath</key>
-    <string>@HOME@/Library/Logs/rusty-jack.stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>@HOME@/Library/Logs/rusty-jack.stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>RUST_LOG</key>

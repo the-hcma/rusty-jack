@@ -351,14 +351,19 @@ fn ensure_startup_volume(
         let result = hal.set_output_volume(&target.uid, volume)?;
         if !result.verified {
             if let Some(actual) = result.actual {
-                eprintln!(
-                    "warning: startup volume target {}% but read back {}% after {} attempts",
-                    result.target, actual, result.attempts
+                tracing::warn!(
+                    target: "daemon",
+                    "[route] startup volume target={}% read_back={}% attempts={}",
+                    result.target,
+                    actual,
+                    result.attempts
                 );
             } else {
-                eprintln!(
-                    "warning: could not verify startup volume {}% after {} attempts",
-                    result.target, result.attempts
+                tracing::warn!(
+                    target: "daemon",
+                    "[route] could not verify startup volume target={}% attempts={}",
+                    result.target,
+                    result.attempts
                 );
             }
         }
@@ -377,7 +382,7 @@ fn switch_daemon_target(
 ) -> Result<ApplyResult, RustyJackError> {
     let volume_control = ensure_volume_control(&list.devices, hdmi_uid)?;
     for line in format_ensure_messages(volume_control) {
-        eprintln!("{line}");
+        log_volume_control_line(&line);
     }
 
     remember_active_non_preferred(hal, &list.devices, preferred_uid, hdmi_uid)?;
@@ -422,7 +427,7 @@ fn ensure_hdmi_displayport_volume_control_for_daemon_target(
         ));
     if should_log {
         for line in format_ensure_messages(volume_control) {
-            eprintln!("{line}");
+            log_volume_control_line(&line);
         }
     }
     Ok(())
@@ -465,7 +470,7 @@ fn recover_hdmi_displayport_volume_control_for_daemon_target(
             ));
     if should_log {
         for line in format_ensure_messages(volume_control) {
-            eprintln!("{line}");
+            log_volume_control_line(&line);
         }
     }
 
@@ -508,18 +513,21 @@ fn scalar_webapi_device_checked_target_or_fallback(
     wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> RoutingTarget {
     match wake_on_output_selected(config, devices, &target.uid) {
-        Ok(Some(result)) => eprintln!(
-            "{}",
+        Ok(Some(result)) => tracing::info!(
+            target: "daemon",
+            "[scalar] {}",
             crate::scalar_webapi_device::format_wake_message(&result)
         ),
         Ok(None) => {}
         Err(err) => {
-            eprintln!("warning: {err}");
+            tracing::warn!(target: "daemon", "[scalar] {err}");
             if allow_scalar_webapi_device_fallback(reason, scalar_webapi_device_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
-                    eprintln!(
-                        "warning: using fallback output {} ({}) because the selected ScalarWebAPI device is unreachable",
-                        fallback.name, fallback.uid
+                    tracing::warn!(
+                        target: "daemon",
+                        "[scalar] using fallback output name={} uid={} because selected ScalarWebAPI device is unreachable",
+                        fallback.name,
+                        fallback.uid
                     );
                     return fallback;
                 }
@@ -549,15 +557,16 @@ fn scalar_webapi_device_activity_fallback_target(
 ) -> Option<RoutingTarget> {
     match wake_on_activity(config, devices, target_uid) {
         Ok(Some(result)) => {
-            eprintln!(
-                "{}",
+            tracing::info!(
+                target: "daemon",
+                "[scalar] {}",
                 crate::scalar_webapi_device::format_wake_message(&result)
             );
             None
         }
         Ok(None) => None,
         Err(err) => {
-            eprintln!("warning: {err}");
+            tracing::warn!(target: "daemon", "[scalar] {err}");
             if allow_scalar_webapi_device_fallback(
                 DaemonTickReason::UserActivity,
                 scalar_webapi_device_fallback,
@@ -576,6 +585,15 @@ fn fallback_excluding(
     excluded_uid: &str,
 ) -> Option<RoutingTarget> {
     select_fallback_target(config, devices).filter(|target| target.uid != excluded_uid)
+}
+
+fn log_volume_control_line(line: &str) {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("warning:") {
+        tracing::warn!(target: "daemon", "[eqmac] {}", rest.trim());
+    } else {
+        tracing::info!(target: "daemon", "[eqmac] {trimmed}");
+    }
 }
 
 /// Run the daemon forever, reloading config before each scheduled poll.
@@ -621,7 +639,9 @@ pub fn run_forever(
                         ) {
                             match load_config(config_path) {
                                 Ok(updated) => config = updated,
-                                Err(err) => eprintln!("warning: could not reload config: {err}"),
+                                Err(err) => {
+                                    tracing::warn!(target: "daemon", "[config] could not reload config: {err}")
+                                }
                             }
                             let network_change = observe_current_network_access(&mut state);
                             if network_change == NetworkAccessChange::Changed {
@@ -650,7 +670,9 @@ pub fn run_forever(
                     if state.observe_idle_duration(idle_duration, idle_threshold) {
                         match load_config(config_path) {
                             Ok(updated) => config = updated,
-                            Err(err) => eprintln!("warning: could not reload config: {err}"),
+                            Err(err) => {
+                                tracing::warn!(target: "daemon", "[config] could not reload config: {err}")
+                            }
                         }
                         let network_change = observe_current_network_access(&mut state);
                         if network_change == NetworkAccessChange::Changed {
@@ -670,13 +692,15 @@ pub fn run_forever(
                         }
                     }
                 }
-                Err(err) => eprintln!("warning: could not read user activity state: {err}"),
+                Err(err) => {
+                    tracing::warn!(target: "daemon", "[activity] could not read user activity state: {err}")
+                }
             }
         }
 
         match load_config(config_path) {
             Ok(updated) => config = updated,
-            Err(err) => eprintln!("warning: could not reload config: {err}"),
+            Err(err) => tracing::warn!(target: "daemon", "[config] could not reload config: {err}"),
         }
         let network_change = observe_current_network_access(&mut state);
         if network_change == NetworkAccessChange::Changed {
@@ -705,7 +729,7 @@ fn sync_passthrough_logged(
     config: &Config,
 ) {
     if let Err(err) = passthrough.sync(hal, config) {
-        eprintln!("warning: passthrough sync failed: {err}");
+        tracing::warn!(target: "daemon", "[passthrough] sync failed: {err}");
     }
 }
 
@@ -723,7 +747,7 @@ fn run_tick_logged(
         Ok((DaemonTickResult::NoChange(_), _)) => {}
         Ok((DaemonTickResult::AutoSwitchDisabled, _)) => {}
         Err(err) => {
-            eprintln!("warning: daemon tick failed: {err}");
+            tracing::warn!(target: "daemon", "[daemon] tick failed: {err}");
         }
     }
 }
@@ -742,7 +766,10 @@ fn print_daemon_switch(result: &ApplyResult, list: &DeviceList) {
                 ApplyResult::NoChange { .. } => "(none)",
             },
         );
-        println!("daemon: switched default output from {from} to {device_name} ({to_uid})");
+        tracing::info!(
+            target: "daemon",
+            "[route] switched default output from={from} to={device_name} uid={to_uid}"
+        );
     }
 }
 
@@ -844,6 +871,7 @@ mod tests {
             also_set_system_output: true,
             volume: None,
             scalar_webapi_device: None,
+            ..Default::default()
         }
     }
 

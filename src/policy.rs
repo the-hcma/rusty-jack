@@ -278,6 +278,7 @@ mod tests {
             also_set_system_output: true,
             volume: None,
             scalar_webapi_device: None,
+            ..Default::default()
         }
     }
 
@@ -302,6 +303,7 @@ mod tests {
             also_set_system_output: true,
             volume: None,
             scalar_webapi_device: None,
+            ..Default::default()
         }
     }
 

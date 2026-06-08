@@ -298,8 +298,7 @@ fn format_daemon_block(daemon: &DaemonStatus, daemon_logs: Option<&DaemonLogPath
     }
 
     if let Some(logs) = daemon_logs {
-        rows.push(("stdout log", logs.stdout.clone()));
-        rows.push(("stderr log", logs.stderr.clone()));
+        rows.push(("log", logs.file.clone()));
     }
 
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -307,14 +306,7 @@ fn format_daemon_block(daemon: &DaemonStatus, daemon_logs: Option<&DaemonLogPath
 }
 
 fn format_daemon_logs_block(logs: &DaemonLogPaths) -> String {
-    format_labeled_section(
-        "Daemon",
-        "  ",
-        &[
-            ("stdout log", logs.stdout.as_str()),
-            ("stderr log", logs.stderr.as_str()),
-        ],
-    )
+    format_labeled_section("Daemon", "  ", &[("log", logs.file.as_str())])
 }
 
 fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> String {
@@ -488,6 +480,7 @@ mod tests {
             also_set_system_output: true,
             volume: None,
             scalar_webapi_device: None,
+            ..Default::default()
         };
         let mut config = config;
         config.volume = Some(13);
@@ -612,8 +605,7 @@ mod tests {
         }
 
         let logs = DaemonLogPaths {
-            stdout: "/tmp/rusty-jack.stdout.log".into(),
-            stderr: "/tmp/rusty-jack.stderr.log".into(),
+            file: "/tmp/rusty-jack.log".into(),
         };
 
         let running = format_daemon_block(
@@ -628,16 +620,7 @@ mod tests {
         assert!(has_row(&running, "installed", "yes"));
         assert!(has_row(&running, "running", "yes"));
         assert!(has_row(&running, "paused", "no"));
-        assert!(has_row(
-            &running,
-            "stdout log",
-            "/tmp/rusty-jack.stdout.log"
-        ));
-        assert!(has_row(
-            &running,
-            "stderr log",
-            "/tmp/rusty-jack.stderr.log"
-        ));
+        assert!(has_row(&running, "log", "/tmp/rusty-jack.log"));
 
         let paused = format_daemon_block(
             &DaemonStatus::Paused {
@@ -800,8 +783,7 @@ mod tests {
                 pid: Some(123),
             }),
             Some(crate::launchd::DaemonLogPaths {
-                stdout: "/tmp/rusty-jack.stdout.log".into(),
-                stderr: "/tmp/rusty-jack.stderr.log".into(),
+                file: "/tmp/rusty-jack.log".into(),
             }),
         );
         let json = serde_json::to_string(&snapshot).unwrap();
