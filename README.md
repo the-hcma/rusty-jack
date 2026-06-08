@@ -305,7 +305,7 @@ make release
 ```bash
 make install    # ~/.cargo/bin/rusty-jack
 make upgrade    # install once, then force-refresh LaunchAgent
-make uninstall  # stop/remove LaunchAgent, then cargo uninstall rusty-jack
+make uninstall  # stop/remove LaunchAgent, remove ~/.cargo/bin/rusty-jack and driver share
 ```
 
 ### 4. Universal binary
