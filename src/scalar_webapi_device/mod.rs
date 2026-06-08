@@ -9,7 +9,7 @@ pub use install::{
 };
 
 /// A ScalarWebAPI-compatible device discovered on the local network.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveredScalarWebApiDevice {
     pub host: String,
     pub model: Option<String>,
@@ -20,11 +20,13 @@ use crate::device_select::{display_label_for_selector, resolve_device_selector};
 use crate::output_device::OutputDevice;
 use crate::system_default::DeviceList;
 use crate::RustyJackError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
+use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::Message;
 
@@ -155,12 +157,27 @@ const SYSTEM_SERVICE: &str = "system";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
 const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(300);
+pub const DISPLAY_POWER_TIMEOUT_MS: u64 = 750;
+const SCALAR_DISCOVERY_CACHE_FILE: &str = "scalar-discovery-cache.json";
 
 #[derive(Debug, Clone)]
 struct CachedScalarEndpoint {
     host_key: String,
     endpoint: ScalarWebApiDeviceEndpoint,
+    speaker_model: Option<String>,
     cached_at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CachedScalarEndpointOnDisk {
+    endpoint: ScalarWebApiDeviceEndpoint,
+    speaker_model: Option<String>,
+    cached_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ScalarDiscoveryCacheFile {
+    hosts: BTreeMap<String, CachedScalarEndpointOnDisk>,
 }
 
 fn endpoint_cache() -> &'static Mutex<Option<CachedScalarEndpoint>> {
@@ -173,6 +190,7 @@ pub(crate) fn clear_scalar_webapi_endpoint_cache_for_tests() {
     if let Ok(mut guard) = endpoint_cache().lock() {
         *guard = None;
     }
+    let _ = std::fs::remove_file(scalar_discovery_cache_path());
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +201,7 @@ pub struct ScalarWebApiDeviceWakeResult {
     pub trigger: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ScalarWebApiDeviceEndpoint {
     host: String,
     port: u16,
@@ -224,6 +242,89 @@ fn scalar_ssdp_url() -> String {
 
 fn scalar_speaker_err(url: &str, detail: impl std::fmt::Display) -> RustyJackError {
     RustyJackError::Speaker(format!("url={url}: {detail}"))
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn scalar_discovery_cache_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join(format!("rusty-jack/{SCALAR_DISCOVERY_CACHE_FILE}"))
+    }
+
+    #[cfg(not(test))]
+    {
+        crate::config::default_config_path()
+            .and_then(|path| path.parent().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(SCALAR_DISCOVERY_CACHE_FILE)
+    }
+}
+
+fn load_scalar_discovery_cache_file() -> Option<ScalarDiscoveryCacheFile> {
+    let cache_path = scalar_discovery_cache_path();
+    let raw = std::fs::read_to_string(cache_path).ok()?;
+    serde_json::from_str::<ScalarDiscoveryCacheFile>(&raw).ok()
+}
+
+fn write_scalar_discovery_cache_file(cache: &ScalarDiscoveryCacheFile) {
+    let cache_path = scalar_discovery_cache_path();
+    let Some(parent) = cache_path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(contents) = serde_json::to_string_pretty(cache) else {
+        return;
+    };
+    let _ = std::fs::write(cache_path, format!("{contents}\n"));
+}
+
+fn cache_entry_is_fresh(cached_at_unix_ms: u64) -> bool {
+    now_unix_ms().saturating_sub(cached_at_unix_ms) <= ENDPOINT_CACHE_TTL.as_millis() as u64
+}
+
+fn load_scalar_endpoint_from_disk(host_key: &str) -> Option<CachedScalarEndpointOnDisk> {
+    let mut cache = load_scalar_discovery_cache_file()?;
+    let entry = cache.hosts.get(host_key)?.clone();
+    if cache_entry_is_fresh(entry.cached_at_unix_ms) {
+        return Some(entry);
+    }
+    cache.hosts.remove(host_key);
+    write_scalar_discovery_cache_file(&cache);
+    None
+}
+
+fn persist_scalar_endpoint_cache(
+    host_key: &str,
+    endpoint: &ScalarWebApiDeviceEndpoint,
+    speaker_model: Option<String>,
+) {
+    if let Ok(mut guard) = endpoint_cache().lock() {
+        *guard = Some(CachedScalarEndpoint {
+            host_key: host_key.to_string(),
+            endpoint: endpoint.clone(),
+            speaker_model: speaker_model.clone(),
+            cached_at: Instant::now(),
+        });
+    }
+
+    let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+    cache.hosts.insert(
+        host_key.to_string(),
+        CachedScalarEndpointOnDisk {
+            endpoint: endpoint.clone(),
+            speaker_model,
+            cached_at_unix_ms: now_unix_ms(),
+        },
+    );
+    write_scalar_discovery_cache_file(&cache);
 }
 
 fn is_transient_network_error(err: &std::io::Error) -> bool {
@@ -417,13 +518,10 @@ pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(Str
             return vec![];
         }
     };
-    let note = match current_power_status(api) {
-        Ok(status) => format!("ScalarWebAPI: {status}"),
-        Err(err) => {
-            eprintln!("warning: could not read ScalarWebAPI device power state: {err}");
-            "ScalarWebAPI: unknown".into()
-        }
-    };
+    let note = current_power_status_for_display(api).map_or_else(
+        || "ScalarWebAPI: unknown".into(),
+        |status| format!("ScalarWebAPI: {status}"),
+    );
 
     vec![(uid, note)]
 }
@@ -448,6 +546,54 @@ pub fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, Ru
         )
     })?;
     current_power_status_at_endpoint(api, &endpoint)
+}
+
+pub fn current_power_status_for_display(api: &ScalarWebApiDeviceConfig) -> Option<String> {
+    let endpoint = display_endpoint_for_api(api)?;
+    let mut timeout_api = api.clone();
+    timeout_api.request_timeout_ms = DISPLAY_POWER_TIMEOUT_MS;
+    current_power_status_at_endpoint(&timeout_api, &endpoint).ok()
+}
+
+pub fn cached_speaker_model_for_display(api: &ScalarWebApiDeviceConfig) -> Option<String> {
+    let host_key = scalar_webapi_device_host(api).ok()?.to_string();
+    if let Ok(guard) = endpoint_cache().lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.host_key == host_key && cached.cached_at.elapsed() < ENDPOINT_CACHE_TTL {
+                return cached.speaker_model.clone();
+            }
+        }
+    }
+    load_scalar_endpoint_from_disk(&host_key).and_then(|cached| cached.speaker_model)
+}
+
+pub fn should_show_distinct_speaker_model(config_model: &str, hardware: &str) -> bool {
+    let config_model = config_model.trim();
+    let hardware = hardware.trim();
+    !hardware.is_empty()
+        && !config_model.is_empty()
+        && !hardware.eq_ignore_ascii_case(config_model)
+        && !config_model.eq_ignore_ascii_case(GENERIC_SCALAR_WEBAPI_MODEL)
+}
+
+pub fn hardware_speaker_model_hint(location: &str, xml: &str) -> Option<String> {
+    model_hint_from_location_url(location).or_else(|| model_hint_from_upnp_xml(xml))
+}
+
+fn display_endpoint_for_api(api: &ScalarWebApiDeviceConfig) -> Option<ScalarWebApiDeviceEndpoint> {
+    let host_key = scalar_webapi_device_host(api).ok()?.to_string();
+    if let Ok(guard) = endpoint_cache().lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.host_key == host_key && cached.cached_at.elapsed() < ENDPOINT_CACHE_TTL {
+                return Some(cached.endpoint.clone());
+            }
+        }
+    }
+    if let Some(cached) = load_scalar_endpoint_from_disk(&host_key) {
+        persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
+        return Some(cached.endpoint);
+    }
+    endpoint_from_config(api).ok()
 }
 
 fn current_power_status_at_endpoint(
@@ -492,17 +638,11 @@ fn resolve_scalar_webapi_device_endpoint(
         }
     }
 
-    let discovered = discover_scalar_webapi_device_endpoint(api)?;
-    if let Some(endpoint) = discovered.clone() {
-        if let Ok(mut guard) = endpoint_cache().lock() {
-            *guard = Some(CachedScalarEndpoint {
-                host_key,
-                endpoint: endpoint.clone(),
-                cached_at: Instant::now(),
-            });
-        }
+    let discovered = discover_scalar_webapi_device_ssdp_hit(api)?;
+    if let Some(hit) = discovered.as_ref() {
+        persist_scalar_endpoint_cache(&host_key, &hit.endpoint, hit.model.clone());
     }
-    Ok(discovered)
+    Ok(discovered.map(|hit| hit.endpoint))
 }
 
 fn send_wake_command_to(
@@ -615,8 +755,7 @@ fn scalar_webapi_device_host(api: &ScalarWebApiDeviceConfig) -> Result<&str, Rus
         .ok_or_else(|| RustyJackError::Config("scalar_webapi_device.host is not set".into()))
 }
 
-#[cfg(test)]
-fn configured_endpoint(
+fn endpoint_from_config(
     api: &ScalarWebApiDeviceConfig,
 ) -> Result<ScalarWebApiDeviceEndpoint, RustyJackError> {
     let host = scalar_webapi_device_host(api)?.to_string();
@@ -663,9 +802,25 @@ pub fn discover_scalar_webapi_devices_on_lan(
         .collect())
 }
 
-fn discover_scalar_webapi_device_endpoint(
+pub fn refresh_scalar_webapi_discovery_cache(
     api: &ScalarWebApiDeviceConfig,
-) -> Result<Option<ScalarWebApiDeviceEndpoint>, RustyJackError> {
+) -> Result<Option<DiscoveredScalarWebApiDevice>, RustyJackError> {
+    let host_key = scalar_webapi_device_host(api)?.to_string();
+    let hit = discover_scalar_webapi_device_ssdp_hit(api)?;
+    if let Some(hit) = hit {
+        let discovered = DiscoveredScalarWebApiDevice {
+            host: hit.endpoint.host.clone(),
+            model: hit.model.clone(),
+        };
+        persist_scalar_endpoint_cache(&host_key, &hit.endpoint, hit.model);
+        return Ok(Some(discovered));
+    }
+    Ok(None)
+}
+
+fn discover_scalar_webapi_device_ssdp_hit(
+    api: &ScalarWebApiDeviceConfig,
+) -> Result<Option<ScalarWebApiSsdpHit>, RustyJackError> {
     let host = scalar_webapi_device_host(api)?;
     let target_ips = resolve_host_ips(host)?;
     if target_ips.is_empty() {
@@ -682,7 +837,7 @@ fn discover_scalar_webapi_device_endpoint(
     }
 
     let hits = collect_scalar_webapi_ssdp_hits(&socket, timeout, Some(&target_ips), host)?;
-    Ok(hits.into_iter().next().map(|hit| hit.endpoint))
+    Ok(hits.into_iter().next())
 }
 
 #[derive(Debug, Clone)]
@@ -763,7 +918,7 @@ fn collect_scalar_webapi_ssdp_hits(
                 }
                 hits.push(ScalarWebApiSsdpHit {
                     endpoint,
-                    model: model_hint_from_discovery(location, &xml),
+                    model: hardware_speaker_model_hint(location, &xml),
                     location: location.to_string(),
                     xml,
                 });
@@ -786,10 +941,6 @@ fn collect_scalar_webapi_ssdp_hits(
         }
     }
     Ok(hits)
-}
-
-fn model_hint_from_discovery(location: &str, xml: &str) -> Option<String> {
-    model_hint_from_upnp_xml(xml).or_else(|| model_hint_from_location_url(location))
 }
 
 fn model_hint_from_upnp_xml(xml: &str) -> Option<String> {
@@ -1148,7 +1299,7 @@ mod tests {
     fn test_configured_endpoint_uses_slash_path() {
         let config = config_for("line-out");
         let api = config.scalar_webapi_device.as_ref().unwrap();
-        let endpoint = configured_endpoint(api).unwrap();
+        let endpoint = endpoint_from_config(api).unwrap();
         let expected_path = protocol_path();
         assert_eq!(
             endpoint.service_endpoint(SYSTEM_SERVICE),
@@ -1185,6 +1336,44 @@ mod tests {
             model_hint_from_location_url("http://speaker/device.xml"),
             None
         );
+    }
+
+    #[test]
+    fn test_display_endpoint_uses_config_without_ssdp() {
+        clear_scalar_webapi_endpoint_cache_for_tests();
+        let mut config = config_for("line-out");
+        config.scalar_webapi_device.as_mut().unwrap().host = Some("offline.test".into());
+        let api = config.scalar_webapi_device.as_ref().unwrap();
+        let endpoint = display_endpoint_for_api(api).unwrap();
+        assert_eq!(endpoint.host, "offline.test");
+        assert_eq!(endpoint.port, 10_000);
+        assert!(endpoint.path.ends_with(&protocol_path()));
+    }
+
+    #[test]
+    fn test_hardware_speaker_model_hint_prefers_location_stem() {
+        let xml = r#"
+<root>
+  <friendlyName>Friendly Name</friendlyName>
+</root>"#;
+        assert_eq!(
+            hardware_speaker_model_hint(
+                "http://192.168.86.18:54380/MediaRenderer_SRS-ZR5.xml",
+                xml
+            )
+            .as_deref(),
+            Some("SRS-ZR5")
+        );
+    }
+
+    #[test]
+    fn test_should_show_distinct_speaker_model() {
+        assert!(should_show_distinct_speaker_model("The Lair", "SRS-ZR5"));
+        assert!(!should_show_distinct_speaker_model("SRS-ZR5", "SRS-ZR5"));
+        assert!(!should_show_distinct_speaker_model(
+            GENERIC_SCALAR_WEBAPI_MODEL,
+            "SRS-ZR5"
+        ));
     }
 
     #[test]
