@@ -2,11 +2,14 @@
 # Publish a Rusty Jack release and open the Homebrew tap update PR.
 #
 # Uses the caller's GitHub credentials (GH_TOKEN or `gh auth token`). Run from
-# a checkout of main after the Release Please PR has merged.
+# an up-to-date main checkout after the Release Please PR has merged.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# shellcheck source=release-lib
+source "${ROOT}/scripts/release-lib"
 
 REPO="${RUSTY_JACK_REPO:-the-hcma/rusty-jack}"
 TAP_REPO="${RUSTY_JACK_TAP_REPO:-the-hcma/homebrew-tap}"
@@ -30,6 +33,8 @@ Environment:
   RUSTY_JACK_TAP_REPO   Homebrew tap repository (default: the-hcma/homebrew-tap)
 
 Requires: gh, curl, git, make, and npx (Node.js) for release-please.
+
+See docs/RELEASING.md for the full release flow.
 EOF
 }
 
@@ -55,37 +60,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "error: required command not found: $1" >&2
-    exit 1
-  fi
-}
+release_lib_require_cmd gh
+release_lib_require_cmd curl
+release_lib_require_cmd git
+release_lib_require_cmd make
+release_lib_load_token
 
-require_cmd gh
-require_cmd curl
-require_cmd git
-require_cmd make
+release_lib_ensure_synced_main "${DRY_RUN}"
 
-GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
-export GH_TOKEN
-
-VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+VERSION="$(release_lib_cargo_version)"
 if [[ -z "${VERSION}" ]]; then
   echo "error: could not read package version from Cargo.toml" >&2
   exit 1
 fi
-
-resolve_release_tag() {
-  local candidate
-  for candidate in "rusty-jack-v${VERSION}" "v${VERSION}"; do
-    if gh release view "${candidate}" --repo "${REPO}" >/dev/null 2>&1; then
-      echo "${candidate}"
-      return 0
-    fi
-  done
-  return 1
-}
 
 TAG=""
 ARCHIVE_URL=""
@@ -98,7 +85,7 @@ echo "Version:    ${VERSION}"
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] release tag candidates: rusty-jack-v${VERSION}, v${VERSION}"
 else
-  if resolved="$(resolve_release_tag)"; then
+  if resolved="$(release_lib_resolve_release_tag "${REPO}" "${VERSION}")"; then
     TAG="${resolved}"
     ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
     echo "Release tag: ${TAG}"
@@ -109,33 +96,28 @@ else
 fi
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
-  echo "[dry-run] would validate GitHub access to ${REPO} and ${TAP_REPO}"
+  echo "[dry-run] would verify GitHub access to ${REPO} and ${TAP_REPO}"
 else
-  gh api "repos/${REPO}" --jq .full_name >/dev/null
-  gh api "repos/${TAP_REPO}" --jq .full_name >/dev/null
+  release_lib_verify_repo_access "${REPO}"
+  release_lib_verify_repo_access "${TAP_REPO}"
 fi
 
 publish_github_release() {
-  if resolve_release_tag >/dev/null; then
-    TAG="$(resolve_release_tag)"
+  if resolved="$(release_lib_resolve_release_tag "${REPO}" "${VERSION}")"; then
+    TAG="${resolved}"
     ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
     echo "GitHub release ${TAG} already exists"
     return 0
   fi
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] would create GitHub release via release-please"
+    echo "[dry-run] would run: npx release-please github-release --repo-url=${REPO}"
     return 0
   fi
 
-  require_cmd npx
-  npx --yes release-please@latest github-release \
-    --token="${GH_TOKEN}" \
-    --repo-url="${REPO}" \
-    --config-file=release-please-config.json \
-    --manifest-file=.release-please-manifest.json
+  release_lib_run_release_please github-release "${REPO}"
 
-  if ! TAG="$(resolve_release_tag)"; then
+  if ! TAG="$(release_lib_resolve_release_tag "${REPO}" "${VERSION}")"; then
     echo "error: release-please did not create a release for version ${VERSION}" >&2
     exit 1
   fi
@@ -152,6 +134,11 @@ compute_archive_sha256() {
   fi
 }
 
+clone_tap_repo() {
+  local dest="$1"
+  git clone --depth=1 "https://github.com/${TAP_REPO}.git" "${dest}"
+}
+
 update_homebrew_tap() {
   local archive_sha256 body tap_dir
 
@@ -161,20 +148,20 @@ update_homebrew_tap() {
     return 0
   fi
 
-  if [[ -z "${TAG}" ]] && ! TAG="$(resolve_release_tag)"; then
+  if [[ -z "${TAG}" ]] && ! TAG="$(release_lib_resolve_release_tag "${REPO}" "${VERSION}")"; then
     echo "error: GitHub release for version ${VERSION} does not exist; run without --tap-only first" >&2
     exit 1
   fi
   ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
 
-  local archive_path tap_dir
+  local archive_path
   archive_path="$(mktemp -t rusty-jack-source.XXXXXX.tar.gz)"
   tap_dir="$(mktemp -d -t rusty-jack-tap.XXXXXX)"
 
   curl -fsSL --retry 6 --retry-delay 5 "${ARCHIVE_URL}" -o "${archive_path}"
   archive_sha256="$(compute_archive_sha256 "${archive_path}")"
 
-  gh repo clone "${TAP_REPO}" "${tap_dir}" -- --depth=1
+  clone_tap_repo "${tap_dir}"
   mkdir -p "${tap_dir}/Formula"
   make render-homebrew-formula \
     ARCHIVE_URL="${ARCHIVE_URL}" \

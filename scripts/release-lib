@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Shared helpers for local Release Please automation.
+set -euo pipefail
+
+release_lib_require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: required command not found: $1" >&2
+    exit 1
+  fi
+}
+
+release_lib_load_token() {
+  GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
+  export GH_TOKEN
+}
+
+release_lib_cargo_version() {
+  awk -F'"' '/^version = / { print $2; exit }' Cargo.toml
+}
+
+release_lib_ensure_synced_main() {
+  local dry_run="${1:-0}"
+
+  if [[ "${dry_run}" -eq 1 ]]; then
+    echo "[dry-run] would fetch origin/main and verify local main is up to date"
+    return 0
+  fi
+
+  local branch
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  if [[ "${branch}" != "main" ]]; then
+    echo "error: must run from main (current branch: ${branch})" >&2
+    exit 1
+  fi
+
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "error: working tree must be clean" >&2
+    exit 1
+  fi
+
+  git fetch origin main
+
+  local local_sha remote_sha
+  local_sha="$(git rev-parse HEAD)"
+  remote_sha="$(git rev-parse origin/main)"
+  if [[ "${local_sha}" != "${remote_sha}" ]]; then
+    echo "error: main is not up to date with origin/main" >&2
+    echo "  local:  ${local_sha}" >&2
+    echo "  remote: ${remote_sha}" >&2
+    echo "Run: git pull --ff-only origin main" >&2
+    exit 1
+  fi
+
+  echo "main is up to date with origin/main (${local_sha:0:7})"
+}
+
+release_lib_verify_repo_access() {
+  local repo="$1"
+  gh api "repos/${repo}" --jq .full_name >/dev/null
+}
+
+release_lib_run_release_please() {
+  local subcommand="$1"
+  local repo="$2"
+
+  release_lib_require_cmd npx
+  npx --yes release-please@latest "${subcommand}" \
+    --token="${GH_TOKEN}" \
+    --repo-url="${repo}" \
+    --config-file=release-please-config.json \
+    --manifest-file=.release-please-manifest.json
+}
+
+release_lib_resolve_release_tag() {
+  local repo="$1"
+  local version="$2"
+  local candidate
+
+  for candidate in "rusty-jack-v${version}" "v${version}"; do
+    if gh release view "${candidate}" --repo "${repo}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}

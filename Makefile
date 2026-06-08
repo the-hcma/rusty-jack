@@ -4,7 +4,7 @@
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
 
-.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal upgrade validate-driver-bundle
+.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal update-release-pr upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -99,8 +99,12 @@ release: check-cargo
 	$(CARGO) build --release
 
 publish-release:
-	@chmod +x scripts/publish-release
+	@chmod +x scripts/publish-release scripts/release-lib
 	@./scripts/publish-release
+
+update-release-pr:
+	@chmod +x scripts/update-release-pr scripts/release-lib
+	@./scripts/update-release-pr
 
 test: check-cargo
 	$(CARGO) test --all-targets
