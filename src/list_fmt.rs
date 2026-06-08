@@ -261,6 +261,24 @@ pub fn format_labeled_section(title: &str, indent: &str, rows: &[(&str, &str)]) 
     lines.join("\n")
 }
 
+#[must_use]
+pub fn format_scalar_webapi_discovery_footer(
+    discovered_count: usize,
+    configured_host: Option<&str>,
+    configured_hardware_model: Option<&str>,
+) -> String {
+    let mut lines = vec![format!(
+        "ScalarWebAPI discovery: found {discovered_count} speaker(s)."
+    )];
+    if let Some(host) = configured_host {
+        let model_suffix = configured_hardware_model
+            .map(|model| format!(" ({model})"))
+            .unwrap_or_default();
+        lines.push(format!("Configured host: {host}{model_suffix}"));
+    }
+    lines.join("\n")
+}
+
 /// Format the virtual system-default footer block (shared with `status`).
 pub fn format_system_default_block(info: &SystemDefaultInfo) -> String {
     let mut rows: Vec<(&str, String)> = Vec::new();
@@ -526,5 +544,17 @@ mod tests {
         let json = serde_json::to_string(&list).unwrap();
         assert!(json.contains("\"is_active\":true"));
         assert!(json.contains("\"devices\""));
+    }
+
+    #[test]
+    fn test_scalar_webapi_discovery_footer() {
+        let footer = format_scalar_webapi_discovery_footer(
+            2,
+            Some("scalarwebapi-device.local"),
+            Some("SRS-ZR5"),
+        );
+        assert!(footer.contains("found 2 speaker(s)"));
+        assert!(footer.contains("scalarwebapi-device.local"));
+        assert!(footer.contains("SRS-ZR5"));
     }
 }

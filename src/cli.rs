@@ -83,6 +83,10 @@ pub struct ListArgs {
     /// Emit JSON instead of a table
     #[arg(long)]
     pub json: bool,
+
+    /// Discover ScalarWebAPI speakers on the LAN and refresh cache for configured host
+    #[arg(long)]
+    pub discover: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -263,6 +267,15 @@ mod tests {
         let cli = Cli::try_parse_from(["rusty-jack", "list", "--json"]).unwrap();
         match cli.command {
             Commands::List(args) => assert!(args.json),
+            _ => panic!("expected list"),
+        }
+    }
+
+    #[test]
+    fn test_list_discover_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "list", "--discover"]).unwrap();
+        match cli.command {
+            Commands::List(args) => assert!(args.discover),
             _ => panic!("expected list"),
         }
     }
