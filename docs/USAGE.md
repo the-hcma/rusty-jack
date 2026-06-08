@@ -420,7 +420,7 @@ make universal  # fat binary
 make driver-bundle  # build target/share/rusty-jack/RustyJack.driver
 make install    # cargo install --path . and install the bundled driver under ~/.cargo/share
 make upgrade    # install once, then force-refresh LaunchAgent
-make uninstall  # remove LaunchAgent and cargo-installed binary
+make uninstall  # remove LaunchAgent; prompts before ~/.cargo/bin/rusty-jack (use YES=1 to skip prompt)
 ```
 
 Cross-compilation targets used in CI: `aarch64-apple-darwin`, `x86_64-apple-darwin`.

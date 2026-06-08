@@ -16,6 +16,8 @@ INSTALL_SHARE_DIR ?= $(HOME)/.cargo/share/rusty-jack
 BIN_NAME := rusty-jack
 RELEASE_BIN := target/release/$(BIN_NAME)
 INSTALLED_BIN := $(INSTALL_BIN_DIR)/$(BIN_NAME)
+GIT_COMMIT_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+export RUSTY_JACK_GIT_COMMIT := $(GIT_COMMIT_SHORT)
 
 # Keep make from invoking cargo when nothing changed.
 # Use git to enumerate tracked Rust sources (fast + includes new files when added to git).
@@ -45,7 +47,7 @@ build-release: $(RELEASE_BIN)
 
 $(GIT_COMMIT_STAMP):
 	@mkdir -p target
-	@git rev-parse HEAD > "$@"
+	@git rev-parse --short HEAD > "$@"
 
 $(RELEASE_BIN): $(RUST_BUILD_INPUTS) $(GIT_COMMIT_STAMP)
 	@$(MAKE) check-cargo
@@ -111,7 +113,30 @@ test: check-cargo
 
 uninstall: check-cargo
 	-@command -v rusty-jack >/dev/null 2>&1 && rusty-jack uninstall || true
-	$(CARGO) uninstall rusty-jack || true
+	-@$(CARGO) uninstall rusty-jack 2>/dev/null || true
+	@if [ -f "$(INSTALLED_BIN)" ] || [ -d "$(INSTALL_SHARE_DIR)" ]; then \
+		if [ "$(YES)" != "1" ]; then \
+			if [ ! -t 0 ]; then \
+				echo "Refusing to remove installed files without confirmation."; \
+				echo "Re-run with: make uninstall YES=1"; \
+				exit 1; \
+			fi; \
+			echo "The following will be removed:"; \
+			[ -f "$(INSTALLED_BIN)" ] && echo "  $(INSTALLED_BIN)"; \
+			[ -d "$(INSTALL_SHARE_DIR)" ] && echo "  $(INSTALL_SHARE_DIR)"; \
+			printf "Continue? [y/N] "; \
+			read -r confirm; \
+			case "$$confirm" in y|Y|yes|YES) ;; *) echo "Uninstall cancelled."; exit 0;; esac; \
+		fi; \
+		if [ -f "$(INSTALLED_BIN)" ]; then \
+			echo "Removing $(INSTALLED_BIN)"; \
+			rm -f "$(INSTALLED_BIN)"; \
+		fi; \
+		if [ -d "$(INSTALL_SHARE_DIR)" ]; then \
+			echo "Removing $(INSTALL_SHARE_DIR)"; \
+			rm -rf "$(INSTALL_SHARE_DIR)"; \
+		fi; \
+	fi
 
 universal: check-cargo
 	./scripts/build-universal
@@ -136,9 +161,11 @@ upgrade: check-cargo
 render-homebrew-formula:
 	@test -n '$(ARCHIVE_URL)' || { echo 'ARCHIVE_URL is required' >&2; exit 1; }
 	@test -n '$(ARCHIVE_SHA256)' || { echo 'ARCHIVE_SHA256 is required' >&2; exit 1; }
-	@sed \
+	@test -n '$(GIT_COMMIT)' || GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); \
+	sed \
 	  -e 's|@ARCHIVE_URL@|$(ARCHIVE_URL)|g' \
 	  -e 's|@ARCHIVE_SHA256@|$(ARCHIVE_SHA256)|g' \
+	  -e "s|@GIT_COMMIT@|$${GIT_COMMIT:-unknown}|g" \
 	  '$(HOMEBREW_FORMULA_TEMPLATE)'
 
 validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
