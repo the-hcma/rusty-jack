@@ -76,12 +76,37 @@ if [[ -z "${VERSION}" ]]; then
   exit 1
 fi
 
-TAG="v${VERSION}"
-ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+resolve_release_tag() {
+  local candidate
+  for candidate in "rusty-jack-v${VERSION}" "v${VERSION}"; do
+    if gh release view "${candidate}" --repo "${REPO}" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+TAG=""
+ARCHIVE_URL=""
+TAP_BRANCH="rusty-jack-v${VERSION}"
 
 echo "Repository: ${REPO}"
 echo "Tap:        ${TAP_REPO}"
-echo "Version:    ${VERSION} (${TAG})"
+echo "Version:    ${VERSION}"
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "[dry-run] release tag candidates: rusty-jack-v${VERSION}, v${VERSION}"
+else
+  if resolved="$(resolve_release_tag)"; then
+    TAG="${resolved}"
+    ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+    echo "Release tag: ${TAG}"
+  elif [[ "${TAP_ONLY}" -eq 1 ]]; then
+    echo "error: no GitHub release found for version ${VERSION}" >&2
+    exit 1
+  fi
+fi
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] would validate GitHub access to ${REPO} and ${TAP_REPO}"
@@ -91,13 +116,15 @@ else
 fi
 
 publish_github_release() {
-  if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+  if resolve_release_tag >/dev/null; then
+    TAG="$(resolve_release_tag)"
+    ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
     echo "GitHub release ${TAG} already exists"
     return 0
   fi
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] would create GitHub release ${TAG} via release-please"
+    echo "[dry-run] would create GitHub release via release-please"
     return 0
   fi
 
@@ -108,10 +135,11 @@ publish_github_release() {
     --config-file=release-please-config.json \
     --manifest-file=.release-please-manifest.json
 
-  if ! gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
-    echo "error: release-please did not create ${TAG}" >&2
+  if ! TAG="$(resolve_release_tag)"; then
+    echo "error: release-please did not create a release for version ${VERSION}" >&2
     exit 1
   fi
+  ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
   echo "Created GitHub release ${TAG}"
 }
 
@@ -125,19 +153,19 @@ compute_archive_sha256() {
 }
 
 update_homebrew_tap() {
-  local archive_sha256 branch body tap_dir
-  branch="rusty-jack-${TAG}"
+  local archive_sha256 body tap_dir
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] would download ${ARCHIVE_URL}"
-    echo "[dry-run] would render Formula/rusty-jack.rb and open tap PR ${branch}"
+    echo "[dry-run] would download archive for rusty-jack-v${VERSION} or v${VERSION}"
+    echo "[dry-run] would render Formula/rusty-jack.rb and open tap PR ${TAP_BRANCH}"
     return 0
   fi
 
-  if ! gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
-    echo "error: GitHub release ${TAG} does not exist; run without --tap-only first" >&2
+  if [[ -z "${TAG}" ]] && ! TAG="$(resolve_release_tag)"; then
+    echo "error: GitHub release for version ${VERSION} does not exist; run without --tap-only first" >&2
     exit 1
   fi
+  ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
 
   local archive_path tap_dir
   archive_path="$(mktemp -t rusty-jack-source.XXXXXX.tar.gz)"
@@ -160,14 +188,14 @@ update_homebrew_tap() {
     if [[ -z "$(git config user.email)" ]]; then
       git config user.email "$(gh api user --jq .id)@users.noreply.github.com"
     fi
-    git checkout -B "${branch}"
+    git checkout -B "${TAP_BRANCH}"
     git add Formula/rusty-jack.rb
     if git diff --cached --quiet; then
       echo "Homebrew formula already current for ${TAG}"
       exit 0
     fi
     git commit -m "rusty-jack ${TAG}"
-    git push --force-with-lease origin "${branch}"
+    git push --force-with-lease origin "${TAP_BRANCH}"
   )
 
   rm -rf "${tap_dir}" "${archive_path}"
@@ -181,17 +209,17 @@ update_homebrew_tap() {
 EOF
 )"
 
-  if gh pr view "${branch}" --repo "${TAP_REPO}" >/dev/null 2>&1; then
-    gh pr edit "${branch}" --repo "${TAP_REPO}" --title "rusty-jack ${TAG}" --body "${body}"
+  if gh pr view "${TAP_BRANCH}" --repo "${TAP_REPO}" >/dev/null 2>&1; then
+    gh pr edit "${TAP_BRANCH}" --repo "${TAP_REPO}" --title "rusty-jack ${TAG}" --body "${body}"
   else
     gh pr create \
       --repo "${TAP_REPO}" \
       --base main \
-      --head "${branch}" \
+      --head "${TAP_BRANCH}" \
       --title "rusty-jack ${TAG}" \
       --body "${body}"
   fi
-  gh pr merge "${branch}" --repo "${TAP_REPO}" --squash --auto --delete-branch
+  gh pr merge "${TAP_BRANCH}" --repo "${TAP_REPO}" --squash --auto --delete-branch
   echo "Opened tap update PR for ${TAG} (auto-merge enabled)"
 }
 
