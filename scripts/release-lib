@@ -467,7 +467,7 @@ release_lib_wait_for_tap_pr_merge() {
 
   release_lib_wait_for_tap_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}"
 
-  echo "Waiting for tap PR to merge..."
+  echo "Waiting for tap PR to merge: ${pr_url}"
   start="${SECONDS}"
   while (( SECONDS - start < timeout_secs )); do
     if ! state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state 2>/dev/null)"; then
