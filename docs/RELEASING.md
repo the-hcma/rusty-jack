@@ -1,50 +1,42 @@
 # Releasing
 
-Rusty Jack releases are managed by Release Please and published through the Homebrew tap `the-hcma/tap`.
+Rusty Jack releases are managed by Release Please and published locally through `make publish-release`.
 
 ## Overview
 
-There are two release workflows:
+| Stage | Where | Credentials |
+|-------|--------|-------------|
+| Open/update release PR | GitHub Actions (`Release Please` workflow) | Built-in `GITHUB_TOKEN` |
+| Review and merge release PR | GitHub UI | — |
+| Create tag, GitHub release, tap PR | **Local** `make publish-release` | Your `gh auth` session (`GH_TOKEN`) |
 
-- `Release Please` (`.github/workflows/release-please.yml`) runs on pushes to `main`. It opens or updates a release PR automatically, then waits for owner approval before creating the GitHub release and tag.
-- `Release` (`.github/workflows/release.yml`) is the manual repair/backfill path for an existing tag.
+Release Please runs on pushes to `main` and opens or updates a release PR. After you merge that PR, run `make publish-release` on your machine to create the GitHub release and open the Homebrew tap update PR.
 
-Both workflows publish Homebrew changes through a pull request in `the-hcma/homebrew-tap`; they do not push directly to protected `main`.
+No GitHub Actions secrets or environments are required for releases.
 
 ## One-Time Setup
 
 1. Create the public tap repository `the-hcma/homebrew-tap`.
-2. Create GitHub environments in `the-hcma/rusty-jack`:
-   - `release-automation` — no required reviewers.
-   - `release` — required reviewer: `thehcma` only.
-3. Add `RELEASE_PLEASE_TOKEN` to **both** environments. This must be a fine-grained token with write access to `the-hcma/rusty-jack`; a real token is needed so Release Please PRs trigger required CI.
-4. Add `HOMEBREW_TAP_TOKEN` to the `release` environment only. It must have write access to `the-hcma/homebrew-tap`.
-5. Ensure the tap allows auto-merge and has CI protecting `main`; tap formula updates are merged only after `Tap CI` passes.
-6. Optional when collaborators exist: add a repository ruleset that restricts creation of `v*` tags. Because Release Please publishes with the owner PAT, configure bypass actors carefully so routine publish still works.
+2. Install [GitHub CLI](https://cli.github.com/) and authenticate with write access to `the-hcma/rusty-jack` and `the-hcma/homebrew-tap`:
 
-Keep release tokens in environments rather than repository secrets. Workflow changes require owner review through `CODEOWNERS`.
+   ```bash
+   gh auth login
+   gh auth status
+   ```
+
+3. Install Node.js (for `npx release-please` used during publish).
+4. Ensure the tap allows auto-merge and has CI protecting `main`; tap formula updates merge only after `Tap CI` passes.
+
+Workflow changes to release files require owner review through `CODEOWNERS`.
 
 ## Security Model
 
-Release automation is split into prepare and publish:
-
-| Stage | Job | Environment | Approval |
-|-------|-----|-------------|----------|
-| Prepare release PR | `release-pr` | `release-automation` | Automatic on pushes to `main` |
-| Publish tag/release | `publish-release` | `release` | **Required reviewer: `thehcma`** |
-| Update Homebrew tap | `update-homebrew-tap` | `release` | Same workflow approval as publish |
-
-Additional controls:
-
 - The Release Please PR (`release-please` label) is the content review gate for version bumps and changelog text.
-- `publish-release` only runs when `Cargo.toml` is ahead of the latest published GitHub release.
-- Direct `v*` tag pushes no longer trigger `release.yml`.
-- Manual repair uses `Release` workflow dispatch only, which also requires the protected `release` environment.
-- Release files in `CODEOWNERS` require `@thehcma` review.
+- Publishing is an explicit local action using your own GitHub credentials — nothing in CI can create releases or push to the tap.
 - Dependabot auto-merge skips PRs labeled `release-please`.
 - Do **not** add `merge-it` to Release Please PRs; merge them manually after review.
 
-Pull requests from forks do not receive release environment secrets.
+Release Please PRs opened by `GITHUB_TOKEN` do not re-trigger other GitHub Actions workflows on the release branch. Review the release PR diff and CI on `main` before merging.
 
 ## Normal Release
 
@@ -55,37 +47,47 @@ Pull requests from forks do not receive release environment secrets.
    - `Cargo.lock`
    - `CHANGELOG.md`
    - `.release-please-manifest.json`
-4. Merge the Release Please PR after CI passes.
+4. Merge the Release Please PR after review.
+5. On your machine:
 
-After the release PR merges:
+   ```bash
+   git checkout main
+   git pull --ff-only
+   make publish-release
+   ```
 
-1. The workflow detects an unpublished `Cargo.toml` version.
-2. GitHub prompts for approval of the `Publish release` job in the protected `release` environment.
-3. After you approve, Release Please creates the GitHub release and tag.
-4. The `Update Homebrew tap` job publishes the formula PR.
+   This creates the GitHub release and tag (via release-please), then opens a tap PR in `the-hcma/homebrew-tap` with auto-merge enabled.
 
 ## Backfill Or Repair
 
-Use the manual `Release` workflow when a tag already exists or when tap publication needs to be retried.
+Re-run publish for the current `Cargo.toml` version (idempotent):
 
-From the Actions UI, run `Release` with:
-
-```text
-tag = v0.1.1
+```bash
+git checkout main
+git pull --ff-only
+make publish-release
 ```
 
-Approve the pending `release` environment deployment when prompted.
+If the GitHub release already exists but the tap formula needs updating:
 
-The workflow is idempotent: if the GitHub release exists and the formula is already current, it exits cleanly.
+```bash
+make publish-release -- --tap-only
+```
 
-Do not publish new versions by pushing tags locally or by editing release files on `main` outside the Release Please PR flow.
+Preview actions without changing anything:
+
+```bash
+make publish-release -- --dry-run
+```
+
+Do not publish new versions by editing release files on `main` outside the Release Please PR flow.
 
 ## Verify
 
 Check the release:
 
 ```bash
-gh release view v0.1.1 --repo the-hcma/rusty-jack
+gh release view v0.2.0 --repo the-hcma/rusty-jack
 ```
 
 Check the tap formula:
@@ -105,8 +107,27 @@ brew install rusty-jack
 
 If no release PR appears, check that recent commits use releasable conventional commit prefixes such as `feat:` or `fix:`.
 
-If the `release-pr` job fails with `token` missing, confirm `RELEASE_PLEASE_TOKEN` is set on the `release-automation` environment.
+If `make publish-release` fails with authentication errors, confirm `gh auth status` shows write access to both repositories:
 
-If publish waits forever, approve the pending deployment for the `release` environment in GitHub Actions.
+```bash
+GH_TOKEN="$(gh auth token)" gh api repos/the-hcma/rusty-jack --jq .full_name
+GH_TOKEN="$(gh auth token)" gh api repos/the-hcma/homebrew-tap --jq .full_name
+```
 
-If tap publication fails, fix the cause in `the-hcma/homebrew-tap` or the `HOMEBREW_TAP_TOKEN`, then rerun the `Release` workflow with the same tag.
+If tap publication fails, fix the cause in `the-hcma/homebrew-tap`, then rerun `make publish-release -- --tap-only`.
+
+If `npx` is missing, install Node.js (`brew install node`).
+
+## Cleanup (legacy CI secrets)
+
+If you previously configured GitHub environments for release automation, delete them after merging this flow:
+
+```bash
+gh secret delete RELEASE_PLEASE_TOKEN --env release --repo the-hcma/rusty-jack || true
+gh secret delete RELEASE_PLEASE_TOKEN --env release-automation --repo the-hcma/rusty-jack || true
+gh secret delete HOMEBREW_TAP_TOKEN --env release --repo the-hcma/rusty-jack || true
+gh api -X DELETE "repos/the-hcma/rusty-jack/environments/release" || true
+gh api -X DELETE "repos/the-hcma/rusty-jack/environments/release-automation" || true
+```
+
+These commands are safe to rerun; they no-op when the secret or environment is already gone.
