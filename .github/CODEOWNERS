@@ -2,10 +2,11 @@
 * @thehcma
 
 # Release automation and versioned artifacts require owner review.
-/.github/workflows/release-please.yml @thehcma
 /release-please-config.json @thehcma
 /.release-please-manifest.json @thehcma
 /scripts/publish-release @thehcma
+/scripts/update-release-pr @thehcma
+/scripts/release-lib @thehcma
 /CHANGELOG.md @thehcma
 /Cargo.toml @thehcma
 /Cargo.lock @thehcma

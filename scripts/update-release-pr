@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Open or update the Release Please release PR using the caller's gh auth token.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+# shellcheck source=release-lib
+source "${ROOT}/scripts/release-lib"
+
+REPO="${RUSTY_JACK_REPO:-the-hcma/rusty-jack}"
+DRY_RUN=0
+
+usage() {
+  cat <<'EOF'
+Usage: update-release-pr [--dry-run]
+
+Open or update the Release Please PR on GitHub (version bump + CHANGELOG).
+
+Run from an up-to-date main checkout after merging releasable commits.
+
+Options:
+  --dry-run    Print checks without calling release-please.
+  -h, --help   Show this help.
+
+See docs/RELEASING.md for the full release flow.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+release_lib_require_cmd gh
+release_lib_require_cmd git
+release_lib_load_token
+
+release_lib_ensure_synced_main "${DRY_RUN}"
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "[dry-run] would verify write access to ${REPO}"
+  echo "[dry-run] would run: npx release-please release-pr --repo-url=${REPO}"
+  exit 0
+fi
+
+release_lib_verify_repo_access "${REPO}"
+echo "Updating release PR for ${REPO}..."
+release_lib_run_release_please release-pr "${REPO}"
+echo "Done. Review the release-please PR on GitHub, then merge it before running make publish-release."

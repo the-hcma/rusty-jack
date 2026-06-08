@@ -1,7 +1,6 @@
 # Rusty Jack
 
 [![CI](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/the-hcma/rusty-jack/actions/workflows/ci.yml)
-[![Release Please](https://github.com/the-hcma/rusty-jack/actions/workflows/release-please.yml/badge.svg?branch=main)](https://github.com/the-hcma/rusty-jack/actions/workflows/release-please.yml)
 [![GitHub release](https://img.shields.io/github/v/release/the-hcma/rusty-jack?sort=semver)](https://github.com/the-hcma/rusty-jack/releases)
 [![Homebrew tap](https://img.shields.io/badge/homebrew-the--hcma%2Ftap-blue?logo=homebrew)](https://github.com/the-hcma/homebrew-tap)
 
@@ -327,7 +326,7 @@ Confirm `--help` commit matches `git rev-parse --short HEAD`.
 
 ### Makefile targets
 
-`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `upgrade`, `uninstall`, `clean` — see [Makefile](Makefile).
+`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `upgrade`, `uninstall`, `update-release-pr`, `publish-release`, `clean` — see [Makefile](Makefile) and [docs/RELEASING.md](./docs/RELEASING.md).
 
 ---
 
