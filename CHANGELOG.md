@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.4.1...rusty-jack-v0.5.0) (2026-06-08)
+
+
+### Features
+
+* show ScalarWebAPI model in list and status ([#96](https://github.com/the-hcma/rusty-jack/issues/96)) ([69208df](https://github.com/the-hcma/rusty-jack/commit/69208df043cc364aba5804586825370157728f00))
+
 ## [0.4.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.4.0...rusty-jack-v0.4.1) (2026-06-08)
 
 
