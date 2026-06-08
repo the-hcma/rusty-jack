@@ -55,6 +55,10 @@ pub enum UpgradeResult {
 /// Command users should run after installing or upgrading the CLI binary.
 pub const DAEMON_REFRESH_COMMAND: &str = "rusty-jack upgrade --force";
 
+/// LaunchAgent env vars stamped at install/upgrade and read from the running daemon PID.
+pub const DAEMON_PKG_VERSION_ENV: &str = "RUSTY_JACK_DAEMON_PKG_VERSION";
+pub const DAEMON_GIT_COMMIT_ENV: &str = "RUSTY_JACK_DAEMON_GIT_COMMIT";
+
 /// Compare the LaunchAgent/daemon binary against the current CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DaemonVersionCheck {
@@ -66,6 +70,8 @@ pub struct DaemonVersionCheck {
     pub plist_binary_version: Option<BinaryVersion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub running_binary_version: Option<BinaryVersion>,
+    /// LaunchAgent or running daemon is missing stamped version env vars.
+    pub needs_version_stamp_refresh: bool,
     pub stale: bool,
     pub refresh_command: &'static str,
 }
@@ -317,10 +323,16 @@ fn current_exe_display() -> Result<String, RustyJackError> {
         })
 }
 
-fn render_launch_agent_plist(binary_path: &str, home: &str) -> String {
+fn render_launch_agent_plist(
+    binary_path: &str,
+    home: &str,
+    daemon_version: &BinaryVersion,
+) -> String {
     LAUNCH_AGENT_TEMPLATE
         .replace("@BINARY_PATH@", &escape_xml(binary_path))
         .replace("@HOME@", &escape_xml(home))
+        .replace("@DAEMON_PKG_VERSION@", &escape_xml(&daemon_version.version))
+        .replace("@DAEMON_GIT_COMMIT@", &escape_xml(&daemon_version.commit))
 }
 
 fn escape_xml(value: &str) -> String {
@@ -371,10 +383,12 @@ fn write_and_load_daemon(
     let previous_binary_path = existing_plist
         .as_deref()
         .and_then(launch_agent_binary_path_from_plist);
-    let previous_binary_version =
-        previous_binary_version_from_env_or_path(previous_binary_path.as_deref());
-    let plist = render_launch_agent_plist(&binary_path, &home_display);
+    let previous_binary_version = existing_plist
+        .as_deref()
+        .and_then(daemon_version_from_plist)
+        .or_else(|| previous_binary_version_from_env_or_path(previous_binary_path.as_deref()));
     let binary_version = BinaryVersion::current();
+    let plist = render_launch_agent_plist(&binary_path, &home_display, &binary_version);
     let plist_display = plist_path_display(&plist_path)?;
 
     if matches!(mode, LoadMode::Upgrade)
@@ -537,6 +551,76 @@ fn launch_agent_binary_path_from_plist(plist: &str) -> Option<String> {
     Some(unescape_xml(value))
 }
 
+fn launch_agent_env_var_from_plist(plist: &str, key: &str) -> Option<String> {
+    let marker = format!("<key>{key}</key>");
+    let (_, after_key) = plist.split_once(&marker)?;
+    let (_, after_string) = after_key.split_once("<string>")?;
+    let (value, _) = after_string.split_once("</string>")?;
+    Some(unescape_xml(value))
+}
+
+fn daemon_version_from_env_pair(
+    version: Option<String>,
+    commit: Option<String>,
+) -> Option<BinaryVersion> {
+    Some(BinaryVersion {
+        version: version?,
+        commit: commit?,
+    })
+}
+
+fn daemon_version_from_plist(plist: &str) -> Option<BinaryVersion> {
+    daemon_version_from_env_pair(
+        launch_agent_env_var_from_plist(plist, DAEMON_PKG_VERSION_ENV),
+        launch_agent_env_var_from_plist(plist, DAEMON_GIT_COMMIT_ENV),
+    )
+}
+
+fn plist_has_daemon_version_stamp(plist: &str) -> bool {
+    daemon_version_from_plist(plist).is_some()
+}
+
+#[cfg(target_os = "macos")]
+fn process_environ(pid: u32) -> Option<Vec<std::ffi::OsString>> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let mut system = System::new();
+    let pid = Pid::from_u32(pid);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        false,
+        ProcessRefreshKind::nothing()
+            .without_tasks()
+            .with_environ(UpdateKind::Always),
+    );
+    system
+        .process(pid)
+        .map(|process| process.environ().to_vec())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_environ(_pid: u32) -> Option<Vec<std::ffi::OsString>> {
+    None
+}
+
+fn env_var_from_environ(entries: &[std::ffi::OsString], key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    entries.iter().find_map(|entry| {
+        entry
+            .to_str()
+            .and_then(|entry| entry.strip_prefix(&prefix))
+            .map(str::to_string)
+    })
+}
+
+fn daemon_version_from_process_env(pid: u32) -> Option<BinaryVersion> {
+    let environ = process_environ(pid)?;
+    daemon_version_from_env_pair(
+        env_var_from_environ(&environ, DAEMON_PKG_VERSION_ENV),
+        env_var_from_environ(&environ, DAEMON_GIT_COMMIT_ENV),
+    )
+}
+
 fn unescape_xml(value: &str) -> String {
     value
         .replace("&apos;", "'")
@@ -613,22 +697,33 @@ pub fn daemon_version_check(
     let cli_version = BinaryVersion::current();
     let plist_path = plist_path_or_err()?;
 
-    let (plist_binary_path, plist_binary_version) = if plist_path.exists() {
+    let (plist_binary_path, plist_binary_version, plist_has_version_stamp) = if plist_path.exists()
+    {
         let plist = std::fs::read_to_string(&plist_path).map_err(RustyJackError::Io)?;
         let path = launch_agent_binary_path_from_plist(&plist);
-        let version = path.as_deref().and_then(binary_version_from_path);
-        (path, version)
+        let version = daemon_version_from_plist(&plist)
+            .or_else(|| path.as_deref().and_then(binary_version_from_path));
+        (path, version, plist_has_daemon_version_stamp(&plist))
     } else {
-        (None, None)
+        (None, None, false)
     };
 
     let running_binary_version = running_pid
-        .and_then(binary_path_from_pid)
-        .as_deref()
-        .and_then(binary_version_from_path);
+        .and_then(daemon_version_from_process_env)
+        .or_else(|| {
+            running_pid
+                .and_then(binary_path_from_pid)
+                .as_deref()
+                .and_then(binary_version_from_path)
+        });
+    let running_has_version_stamp =
+        running_pid.is_some_and(|pid| daemon_version_from_process_env(pid).is_some());
+    let needs_version_stamp_refresh = plist_binary_path.is_some()
+        && (!plist_has_version_stamp || running_pid.is_some_and(|_| !running_has_version_stamp));
 
     let stale = plist_binary_path.is_some()
-        && (plist_binary_path.as_deref() != Some(cli_binary_path.as_str())
+        && (needs_version_stamp_refresh
+            || plist_binary_path.as_deref() != Some(cli_binary_path.as_str())
             || plist_binary_version
                 .as_ref()
                 .is_some_and(|version| !version.matches(&cli_version))
@@ -642,6 +737,7 @@ pub fn daemon_version_check(
         plist_binary_path,
         plist_binary_version,
         running_binary_version,
+        needs_version_stamp_refresh,
         stale,
         refresh_command: DAEMON_REFRESH_COMMAND,
     })
@@ -980,27 +1076,66 @@ mod tests {
         assert!(paths.file.starts_with(&home));
     }
 
+    fn sample_daemon_version() -> BinaryVersion {
+        BinaryVersion {
+            version: "0.6.0".into(),
+            commit: "abc1234".into(),
+        }
+    }
+
     #[test]
     fn test_render_launch_agent_plist_replaces_placeholders() {
-        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example");
+        let version = sample_daemon_version();
+        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example", &version);
         assert!(plist.contains("<string>/tmp/rusty-jack</string>"));
         assert!(plist.contains("<string>daemon</string>"));
+        assert!(plist.contains("<string>0.6.0</string>"));
+        assert!(plist.contains("<string>abc1234</string>"));
         assert!(!plist.contains("@BINARY_PATH@"));
+        assert!(!plist.contains("@DAEMON_PKG_VERSION@"));
         assert!(!plist.contains("StandardOutPath"));
     }
 
     #[test]
     fn test_render_launch_agent_plist_escapes_xml() {
-        let plist = render_launch_agent_plist("/tmp/rusty&jack", "/Users/a<b");
+        let version = sample_daemon_version();
+        let plist = render_launch_agent_plist("/tmp/rusty&jack", "/Users/a<b", &version);
         assert!(plist.contains("/tmp/rusty&amp;jack"));
     }
 
     #[test]
     fn test_launch_agent_binary_path_from_plist() {
-        let plist = render_launch_agent_plist("/tmp/rusty&jack", "/Users/example");
+        let version = sample_daemon_version();
+        let plist = render_launch_agent_plist("/tmp/rusty&jack", "/Users/example", &version);
         assert_eq!(
             launch_agent_binary_path_from_plist(&plist).as_deref(),
             Some("/tmp/rusty&jack")
+        );
+    }
+
+    #[test]
+    fn test_daemon_version_from_plist_reads_stamped_env() {
+        let version = sample_daemon_version();
+        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example", &version);
+        assert_eq!(daemon_version_from_plist(&plist).as_ref(), Some(&version));
+    }
+
+    #[test]
+    fn test_env_var_from_environ() {
+        use std::ffi::OsString;
+
+        let entries = [
+            OsString::from("RUST_LOG=info"),
+            OsString::from("RUSTY_JACK_DAEMON_PKG_VERSION=0.6.0"),
+            OsString::from("RUSTY_JACK_DAEMON_GIT_COMMIT=abc1234"),
+        ];
+        assert_eq!(
+            env_var_from_environ(&entries, DAEMON_PKG_VERSION_ENV).as_deref(),
+            Some("0.6.0")
+        );
+        assert_eq!(
+            env_var_from_environ(&entries, DAEMON_GIT_COMMIT_ENV).as_deref(),
+            Some("abc1234")
         );
     }
 
@@ -1127,7 +1262,7 @@ mod tests {
             version: "0.1.0".into(),
             commit: "abc1234".into(),
         };
-        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example");
+        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example", &version);
 
         assert!(daemon_upgrade_is_current(
             false,
@@ -1146,7 +1281,7 @@ mod tests {
             version: "0.1.0".into(),
             commit: "abc1234".into(),
         };
-        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example");
+        let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example", &version);
 
         assert!(!daemon_upgrade_is_current(
             true,

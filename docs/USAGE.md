@@ -238,7 +238,7 @@ make upgrade
 
 `make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` so launchd restarts after an in-place source install. The CLI `upgrade` command itself does not download source or build a new binary. It checks the bundled native driver against the installed driver and only offers a driver upgrade when the bundled driver has a material change. It rewrites the plist only when the LaunchAgent differs from the current `rusty-jack` executable, reports the before/after version and commit for real daemon refreshes, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it. Use `--force` to rewrite/restart even when the LaunchAgent already matches — recommended after every Homebrew install/upgrade and after upgrading from releases that used separate launchd stdout/stderr log paths so the plist picks up in-app logging.
 
-After `brew install` or `brew upgrade rusty-jack`, run `rusty-jack upgrade --force` in each macOS user account that uses the daemon. `rusty-jack status` compares the LaunchAgent/running daemon binary against the current CLI and flags `daemon stale: yes` with a `note` when they differ.
+After `brew install` or `brew upgrade rusty-jack`, run `rusty-jack upgrade --force` in each macOS user account that uses the daemon. `install`/`upgrade` stamp `RUSTY_JACK_DAEMON_PKG_VERSION` and `RUSTY_JACK_DAEMON_GIT_COMMIT` into the LaunchAgent; `status` reads those env vars from the running daemon PID and flags `daemon stale: yes` with a `note` when they differ from the current CLI.
 
 ---
 
