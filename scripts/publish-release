@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# Publish a Rusty Jack release and open the Homebrew tap update PR.
+#
+# Uses the caller's GitHub credentials (GH_TOKEN or `gh auth token`). Run from
+# a checkout of main after the Release Please PR has merged.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+REPO="${RUSTY_JACK_REPO:-the-hcma/rusty-jack}"
+TAP_REPO="${RUSTY_JACK_TAP_REPO:-the-hcma/homebrew-tap}"
+TAP_ONLY=0
+DRY_RUN=0
+
+usage() {
+  cat <<'EOF'
+Usage: publish-release [--tap-only] [--dry-run]
+
+Publish the current Cargo.toml version to GitHub and update the Homebrew tap.
+
+Options:
+  --tap-only   Skip GitHub release creation; update the tap formula only.
+  --dry-run    Print actions without changing GitHub or the tap.
+  -h, --help   Show this help.
+
+Environment:
+  GH_TOKEN              GitHub token (defaults to `gh auth token`)
+  RUSTY_JACK_REPO       Source repository (default: the-hcma/rusty-jack)
+  RUSTY_JACK_TAP_REPO   Homebrew tap repository (default: the-hcma/homebrew-tap)
+
+Requires: gh, curl, git, make, and npx (Node.js) for release-please.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tap-only)
+      TAP_ONLY=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: required command not found: $1" >&2
+    exit 1
+  fi
+}
+
+require_cmd gh
+require_cmd curl
+require_cmd git
+require_cmd make
+
+GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
+export GH_TOKEN
+
+VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+if [[ -z "${VERSION}" ]]; then
+  echo "error: could not read package version from Cargo.toml" >&2
+  exit 1
+fi
+
+TAG="v${VERSION}"
+ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz"
+
+echo "Repository: ${REPO}"
+echo "Tap:        ${TAP_REPO}"
+echo "Version:    ${VERSION} (${TAG})"
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "[dry-run] would validate GitHub access to ${REPO} and ${TAP_REPO}"
+else
+  gh api "repos/${REPO}" --jq .full_name >/dev/null
+  gh api "repos/${TAP_REPO}" --jq .full_name >/dev/null
+fi
+
+publish_github_release() {
+  if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+    echo "GitHub release ${TAG} already exists"
+    return 0
+  fi
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "[dry-run] would create GitHub release ${TAG} via release-please"
+    return 0
+  fi
+
+  require_cmd npx
+  npx --yes release-please@latest github-release \
+    --token="${GH_TOKEN}" \
+    --repo-url="${REPO}" \
+    --config-file=release-please-config.json \
+    --manifest-file=.release-please-manifest.json
+
+  if ! gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+    echo "error: release-please did not create ${TAG}" >&2
+    exit 1
+  fi
+  echo "Created GitHub release ${TAG}"
+}
+
+compute_archive_sha256() {
+  local archive_path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${archive_path}" | awk '{print $1}'
+  else
+    sha256sum "${archive_path}" | awk '{print $1}'
+  fi
+}
+
+update_homebrew_tap() {
+  local archive_sha256 branch body tap_dir
+  branch="rusty-jack-${TAG}"
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "[dry-run] would download ${ARCHIVE_URL}"
+    echo "[dry-run] would render Formula/rusty-jack.rb and open tap PR ${branch}"
+    return 0
+  fi
+
+  if ! gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+    echo "error: GitHub release ${TAG} does not exist; run without --tap-only first" >&2
+    exit 1
+  fi
+
+  local archive_path tap_dir
+  archive_path="$(mktemp -t rusty-jack-source.XXXXXX.tar.gz)"
+  tap_dir="$(mktemp -d -t rusty-jack-tap.XXXXXX)"
+
+  curl -fsSL --retry 6 --retry-delay 5 "${ARCHIVE_URL}" -o "${archive_path}"
+  archive_sha256="$(compute_archive_sha256 "${archive_path}")"
+
+  gh repo clone "${TAP_REPO}" "${tap_dir}" -- --depth=1
+  mkdir -p "${tap_dir}/Formula"
+  make render-homebrew-formula \
+    ARCHIVE_URL="${ARCHIVE_URL}" \
+    ARCHIVE_SHA256="${archive_sha256}" \
+    >"${tap_dir}/Formula/rusty-jack.rb"
+
+  (
+    cd "${tap_dir}"
+    git config user.name "$(gh api user --jq .login)"
+    git config user.email "$(gh api user --jq .email // empty)"
+    if [[ -z "$(git config user.email)" ]]; then
+      git config user.email "$(gh api user --jq .id)@users.noreply.github.com"
+    fi
+    git checkout -B "${branch}"
+    git add Formula/rusty-jack.rb
+    if git diff --cached --quiet; then
+      echo "Homebrew formula already current for ${TAG}"
+      exit 0
+    fi
+    git commit -m "rusty-jack ${TAG}"
+    git push --force-with-lease origin "${branch}"
+  )
+
+  rm -rf "${tap_dir}" "${archive_path}"
+
+  body="$(cat <<EOF
+## Summary
+- Update the Rusty Jack formula for ${TAG}.
+
+## Test plan
+- \`make publish-release\` generated formula
+EOF
+)"
+
+  if gh pr view "${branch}" --repo "${TAP_REPO}" >/dev/null 2>&1; then
+    gh pr edit "${branch}" --repo "${TAP_REPO}" --title "rusty-jack ${TAG}" --body "${body}"
+  else
+    gh pr create \
+      --repo "${TAP_REPO}" \
+      --base main \
+      --head "${branch}" \
+      --title "rusty-jack ${TAG}" \
+      --body "${body}"
+  fi
+  gh pr merge "${branch}" --repo "${TAP_REPO}" --squash --auto --delete-branch
+  echo "Opened tap update PR for ${TAG} (auto-merge enabled)"
+}
+
+if [[ "${TAP_ONLY}" -eq 0 ]]; then
+  publish_github_release
+fi
+
+update_homebrew_tap
+
+echo "Done."

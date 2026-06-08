@@ -72,7 +72,7 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, and status reporting |
 | Periodic inspection + auto-switch | Shipped polling daemon with config reload; property listeners remain future refinement |
 | JSON configuration | `~/.config/rusty-jack/config.json` (path overridable) |
-| Homebrew distribution | Tap `the-hcma/tap` ships `v0.1.1`; formula template, Makefile render target, and split Release Please publish gate live in-repo |
+| Homebrew distribution | Tap `the-hcma/tap`; Release Please opens release PRs in CI; `make publish-release` publishes locally with `gh auth` |
 | **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent, removes the plist, can remove the native driver, and restores the saved default output; optional config purge via `--remove-config` |
 | **Intel + Apple Silicon** | Cross-compile both targets; release **universal** binary + per-arch Homebrew bottles |
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
