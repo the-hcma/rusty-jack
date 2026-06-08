@@ -11,7 +11,7 @@ class RustyJack < Formula
 
   def install
     ENV["MACOSX_DEPLOYMENT_TARGET"] = "12.0"
-    system "cargo", "install", *std_cargo_args, "--locked"
+    system "cargo", "install", *std_cargo_args
     system "make", "driver-bundle"
     pkgshare.install "config.example.json", "config.example.scalar-webapi-device.json", "launchd"
     pkgshare.install "target/share/rusty-jack/RustyJack.driver"
@@ -23,8 +23,11 @@ class RustyJack < Formula
 
   def caveats
     <<~EOS
-      To create config and install the per-user LaunchAgent:
+      After installing the formula, set up config and the per-user LaunchAgent:
         rusty-jack install
+
+      Check routing and daemon state (including log paths):
+        rusty-jack status
 
       Before uninstalling the formula, stop and remove the LaunchAgent:
         rusty-jack uninstall --keep-config

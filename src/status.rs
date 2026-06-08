@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::hdmi_displayport_volume_control::{
     hdmi_displayport_volume_control_status_for_target, HdmiDisplayPortVolumeControlStatus,
 };
-use crate::launchd::DaemonStatus;
+use crate::launchd::{DaemonLogPaths, DaemonStatus};
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
 use crate::scalar_webapi_device;
@@ -60,6 +60,8 @@ pub struct StatusSnapshot {
     pub scalar_webapi: Option<ScalarWebApiStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_logs: Option<DaemonLogPaths>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,6 +81,7 @@ pub fn build_status(
     config_path: Option<&Path>,
     volume_percent: Option<u8>,
     daemon: Option<DaemonStatus>,
+    daemon_logs: Option<DaemonLogPaths>,
 ) -> StatusSnapshot {
     let policy = evaluate_policy(
         &DeviceList {
@@ -105,6 +108,7 @@ pub fn build_status(
         hdmi_displayport_volume_control,
         scalar_webapi,
         daemon,
+        daemon_logs,
     }
 }
 
@@ -233,7 +237,7 @@ fn format_driver_recommended(status: &HdmiDisplayPortVolumeControlStatus) -> Str
         .map_or_else(|| value.into(), |reason| format!("{value} ({reason})"))
 }
 
-fn format_daemon_block(daemon: &DaemonStatus) -> String {
+fn format_daemon_block(daemon: &DaemonStatus, daemon_logs: Option<&DaemonLogPaths>) -> String {
     let mut rows: Vec<(&str, String)> = vec![];
     match daemon {
         DaemonStatus::Running {
@@ -293,8 +297,24 @@ fn format_daemon_block(daemon: &DaemonStatus) -> String {
         }
     }
 
+    if let Some(logs) = daemon_logs {
+        rows.push(("stdout log", logs.stdout.clone()));
+        rows.push(("stderr log", logs.stderr.clone()));
+    }
+
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     format_labeled_section("Daemon", "  ", &borrowed)
+}
+
+fn format_daemon_logs_block(logs: &DaemonLogPaths) -> String {
+    format_labeled_section(
+        "Daemon",
+        "  ",
+        &[
+            ("stdout log", logs.stdout.as_str()),
+            ("stderr log", logs.stderr.as_str()),
+        ],
+    )
 }
 
 fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> String {
@@ -388,7 +408,14 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
     }
     if let Some(daemon) = &snapshot.daemon {
         writeln!(out)?;
-        writeln!(out, "{}", format_daemon_block(daemon))?;
+        writeln!(
+            out,
+            "{}",
+            format_daemon_block(daemon, snapshot.daemon_logs.as_ref())
+        )?;
+    } else if let Some(logs) = &snapshot.daemon_logs {
+        writeln!(out)?;
+        writeln!(out, "{}", format_daemon_logs_block(logs))?;
     }
     if let Some(scalar) = &snapshot.scalar_webapi {
         writeln!(out)?;
@@ -436,6 +463,7 @@ mod tests {
             None,
             Some(42),
             None,
+            None,
         );
         assert!(!snapshot.policy.configured);
         assert_eq!(snapshot.volume_percent, Some(42));
@@ -472,6 +500,7 @@ mod tests {
             Some(Path::new("/tmp/config.json")),
             Some(13),
             None,
+            None,
         );
         assert!(snapshot.policy.configured);
         assert_eq!(snapshot.policy.matches_preferred, Some(true));
@@ -502,6 +531,7 @@ mod tests {
                     routed_to_label: Some("HDMI (DELL U3219Q)".into()),
                 }),
             },
+            None,
             None,
             None,
             None,
@@ -581,35 +611,59 @@ mod tests {
             })
         }
 
-        let running = format_daemon_block(&DaemonStatus::Running {
-            label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
-            plist_path: "/tmp/test.plist".into(),
-            service: "gui/501/com.example.rusty-jack".into(),
-            pid: Some(123),
-        });
+        let logs = DaemonLogPaths {
+            stdout: "/tmp/rusty-jack.stdout.log".into(),
+            stderr: "/tmp/rusty-jack.stderr.log".into(),
+        };
+
+        let running = format_daemon_block(
+            &DaemonStatus::Running {
+                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                plist_path: "/tmp/test.plist".into(),
+                service: "gui/501/com.example.rusty-jack".into(),
+                pid: Some(123),
+            },
+            Some(&logs),
+        );
         assert!(has_row(&running, "installed", "yes"));
         assert!(has_row(&running, "running", "yes"));
         assert!(has_row(&running, "paused", "no"));
+        assert!(has_row(
+            &running,
+            "stdout log",
+            "/tmp/rusty-jack.stdout.log"
+        ));
+        assert!(has_row(
+            &running,
+            "stderr log",
+            "/tmp/rusty-jack.stderr.log"
+        ));
 
-        let paused = format_daemon_block(&DaemonStatus::Paused {
-            label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
-            plist_path: "/tmp/test.plist".into(),
-            service: "gui/501/com.example.rusty-jack".into(),
-            pause_reason: Some(crate::launchd::DaemonPauseReason::picker_override(
-                "builtin".into(),
-                "Built-in Output".into(),
-                Some("hdmi-1".into()),
-            )),
-        });
+        let paused = format_daemon_block(
+            &DaemonStatus::Paused {
+                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                plist_path: "/tmp/test.plist".into(),
+                service: "gui/501/com.example.rusty-jack".into(),
+                pause_reason: Some(crate::launchd::DaemonPauseReason::picker_override(
+                    "builtin".into(),
+                    "Built-in Output".into(),
+                    Some("hdmi-1".into()),
+                )),
+            },
+            Some(&logs),
+        );
         assert!(has_row(&paused, "installed", "yes"));
         assert!(has_row(&paused, "running", "no"));
         assert!(has_row(&paused, "paused", "yes"));
         assert!(has_row(&paused, "reason", "picker override"));
         assert!(paused.contains("daemon is paused until `rusty-jack resume`"));
 
-        let not_installed = format_daemon_block(&DaemonStatus::NotInstalled {
-            plist_path: "/tmp/test.plist".into(),
-        });
+        let not_installed = format_daemon_block(
+            &DaemonStatus::NotInstalled {
+                plist_path: "/tmp/test.plist".into(),
+            },
+            Some(&logs),
+        );
         assert!(has_row(&not_installed, "installed", "no"));
         assert!(has_row(&not_installed, "running", "no"));
         assert!(has_row(&not_installed, "paused", "no"));
@@ -722,6 +776,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"active_device_uid\""));
@@ -744,10 +799,15 @@ mod tests {
                 service: "gui/501/com.example.rusty-jack".into(),
                 pid: Some(123),
             }),
+            Some(crate::launchd::DaemonLogPaths {
+                stdout: "/tmp/rusty-jack.stdout.log".into(),
+                stderr: "/tmp/rusty-jack.stderr.log".into(),
+            }),
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"volume_percent\":13"));
         assert!(json.contains("\"daemon\""));
+        assert!(json.contains("\"daemon_logs\""));
         assert!(json.contains("\"state\":\"running\""));
     }
 }

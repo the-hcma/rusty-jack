@@ -545,6 +545,23 @@ pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
     })
 }
 
+/// Paths where launchd writes daemon stdout and stderr.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DaemonLogPaths {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Resolve the per-user daemon log paths used by the LaunchAgent plist.
+pub fn daemon_log_paths() -> Result<DaemonLogPaths, RustyJackError> {
+    let home = home_dir_or_err()?;
+    let logs_dir = home.join("Library/Logs");
+    Ok(DaemonLogPaths {
+        stdout: logs_dir.join("rusty-jack.stdout.log").display().to_string(),
+        stderr: logs_dir.join("rusty-jack.stderr.log").display().to_string(),
+    })
+}
+
 /// Refresh the LaunchAgent plist to the current binary and restart the daemon.
 pub fn upgrade_daemon(force_reload: bool) -> Result<UpgradeResult, RustyJackError> {
     let result = write_and_load_daemon(LoadMode::Upgrade, force_reload)?;
@@ -900,6 +917,16 @@ mod tests {
             service_id("gui/501", LAUNCH_AGENT_LABEL),
             "gui/501/com.example.rusty-jack"
         );
+    }
+
+    #[test]
+    fn test_daemon_log_paths_under_home() {
+        let home = std::env::var("HOME").expect("HOME should be set in tests");
+        let paths = daemon_log_paths().unwrap();
+        assert!(paths.stdout.ends_with("rusty-jack.stdout.log"));
+        assert!(paths.stderr.ends_with("rusty-jack.stderr.log"));
+        assert!(paths.stdout.starts_with(&home));
+        assert!(paths.stderr.starts_with(&home));
     }
 
     #[test]
