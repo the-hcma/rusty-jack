@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.3.0...rusty-jack-v0.4.0) (2026-06-08)
+
+
+### Features
+
+* auto-discover ScalarWebAPI devices during install and reconfigure ([#92](https://github.com/the-hcma/rusty-jack/issues/92)) ([7594371](https://github.com/the-hcma/rusty-jack/commit/7594371c266ea779688948bc275c60f1c69fe622))
+
+
+### Bug Fixes
+
+* fix make uninstall and embed git commit in version ([#91](https://github.com/the-hcma/rusty-jack/issues/91)) ([a6a0459](https://github.com/the-hcma/rusty-jack/commit/a6a04591206b3a504f2d7008b955bf463226392c))
+
 ## [0.3.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.2.0...rusty-jack-v0.3.0) (2026-06-08)
 
 
