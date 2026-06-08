@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.4.0...rusty-jack-v0.4.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* auto fast-forward main in release scripts ([#94](https://github.com/the-hcma/rusty-jack/issues/94)) ([8bcfeb8](https://github.com/the-hcma/rusty-jack/commit/8bcfeb805776619687c865b5890e803e163d49d4))
+
 ## [0.4.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.3.0...rusty-jack-v0.4.0) (2026-06-08)
 
 
