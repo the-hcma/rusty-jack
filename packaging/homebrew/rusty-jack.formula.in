@@ -48,8 +48,9 @@ class RustyJack < Formula
       match the installed CLI version/commit.
 
       HDMI/DisplayPort keyboard volume: the bundled RustyJack.driver is not
-      Developer ID–signed yet, so macOS usually will not load it. Use eqMac if
-      already installed until signed drivers ship. See docs/DRIVER_SIGNING.md.
+      Developer ID–signed yet, so macOS usually will not load it. Release builds
+      do not prompt to install it; use eqMac if already installed until signed
+      drivers ship. See docs/DRIVER_SIGNING.md.
 
       Daemon logs: ~/Library/Logs/rusty-jack.log (one file; rotated by the app).
 

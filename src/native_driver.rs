@@ -7,7 +7,7 @@ use crate::eqmac::{
 };
 use crate::hdmi_displayport_volume_control::{
     connected_hdmi_displayport_output_present, native_driver_info, native_driver_scope_note,
-    RUSTY_JACK_DRIVER_BUNDLE_ID,
+    native_driver_user_install_offered, RUSTY_JACK_DRIVER_BUNDLE_ID,
 };
 use crate::output_device::OutputDevice;
 use crate::system_default::HalDriverInfo;
@@ -24,6 +24,8 @@ pub const RUSTY_JACK_DRIVER_BUNDLE_NAME: &str = "RustyJack.driver";
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum NativeDriverInstallResult {
     NotNeededNoHdmiDisplayPort,
+    /// User install prompts are disabled until a signed native driver release ships.
+    NotOffered,
     AlreadyInstalled {
         install_path: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -199,6 +201,10 @@ pub fn install_for_connected_hdmi_displayport(
         });
     }
 
+    if !native_driver_user_install_offered() {
+        return Ok(NativeDriverInstallResult::NotOffered);
+    }
+
     let Some(source) = bundled_native_driver_path() else {
         return Ok(NativeDriverInstallResult::BundleUnavailable {
             message: bundle_unavailable_message(),
@@ -304,6 +310,13 @@ pub fn upgrade_if_materially_changed(
     })?;
 
     if !driver_materially_changed(&source, &source_info, &installed)? {
+        return Ok(NativeDriverUpgradeResult::UpToDate {
+            install_path: installed.install_path,
+            version: installed.version,
+        });
+    }
+
+    if !native_driver_user_install_offered() {
         return Ok(NativeDriverUpgradeResult::UpToDate {
             install_path: installed.install_path,
             version: installed.version,
@@ -589,7 +602,8 @@ pub fn swap_out_for_testing(interactive: bool) -> Result<DriverSwapOutResult, Ru
 
 pub fn print_install_result(result: &NativeDriverInstallResult) {
     match result {
-        NativeDriverInstallResult::NotNeededNoHdmiDisplayPort => {}
+        NativeDriverInstallResult::NotNeededNoHdmiDisplayPort
+        | NativeDriverInstallResult::NotOffered => {}
         NativeDriverInstallResult::AlreadyInstalled {
             install_path,
             version,

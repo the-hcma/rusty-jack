@@ -4,7 +4,7 @@
 
 **Homebrew and GitHub releases ship `RustyJack.driver` ad-hoc signed.** That is enough for layout validation (`make validate-driver-bundle`) and local development, but **not for normal use on macOS** — CoreAudio/AMFI usually rejects the bundle until it is signed with a **Developer ID Application** certificate (and typically **notarized** before distributing to other Macs).
 
-Until signed drivers ship in releases, use **eqMac** (when already installed) for HDMI/DisplayPort keyboard volume. The installer and `rusty-jack status` may show a driver path even when Sound settings never lists **Rusty Jack**; that is the unsigned-bundle case, not a routing bug.
+Until signed drivers ship in releases, use **eqMac** (when already installed) for HDMI/DisplayPort keyboard volume. **Release builds do not prompt to install the native driver** during `install`, `picker`, or `upgrade`. `rusty-jack status` may still describe HDMI/DP volume guidance even when Sound settings never lists **Rusty Jack**; that is expected until a signed bundle is available.
 
 ---
 

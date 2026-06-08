@@ -13,9 +13,7 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, HDMI/Display
 3. Run `rusty-jack apply` or pick your monitor in `picker`.
 4. Confirm a virtual volume-control device is the **system default** in Sound settings (or `rusty-jack status` shows a virtual default footer routing to your monitor).
 
-**Native driver:** Homebrew and release packages bundle `RustyJack.driver`, but it is **ad-hoc signed**. macOS usually **refuses to load** it (Console: `signature not valid: -67050`). Installing it via `rusty-jack install` does **not** make HDMI volume work on a typical Mac until the bundle is signed — see [DRIVER_SIGNING.md](./DRIVER_SIGNING.md). Developers can run `make sign-driver-bundle` with a Developer ID certificate.
-
-If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver`, run `make install` from a source checkout, or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
+**Native driver:** Homebrew and release packages bundle `RustyJack.driver`, but it is **ad-hoc signed**. macOS usually **refuses to load** it (Console: `signature not valid: -67050`). **Release builds do not prompt to install it** during `install`, `picker`, or `upgrade` until a signed driver ships — see [DRIVER_SIGNING.md](./DRIVER_SIGNING.md). Developers can run `make sign-driver-bundle` with a Developer ID certificate, use `rusty-jack driver swap-in`, or set `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` to test install prompts locally.
 
 ---
 
@@ -61,14 +59,11 @@ rusty-jack picker --index 2 --json
 
 ---
 
-## HDMI/DisplayPort volume-control warning
+## HDMI/DisplayPort volume-control note
 
-```
-warning: HDMI/DisplayPort volume keys need Rusty Jack's native audio driver.
-  Install the Rusty Jack driver to control volume for connected HDMI/DisplayPort outputs.
-```
+`rusty-jack status` and `install` may report that HDMI/DisplayPort volume keys need a virtual volume layer and that **native driver install is not offered** until a signed release ships.
 
-Use **eqMac** if already installed. Accepting the native driver prompt from `rusty-jack install` does not enable HDMI volume on release builds until the HAL bundle is Developer ID–signed. Routing to HDMI still works; **volume control** needs eqMac or a signed native driver.
+Use **eqMac** if already installed. Routing to HDMI still works; **volume control** needs eqMac or a future signed native driver.
 
 ---
 

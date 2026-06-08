@@ -70,7 +70,7 @@ HDMI/DisplayPort volume control needs:
 1. A **virtual HAL device** as the system default (what volume keys target).
 2. An **app** that captures audio, applies software gain, and renders to the physical monitor.
 
-Rusty Jack offers this path only when a connected HDMI/DisplayPort output is present. It prefers its own native HAL driver. If that driver is not installed and eqMac is already installed, it starts eqMac when you switch to an HDMI/DisplayPort device:
+Rusty Jack detects when a connected HDMI/DisplayPort output needs volume control. **Release builds do not yet prompt to install the native HAL driver** (unsigned bundles are not loadable on typical Macs). If eqMac is already installed, Rusty Jack starts it when you switch to an HDMI/DisplayPort device:
 
 | HDMI/DP volume-control state | Behavior |
 |------------------------------|----------|
@@ -340,7 +340,7 @@ Confirm `--help` commit matches `git rev-parse --short HEAD`.
 
 See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 
-- Volume keys dead on HDMI/DisplayPort without the Rusty Jack driver or installed eqMac fallback
+- Volume keys dead on HDMI/DisplayPort — use installed eqMac today; release native driver needs Developer ID signing
 - eqMac installed but volume still wrong
 - Zoom / virtual devices in the picker
 - Policy “no change” / wrong monitor

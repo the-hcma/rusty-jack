@@ -174,15 +174,9 @@ At runtime, wake traffic still uses SSDP/UPnP to resolve the JSON-RPC base URL f
 
 > **Not yet usable from Homebrew/releases.** Packages include `RustyJack.driver`, but it is ad-hoc signed. macOS AMFI typically rejects it (`signature not valid: -67050`) until the bundle is signed with a **Developer ID Application** identity (and notarized for other Macs). For HDMI/DP volume keys today, use **eqMac** if already installed. Developers: [DRIVER_SIGNING.md](./DRIVER_SIGNING.md).
 
-When a **signed** native driver is available, it is the preferred volume-key path for connected HDMI/DisplayPort outputs. Rusty Jack offers install only when a live HDMI/DP output is present; USB microphones, built-in outputs, Bluetooth, and virtual devices do not trigger the offer.
+When a **signed** native driver is available in a future release, it will be the preferred volume-key path for connected HDMI/DisplayPort outputs. **Current releases do not prompt to install the native driver** during `install`, `picker`, or `upgrade`; use **eqMac** for HDMI/DP volume keys today. Developers can still test with `rusty-jack driver swap-in` or set `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` to re-enable install prompts locally.
 
-Interactive install:
-
-```bash
-rusty-jack install
-```
-
-When prompted, accept the native driver install. Rusty Jack looks for `RustyJack.driver` in this order:
+When user install is enabled, Rusty Jack offers install only when a live HDMI/DP output is present; USB microphones, built-in outputs, Bluetooth, and virtual devices do not trigger the offer. Rusty Jack looks for `RustyJack.driver` in this order:
 
 1. `RUSTY_JACK_DRIVER_BUNDLE`
 2. next to the running `rusty-jack` binary

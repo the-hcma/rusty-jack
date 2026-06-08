@@ -174,6 +174,13 @@ fn native_driver_picker_notes(
         return Vec::new();
     }
 
+    let note: String =
+        if crate::hdmi_displayport_volume_control::native_driver_user_install_offered() {
+            "native driver recommended for volume keys".into()
+        } else {
+            "use eqMac for HDMI/DisplayPort volume keys".into()
+        };
+
     devices
         .iter()
         .filter(|device| {
@@ -181,12 +188,7 @@ fn native_driver_picker_notes(
                 && device.is_selectable()
                 && route_needs_hdmi_displayport_volume_control(devices, &device.uid)
         })
-        .map(|device| {
-            (
-                device.uid.clone(),
-                "native driver recommended for volume keys".into(),
-            )
-        })
+        .map(|device| (device.uid.clone(), note.clone()))
         .collect()
 }
 
@@ -197,6 +199,7 @@ fn maybe_offer_native_driver_for_pick(
 ) -> Result<()> {
     if json
         || !crate::setup::terminal_is_interactive()
+        || !crate::hdmi_displayport_volume_control::native_driver_user_install_offered()
         || native_driver_info().is_some()
         || !route_needs_hdmi_displayport_volume_control(devices, &device.uid)
     {
@@ -423,10 +426,30 @@ mod tests {
             native_driver_picker_notes(&devices, false),
             vec![(
                 "hdmi".into(),
-                "native driver recommended for volume keys".into()
+                "use eqMac for HDMI/DisplayPort volume keys".into()
             )]
         );
         assert!(native_driver_picker_notes(&devices, true).is_empty());
+    }
+
+    #[test]
+    fn test_native_driver_picker_notes_when_install_offered() {
+        let devices = vec![OutputDevice {
+            transport: TransportKind::Hdmi,
+            uid: "hdmi".into(),
+            name: "HDMI".into(),
+            ..device("hdmi", "HDMI", false)
+        }];
+
+        std::env::set_var("RUSTY_JACK_OFFER_NATIVE_DRIVER", "1");
+        assert_eq!(
+            native_driver_picker_notes(&devices, false),
+            vec![(
+                "hdmi".into(),
+                "native driver recommended for volume keys".into()
+            )]
+        );
+        std::env::remove_var("RUSTY_JACK_OFFER_NATIVE_DRIVER");
     }
 
     #[test]

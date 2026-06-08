@@ -12,6 +12,21 @@ pub const RUSTY_JACK_DRIVER_NAME: &str = "Rusty Jack";
 /// CoreAudio UID published by the Rusty Jack HAL driver virtual output.
 pub const RUSTY_JACK_VIRTUAL_OUTPUT_UID: &str = "com.the-hcma.rusty-jack.driver.output";
 
+/// User-facing reason when normal CLI flows do not offer native driver install.
+pub const NATIVE_DRIVER_USER_INSTALL_UNAVAILABLE_REASON: &str =
+    "Rusty Jack native driver install is not offered until a signed, notarized release ships; use eqMac for HDMI/DisplayPort volume keys today";
+
+/// Whether install/upgrade prompts may offer the Rusty Jack HAL driver in normal CLI flows.
+///
+/// `rusty-jack driver swap-in` remains available for development. Set
+/// `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` to re-enable install offers locally.
+#[must_use]
+pub fn native_driver_user_install_offered() -> bool {
+    std::env::var("RUSTY_JACK_OFFER_NATIVE_DRIVER")
+        .ok()
+        .is_some_and(|value| !matches!(value.as_str(), "" | "0" | "false" | "no"))
+}
+
 /// What HDMI/DisplayPort volume-control support did for a selected route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -167,7 +182,11 @@ pub fn format_ensure_messages(result: HdmiDisplayPortVolumeControlEnsureResult) 
             vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
         }
         HdmiDisplayPortVolumeControlEnsureAction::NativeDriverRecommended => {
-            driver_offer_messages()
+            if native_driver_user_install_offered() {
+                driver_offer_messages()
+            } else {
+                volume_control_guidance_messages(eqmac::eqmac_app_path().is_some())
+            }
         }
     }
 }
@@ -191,13 +210,20 @@ pub fn hdmi_displayport_volume_control_status_for_target(
     let native_driver_installed = native_driver.is_some();
     let target_needs_driver =
         target_uid.map(|uid| route_needs_hdmi_displayport_volume_control(devices, uid));
-    let native_driver_recommended =
+    let would_recommend_native_driver =
         target_needs_driver.unwrap_or(connected_output_present) && !native_driver_installed;
-    let native_driver_recommendation_reason = driver_recommendation_reason(
-        target_needs_driver,
-        connected_output_present,
-        native_driver_installed,
-    );
+    let native_driver_recommended =
+        would_recommend_native_driver && native_driver_user_install_offered();
+    let native_driver_recommendation_reason =
+        if would_recommend_native_driver && !native_driver_user_install_offered() {
+            Some("native driver install not offered until a signed release ships".into())
+        } else {
+            driver_recommendation_reason(
+                target_needs_driver,
+                connected_output_present,
+                native_driver_installed,
+            )
+        };
     let native_driver_install_path = native_driver
         .as_ref()
         .map(|driver| driver.install_path.clone());
@@ -221,8 +247,12 @@ pub fn hdmi_displayport_volume_control_status_for_target(
     let orphaned_eqmac_hal_driver_path = eqmac::orphaned_eqmac_hal_driver_path();
     let eqmac_driver_backup = eqmac::eqmac_driver_backup_info();
     let eqmac_installed = eqmac_app_path.is_some();
-    let recommendation = if native_driver_recommended {
-        Some(driver_offer_message(eqmac_installed))
+    let recommendation = if would_recommend_native_driver {
+        Some(if native_driver_user_install_offered() {
+            driver_offer_message(eqmac_installed)
+        } else {
+            volume_control_guidance_message(eqmac_installed)
+        })
     } else {
         None
     };
@@ -342,6 +372,22 @@ fn driver_offer_message(eqmac_installed: bool) -> String {
     }
 }
 
+fn volume_control_guidance_message(eqmac_installed: bool) -> String {
+    if eqmac_installed {
+        format!(
+            "HDMI/DisplayPort volume keys: use eqMac (already installed). {NATIVE_DRIVER_USER_INSTALL_UNAVAILABLE_REASON}."
+        )
+    } else {
+        format!(
+            "HDMI/DisplayPort volume keys need a virtual volume layer. {NATIVE_DRIVER_USER_INSTALL_UNAVAILABLE_REASON}."
+        )
+    }
+}
+
+fn volume_control_guidance_messages(eqmac_installed: bool) -> Vec<String> {
+    vec![volume_control_guidance_message(eqmac_installed)]
+}
+
 fn map_eqmac_result(eqmac: eqmac::EqMacEnsureResult) -> HdmiDisplayPortVolumeControlEnsureResult {
     result(match eqmac.action {
         EqMacEnsureAction::NotNeeded => HdmiDisplayPortVolumeControlEnsureAction::NotNeeded,
@@ -412,6 +458,29 @@ mod tests {
     fn test_driver_offer_without_eqmac_does_not_mention_eqmac() {
         let message = driver_offer_message(false);
         assert!(!message.contains("eqMac"));
+    }
+
+    #[test]
+    fn test_volume_control_guidance_when_native_driver_not_offered() {
+        let without_eqmac = volume_control_guidance_message(false);
+        assert!(without_eqmac.contains("eqMac"));
+        assert!(without_eqmac.contains("not offered"));
+
+        let with_eqmac = volume_control_guidance_message(true);
+        assert!(with_eqmac.contains("eqMac"));
+        assert!(with_eqmac.contains("already installed"));
+    }
+
+    #[test]
+    fn test_hdmi_status_does_not_recommend_native_driver_when_not_offered() {
+        let devices = vec![device("hdmi", TransportKind::Hdmi)];
+        let status = hdmi_displayport_volume_control_status(&devices);
+        assert!(!status.native_driver_recommended);
+        assert!(status
+            .recommendation
+            .as_ref()
+            .unwrap()
+            .contains("not offered"));
     }
 
     #[test]
