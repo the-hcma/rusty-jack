@@ -63,7 +63,7 @@ Workflow changes to release files require owner review through `CODEOWNERS`.
 
    `make update-release-pr` fetches `origin/main` and fast-forwards local `main` when it is only behind the remote.
 
-   This opens/updates a PR (label `release-please`) that bumps `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and `.release-please-manifest.json`.
+   This opens/updates a PR (label `release-please`) that bumps `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and `.release-please-manifest.json`. The script prints the open release PR URL as its last line (or a note when none exists).
 
 3. Review and merge the release PR on GitHub.
 
@@ -73,7 +73,7 @@ Workflow changes to release files require owner review through `CODEOWNERS`.
    make publish-release
    ```
 
-   This creates the GitHub release/tag (`rusty-jack-vX.Y.Z`) and opens a tap PR in `the-hcma/homebrew-tap` with auto-merge enabled.
+   This creates the GitHub release/tag (`rusty-jack-vX.Y.Z`), opens a tap PR in `the-hcma/homebrew-tap` with auto-merge enabled, waits for tap CI and merge to finish, then prints the tap PR URL as its last line.
 
 ## Homebrew tap role
 
