@@ -17,6 +17,10 @@
     <dict>
         <key>RUST_LOG</key>
         <string>info</string>
+        <key>RUSTY_JACK_DAEMON_PKG_VERSION</key>
+        <string>@DAEMON_PKG_VERSION@</string>
+        <key>RUSTY_JACK_DAEMON_GIT_COMMIT</key>
+        <string>@DAEMON_GIT_COMMIT@</string>
     </dict>
 </dict>
 </plist>

@@ -387,6 +387,12 @@ fn format_daemon_block(
 
 fn daemon_stale_note(check: &DaemonVersionCheck) -> String {
     let current = check.cli_version.display();
+    if check.needs_version_stamp_refresh {
+        return format!(
+            "LaunchAgent is missing stamped daemon version metadata; CLI is {}; run `{}`",
+            current, check.refresh_command
+        );
+    }
     if let Some(running) = check
         .running_binary_version
         .as_ref()
@@ -982,6 +988,7 @@ mod tests {
                 commit: "oldcommit".into(),
             }),
             running_binary_version: None,
+            needs_version_stamp_refresh: false,
             stale: true,
             refresh_command: crate::launchd::DAEMON_REFRESH_COMMAND,
         };
@@ -998,6 +1005,44 @@ mod tests {
         assert!(block.contains("daemon stale"));
         assert!(block.contains("rusty-jack upgrade --force"));
         assert!(block.contains("0.4.1 (commit oldcommit)"));
+    }
+
+    #[test]
+    fn test_format_daemon_block_flags_brew_upgrade_stale_running_env() {
+        use crate::launchd::DaemonVersionCheck;
+
+        let check = DaemonVersionCheck {
+            cli_binary_path: "/opt/homebrew/bin/rusty-jack".into(),
+            cli_version: BinaryVersion {
+                version: "0.6.0".into(),
+                commit: "f289256".into(),
+            },
+            plist_binary_path: Some("/opt/homebrew/bin/rusty-jack".into()),
+            plist_binary_version: Some(BinaryVersion {
+                version: "0.6.0".into(),
+                commit: "f289256".into(),
+            }),
+            running_binary_version: Some(BinaryVersion {
+                version: "0.5.0".into(),
+                commit: "oldcommit".into(),
+            }),
+            needs_version_stamp_refresh: false,
+            stale: true,
+            refresh_command: crate::launchd::DAEMON_REFRESH_COMMAND,
+        };
+        let block = format_daemon_block(
+            &DaemonStatus::Running {
+                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                plist_path: "/tmp/test.plist".into(),
+                service: "gui/503/com.example.rusty-jack".into(),
+                pid: Some(2952),
+            },
+            Some(&check),
+            None,
+        );
+        assert!(block.contains("daemon stale"));
+        assert!(block.contains("running daemon is 0.5.0 (commit oldcommit)"));
+        assert!(block.contains("rusty-jack upgrade --force"));
     }
 
     #[test]
