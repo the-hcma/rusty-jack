@@ -73,7 +73,7 @@ Workflow changes to release files require owner review through `CODEOWNERS`.
    make publish-release
    ```
 
-   This creates the GitHub release/tag (`rusty-jack-vX.Y.Z`), opens a tap PR in `the-hcma/homebrew-tap` with auto-merge enabled, waits for tap CI and merge to finish, then prints the tap PR URL as its last line.
+   This creates the GitHub release/tag (`rusty-jack-vX.Y.Z`), opens a tap PR in `the-hcma/homebrew-tap` with auto-merge enabled, prints the tap PR URL, waits for tap CI and merge to finish, then prints the tap PR URL again as its last line.
 
 ## Homebrew tap role
 
