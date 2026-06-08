@@ -366,14 +366,14 @@ Integer 0–100. Created automatically from the preferred route's current effect
 
 ### `scalar_webapi_device`
 
-Optional block for waking a ScalarWebAPI-compatible device. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches discover the device's advertised ScalarWebAPI endpoint, then send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output` and the Mac reports the speaker host as reachable. When `triggers` includes `keyboard` or `mouse`, `daemon` also wakes the device on idle-to-active transitions if that Mac output is already selected. Wake attempts are skipped while the default LAN route is down or macOS reachability reports the configured host as unreachable, then retried after network recovery (including clearing the activity wake debounce when the network fingerprint changes). `mac_output` may be any Mac output connected to the external device; HDMI/DisplayPort volume control is only involved when that output is an HDMI/DP route. `port` defaults to `10000` and is only used as a fallback if discovery is unavailable. See `config.example.scalar-webapi-device.json`.
+Optional block for waking a ScalarWebAPI-compatible device. Rusty Jack discovers the JSON-RPC base URL via SSDP/UPnP (`X_ScalarWebAPI_BaseURL`); Sony devices typically advertise a port such as `54480`, not the config default. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`, the device is not already active, and the Mac reports the speaker host as reachable. The daemon re-checks power status on startup (not every scheduled poll while already routed). When `triggers` includes `keyboard` or `mouse`, `daemon` wakes the device on idle-to-active transitions if that Mac output is already selected and power status confirms the device is not active. Wake attempts are skipped while the default LAN route is down, when SSDP discovery finds no endpoint, or when macOS reachability reports the configured host as unreachable; they retry after network recovery (including clearing the activity wake debounce when the network fingerprint changes). `mac_output` may be any Mac output connected to the external device; HDMI/DisplayPort volume control is only involved when that output is an HDMI/DP route. See `config.example.scalar-webapi-device.json`.
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `false` | Enables ScalarWebAPI wake integration. |
 | `model` | `ScalarWebAPI device` | Human-readable model hint for docs/logging. |
-| `host` | none | Hostname, FQDN, or IP used for discovery fallback and configured endpoint construction. Required when enabled. |
-| `port` | `10000` | Fallback ScalarWebAPI port when SSDP discovery is unavailable. |
+| `host` | none | Hostname, FQDN, or IP used to filter SSDP discovery responses. Required when enabled. |
+| `port` | `10000` | Legacy config default; JSON-RPC uses the SSDP-advertised port (for example `54480` on Sony devices). |
 | `path` | protocol default | ScalarWebAPI base path. Usually omit this unless discovery is unavailable and your device needs an override. |
 | `mac_output` | none | Device selector for the Mac output connected to the device. Required when enabled. |
 | `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or daemon idle-to-active activity. |

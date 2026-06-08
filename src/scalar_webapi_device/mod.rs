@@ -14,7 +14,8 @@ use crate::output_device::OutputDevice;
 use crate::RustyJackError;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::Message;
 
@@ -68,12 +69,33 @@ fn format_readable_trigger_list(items: &[String]) -> String {
 const SYSTEM_SERVICE: &str = "system";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
+const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone)]
+struct CachedScalarEndpoint {
+    host_key: String,
+    endpoint: ScalarWebApiDeviceEndpoint,
+    cached_at: Instant,
+}
+
+fn endpoint_cache() -> &'static Mutex<Option<CachedScalarEndpoint>> {
+    static CACHE: Mutex<Option<CachedScalarEndpoint>> = Mutex::new(None);
+    &CACHE
+}
+
+#[cfg(test)]
+pub(crate) fn clear_scalar_webapi_endpoint_cache_for_tests() {
+    if let Ok(mut guard) = endpoint_cache().lock() {
+        *guard = None;
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScalarWebApiDeviceWakeResult {
     pub endpoint: String,
     pub status_code: u16,
     pub previous_status: Option<String>,
+    pub trigger: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,7 +163,7 @@ pub fn wake_on_output_selected(
         return Ok(None);
     }
 
-    try_wake_scalar_webapi_device(api)
+    try_wake_scalar_webapi_device(api, OUTPUT_SELECTED_TRIGGER, true)
 }
 
 /// Log ScalarWebAPI wake failures as warnings so audio routing still succeeds.
@@ -173,25 +195,73 @@ pub fn wake_on_activity(
         return Ok(None);
     }
 
-    try_wake_scalar_webapi_device(api)
+    try_wake_scalar_webapi_device(api, activity_trigger_label(api), false)
+}
+
+fn activity_trigger_label(api: &ScalarWebApiDeviceConfig) -> &'static str {
+    if trigger_enabled(api, KEYBOARD_TRIGGER) {
+        KEYBOARD_TRIGGER
+    } else {
+        MOUSE_TRIGGER
+    }
 }
 
 fn try_wake_scalar_webapi_device(
     api: &ScalarWebApiDeviceConfig,
+    trigger: &str,
+    allow_wake_without_power_status: bool,
 ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
     if !crate::network::host_ready_for_scalar_webapi_wake(api.host.as_deref())? {
         return Ok(None);
     }
 
-    let previous_status = current_power_status(api).ok();
+    let endpoint = match resolve_scalar_webapi_device_endpoint(api)? {
+        Some(endpoint) => endpoint,
+        None => {
+            tracing::debug!(
+                target: "daemon",
+                "[scalar] SSDP discovery found no JSON-RPC endpoint for {}; skipping wake (configured port {} is not used)",
+                scalar_webapi_device_host(api)?,
+                api.port
+            );
+            return Ok(None);
+        }
+    };
+
+    let previous_status = match current_power_status_at_endpoint(api, &endpoint) {
+        Ok(status) => Some(status),
+        Err(err) if allow_wake_without_power_status => {
+            tracing::debug!(
+                target: "daemon",
+                "[scalar] power status unavailable at {}: {err}; attempting wake on {trigger}",
+                endpoint.base_url()
+            );
+            None
+        }
+        Err(err) => {
+            tracing::debug!(
+                target: "daemon",
+                "[scalar] power status unavailable at {}: {err}; skipping wake on {trigger}",
+                endpoint.base_url()
+            );
+            return Ok(None);
+        }
+    };
+
     if previous_status
         .as_deref()
         .is_some_and(|status| status.eq_ignore_ascii_case("active"))
     {
+        tracing::debug!(
+            target: "daemon",
+            "[scalar] device already active; skipping wake on {trigger}"
+        );
         return Ok(None);
     }
-    let mut result = send_wake_command(api)?;
+
+    let mut result = send_wake_command_to(api, &endpoint)?;
     result.previous_status = previous_status;
+    result.trigger = trigger.into();
     Ok(Some(result))
 }
 
@@ -206,17 +276,20 @@ pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &
 
 #[must_use]
 pub fn format_wake_message(result: &ScalarWebApiDeviceWakeResult) -> String {
-    if result
-        .previous_status
-        .as_deref()
-        .is_some_and(|status| status.eq_ignore_ascii_case("standby"))
-    {
-        format!(
-            "ScalarWebAPI device was standby; waking it via {}.",
+    let trigger = human_readable_trigger_label(&result.trigger, None);
+    match result.previous_status.as_deref() {
+        Some(status) if status.eq_ignore_ascii_case("standby") => format!(
+            "ScalarWebAPI wake on {trigger}: device was standby; sent setPowerStatus(active) via {}.",
             result.endpoint
-        )
-    } else {
-        format!("Sent ScalarWebAPI wake command to {}.", result.endpoint)
+        ),
+        Some(status) => format!(
+            "ScalarWebAPI wake on {trigger}: power was {status}; sent setPowerStatus(active) via {}.",
+            result.endpoint
+        ),
+        None => format!(
+            "ScalarWebAPI wake on {trigger}: power status unavailable; sent setPowerStatus(active) via {}.",
+            result.endpoint
+        ),
     }
 }
 
@@ -258,10 +331,20 @@ fn activity_trigger_enabled(api: &ScalarWebApiDeviceConfig) -> bool {
 }
 
 pub fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, RustyJackError> {
-    let endpoint = match discover_scalar_webapi_device_endpoint(api)? {
-        Some(endpoint) => endpoint,
-        None => configured_endpoint(api)?,
-    };
+    let endpoint = resolve_scalar_webapi_device_endpoint(api)?.ok_or_else(|| {
+        RustyJackError::Speaker(format!(
+            "ScalarWebAPI SSDP discovery found no JSON-RPC endpoint for {} (configured port {} is not used for Sony devices)",
+            scalar_webapi_device_host(api).unwrap_or("(unset)"),
+            api.port
+        ))
+    })?;
+    current_power_status_at_endpoint(api, &endpoint)
+}
+
+fn current_power_status_at_endpoint(
+    api: &ScalarWebApiDeviceConfig,
+    endpoint: &ScalarWebApiDeviceEndpoint,
+) -> Result<String, RustyJackError> {
     let payload = serde_json::json!({
         "method": "getPowerStatus",
         "params": [],
@@ -288,25 +371,29 @@ pub fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, Ru
     power_status_from_response(&response)
 }
 
-fn send_wake_command(
+fn resolve_scalar_webapi_device_endpoint(
     api: &ScalarWebApiDeviceConfig,
-) -> Result<ScalarWebApiDeviceWakeResult, RustyJackError> {
-    let discovered = match discover_scalar_webapi_device_endpoint(api) {
-        Ok(endpoint) => endpoint,
-        Err(err) => {
-            eprintln!("warning: ScalarWebAPI endpoint discovery failed: {err}");
-            None
-        }
-    };
-    if let Some(endpoint) = discovered.as_ref() {
-        match send_wake_command_to(api, endpoint) {
-            Ok(result) => return Ok(result),
-            Err(err) => eprintln!("warning: discovered ScalarWebAPI endpoint failed: {err}"),
+) -> Result<Option<ScalarWebApiDeviceEndpoint>, RustyJackError> {
+    let host_key = scalar_webapi_device_host(api)?.to_string();
+    if let Ok(guard) = endpoint_cache().lock() {
+        if let Some(cached) = guard.as_ref() {
+            if cached.host_key == host_key && cached.cached_at.elapsed() < ENDPOINT_CACHE_TTL {
+                return Ok(Some(cached.endpoint.clone()));
+            }
         }
     }
 
-    let configured = configured_endpoint(api)?;
-    send_wake_command_to(api, &configured)
+    let discovered = discover_scalar_webapi_device_endpoint(api)?;
+    if let Some(endpoint) = discovered.clone() {
+        if let Ok(mut guard) = endpoint_cache().lock() {
+            *guard = Some(CachedScalarEndpoint {
+                host_key,
+                endpoint: endpoint.clone(),
+                cached_at: Instant::now(),
+            });
+        }
+    }
+    Ok(discovered)
 }
 
 fn send_wake_command_to(
@@ -348,6 +435,7 @@ fn send_wake_command_to(
         endpoint,
         status_code,
         previous_status: None,
+        trigger: String::new(),
     })
 }
 
@@ -417,6 +505,7 @@ fn scalar_webapi_device_host(api: &ScalarWebApiDeviceConfig) -> Result<&str, Rus
         .ok_or_else(|| RustyJackError::Config("scalar_webapi_device.host is not set".into()))
 }
 
+#[cfg(test)]
 fn configured_endpoint(
     api: &ScalarWebApiDeviceConfig,
 ) -> Result<ScalarWebApiDeviceEndpoint, RustyJackError> {
@@ -892,9 +981,10 @@ mod tests {
             endpoint: format!("http://speaker/{}/system", protocol_path()),
             status_code: 200,
             previous_status: Some("standby".into()),
+            trigger: OUTPUT_SELECTED_TRIGGER.into(),
         });
-        assert!(message.contains("was standby"));
-        assert!(message.contains("waking"));
+        assert!(message.contains("output device selection"));
+        assert!(message.contains("standby"));
     }
 
     #[test]
@@ -903,12 +993,15 @@ mod tests {
             endpoint: format!("http://speaker/{}/system", protocol_path()),
             status_code: 200,
             previous_status: None,
+            trigger: KEYBOARD_TRIGGER.into(),
         });
-        assert!(message.starts_with("Sent ScalarWebAPI wake command"));
+        assert!(message.contains("keyboard activity"));
+        assert!(message.contains("power status unavailable"));
     }
 
     #[test]
     fn test_selection_filter_skips_non_scalar_webapi_device_output_before_network() {
+        clear_scalar_webapi_endpoint_cache_for_tests();
         let config = config_for("line-out");
         let devices = vec![device("line-out"), device("hdmi")];
         assert_eq!(
