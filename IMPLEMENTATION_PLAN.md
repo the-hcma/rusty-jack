@@ -72,7 +72,7 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, and status reporting |
 | Periodic inspection + auto-switch | Shipped polling daemon with config reload; property listeners remain future refinement |
 | JSON configuration | `~/.config/rusty-jack/config.json` (path overridable) |
-| Homebrew distribution | Tap `the-hcma/tap` ships `v0.1.1`; formula template, render script, and release workflows live in-repo; Release Please runs on `main` through the protected `release` environment |
+| Homebrew distribution | Tap `the-hcma/tap` ships `v0.1.1`; formula template, Makefile render target, and split Release Please publish gate live in-repo |
 | **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent, removes the plist, can remove the native driver, and restores the saved default output; optional config purge via `--remove-config` |
 | **Intel + Apple Silicon** | Cross-compile both targets; release **universal** binary + per-arch Homebrew bottles |
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
@@ -674,7 +674,7 @@ Check: `list`, `apply`, `install`, `pause`, `resume`, `uninstall`, `upgrade`, sl
 
 Rust compiles to a **native Mach-O binary** per architecture (`aarch64-apple-darwin`, `x86_64-apple-darwin`). Homebrew builds or bottles each arch separately; releases may also ship a **universal** tarball for manual install.
 
-Homebrew distribution is live via `the-hcma/tap` (`brew install the-hcma/tap/rusty-jack`). Local source install remains `make install`; LaunchAgent installation is handled by `rusty-jack install`. Release Please runs automatically on pushes to `main`; merging its PR is the human release gate.
+Homebrew distribution is live via `the-hcma/tap` (`brew install the-hcma/tap/rusty-jack`). Local source install remains `make install`; LaunchAgent installation is handled by `rusty-jack install`. Release Please opens its PR automatically; publishing the tag requires owner approval in the protected `release` environment after the release PR merges.
 
 ### Recommended path
 
