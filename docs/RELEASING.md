@@ -23,7 +23,8 @@ No GitHub Actions secrets, environments, or release workflows are required.
 
 Both targets automatically:
 
-- verify you are on a **clean**, **up-to-date** `main` (`git fetch origin main` + compare to `origin/main`)
+- verify you are on a **clean** `main`, `git fetch origin main`, and **fast-forward** when local `main` is behind `origin/main`
+- `make update-release-pr` also runs `make publish-release` when a merged release PR exists but its GitHub tag is still missing
 - use **`GH_TOKEN`** or `gh auth token`
 - invoke **`npx release-please@latest`** for the release-please step
 
@@ -57,9 +58,10 @@ Workflow changes to release files require owner review through `CODEOWNERS`.
 
    ```bash
    git checkout main
-   git pull --ff-only
    make update-release-pr
    ```
+
+   `make update-release-pr` fetches `origin/main` and fast-forwards local `main` when it is only behind the remote.
 
    This opens/updates a PR (label `release-please`) that bumps `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and `.release-please-manifest.json`.
 
@@ -68,7 +70,6 @@ Workflow changes to release files require owner review through `CODEOWNERS`.
 4. Publish:
 
    ```bash
-   git pull --ff-only
    make publish-release
    ```
 
@@ -90,7 +91,7 @@ You do not edit the tap by hand for routine releases. `make publish-release` ren
 Re-run publish for the current `Cargo.toml` version:
 
 ```bash
-git checkout main && git pull --ff-only
+git checkout main
 make publish-release
 ```
 
@@ -120,7 +121,13 @@ brew info the-hcma/tap/rusty-jack
 
 **No release PR after `make update-release-pr`:** recent commits may not use releasable prefixes (`feat:`, `fix:`, etc.).
 
-**`main is not up to date with origin/main`:** run `git pull --ff-only origin main`.
+**`untagged, merged release PRs outstanding` from release-please:** the release PR merged but the GitHub tag was never created. `make update-release-pr` now detects this and runs `make publish-release` first. You can also publish manually:
+
+```bash
+make publish-release
+```
+
+**`main has diverged from origin/main`:** rebase or reset local `main` onto `origin/main` (for example `git pull --rebase origin main`). When local `main` is only behind the remote, `make update-release-pr` and `make publish-release` fast-forward automatically.
 
 **Authentication errors:** confirm write access to both repos:
 

@@ -17,7 +17,7 @@ Usage: update-release-pr [--dry-run]
 
 Open or update the Release Please PR on GitHub (version bump + CHANGELOG).
 
-Run from an up-to-date main checkout after merging releasable commits.
+Run from main after merging releasable commits (the script fast-forwards main when behind origin).
 
 Options:
   --dry-run    Print checks without calling release-please.
@@ -50,6 +50,8 @@ release_lib_require_cmd git
 release_lib_load_token
 
 release_lib_ensure_synced_main "${DRY_RUN}"
+
+release_lib_publish_pending_release_if_needed "${REPO}" "${DRY_RUN}" "${ROOT}"
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] would verify write access to ${REPO}"
