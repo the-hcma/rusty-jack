@@ -22,7 +22,7 @@ release_lib_ensure_synced_main() {
   local dry_run="${1:-0}"
 
   if [[ "${dry_run}" -eq 1 ]]; then
-    echo "[dry-run] would fetch origin/main and verify local main is up to date"
+    echo "[dry-run] would fetch origin/main and fast-forward main when behind origin"
     return 0
   fi
 
@@ -43,15 +43,29 @@ release_lib_ensure_synced_main() {
   local local_sha remote_sha
   local_sha="$(git rev-parse HEAD)"
   remote_sha="$(git rev-parse origin/main)"
-  if [[ "${local_sha}" != "${remote_sha}" ]]; then
-    echo "error: main is not up to date with origin/main" >&2
-    echo "  local:  ${local_sha}" >&2
-    echo "  remote: ${remote_sha}" >&2
-    echo "Run: git pull --ff-only origin main" >&2
-    exit 1
+  if [[ "${local_sha}" == "${remote_sha}" ]]; then
+    echo "main is up to date with origin/main (${local_sha:0:7})"
+    return 0
   fi
 
-  echo "main is up to date with origin/main (${local_sha:0:7})"
+  if git merge-base --is-ancestor "${local_sha}" "${remote_sha}"; then
+    echo "main is behind origin/main; fast-forwarding..."
+    git merge --ff-only origin/main
+    local_sha="$(git rev-parse HEAD)"
+    echo "main is up to date with origin/main (${local_sha:0:7})"
+    return 0
+  fi
+
+  if git merge-base --is-ancestor "${remote_sha}" "${local_sha}"; then
+    echo "main is ahead of origin/main (${local_sha:0:7}); continuing"
+    return 0
+  fi
+
+  echo "error: main has diverged from origin/main" >&2
+  echo "  local:  ${local_sha}" >&2
+  echo "  remote: ${remote_sha}" >&2
+  echo "Run: git pull --rebase origin main (or reset/rebase manually)" >&2
+  exit 1
 }
 
 release_lib_verify_repo_access() {

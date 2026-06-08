@@ -2,7 +2,7 @@
 # Publish a Rusty Jack release and open the Homebrew tap update PR.
 #
 # Uses the caller's GitHub credentials (GH_TOKEN or `gh auth token`). Run from
-# an up-to-date main checkout after the Release Please PR has merged.
+# main after the Release Please PR has merged (fast-forwards when behind origin).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
