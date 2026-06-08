@@ -29,6 +29,11 @@ impl BinaryVersion {
     pub fn display(&self) -> String {
         format!("{} (commit {})", self.version, self.commit)
     }
+
+    #[must_use]
+    pub fn matches(&self, other: &Self) -> bool {
+        self.version == other.version && self.commit == other.commit
+    }
 }
 
 /// Copyright notice shown in CLI help.

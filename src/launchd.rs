@@ -1,6 +1,7 @@
 //! launchd LaunchAgent management (macOS).
 
-use crate::{version, RustyJackError};
+use crate::version::BinaryVersion;
+use crate::RustyJackError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,24 +52,22 @@ pub enum UpgradeResult {
     },
 }
 
-/// Version metadata reported by a rusty-jack binary.
+/// Command users should run after installing or upgrading the CLI binary.
+pub const DAEMON_REFRESH_COMMAND: &str = "rusty-jack upgrade --force";
+
+/// Compare the LaunchAgent/daemon binary against the current CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct BinaryVersion {
-    version: String,
-    commit: String,
-}
-
-impl BinaryVersion {
-    fn current() -> Self {
-        Self {
-            version: env!("CARGO_PKG_VERSION").into(),
-            commit: version::GIT_COMMIT.into(),
-        }
-    }
-
-    fn display(&self) -> String {
-        format!("{} (commit {})", self.version, self.commit)
-    }
+pub struct DaemonVersionCheck {
+    pub cli_binary_path: String,
+    pub cli_version: BinaryVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plist_binary_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plist_binary_version: Option<BinaryVersion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_binary_version: Option<BinaryVersion>,
+    pub stale: bool,
+    pub refresh_command: &'static str,
 }
 
 /// Result of `rusty-jack disable` (uninstall LaunchAgent).
@@ -477,6 +476,19 @@ fn should_load_after_write(mode: LoadMode, had_plist: bool, was_loaded: bool) ->
     }
 }
 
+fn binary_path_from_pid(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let command = String::from_utf8_lossy(&output.stdout);
+    let binary = command.split_whitespace().next()?;
+    (!binary.is_empty()).then(|| binary.to_string())
+}
+
 fn binary_version_from_path(path: &str) -> Option<BinaryVersion> {
     let output = Command::new(path).arg("--version").output().ok()?;
     if !output.status.success() {
@@ -591,6 +603,48 @@ pub fn upgrade_daemon(force_reload: bool) -> Result<UpgradeResult, RustyJackErro
             binary_version: result.binary_version,
         })
     }
+}
+
+/// Compare the installed LaunchAgent binary with the current CLI.
+pub fn daemon_version_check(
+    running_pid: Option<u32>,
+) -> Result<DaemonVersionCheck, RustyJackError> {
+    let cli_binary_path = current_exe_display()?;
+    let cli_version = BinaryVersion::current();
+    let plist_path = plist_path_or_err()?;
+
+    let (plist_binary_path, plist_binary_version) = if plist_path.exists() {
+        let plist = std::fs::read_to_string(&plist_path).map_err(RustyJackError::Io)?;
+        let path = launch_agent_binary_path_from_plist(&plist);
+        let version = path.as_deref().and_then(binary_version_from_path);
+        (path, version)
+    } else {
+        (None, None)
+    };
+
+    let running_binary_version = running_pid
+        .and_then(binary_path_from_pid)
+        .as_deref()
+        .and_then(binary_version_from_path);
+
+    let stale = plist_binary_path.is_some()
+        && (plist_binary_path.as_deref() != Some(cli_binary_path.as_str())
+            || plist_binary_version
+                .as_ref()
+                .is_some_and(|version| !version.matches(&cli_version))
+            || running_binary_version
+                .as_ref()
+                .is_some_and(|version| !version.matches(&cli_version)));
+
+    Ok(DaemonVersionCheck {
+        cli_binary_path,
+        cli_version,
+        plist_binary_path,
+        plist_binary_version,
+        running_binary_version,
+        stale,
+        refresh_command: DAEMON_REFRESH_COMMAND,
+    })
 }
 
 /// Inspect whether the per-user LaunchAgent is installed, running, or paused.
@@ -827,7 +881,7 @@ pub fn print_upgrade_result(result: &UpgradeResult) {
 
 fn version_display(version: Option<&BinaryVersion>) -> String {
     version
-        .map(BinaryVersion::display)
+        .map(|version| version.display())
         .unwrap_or_else(|| "unknown".into())
 }
 
@@ -948,6 +1002,24 @@ mod tests {
             launch_agent_binary_path_from_plist(&plist).as_deref(),
             Some("/tmp/rusty&jack")
         );
+    }
+
+    #[test]
+    fn test_binary_version_matches_compares_version_and_commit() {
+        let left = BinaryVersion {
+            version: "0.4.1".into(),
+            commit: "abc1234".into(),
+        };
+        let right = BinaryVersion {
+            version: "0.4.1".into(),
+            commit: "abc1234".into(),
+        };
+        let other = BinaryVersion {
+            version: "0.4.2".into(),
+            commit: "abc1234".into(),
+        };
+        assert!(left.matches(&right));
+        assert!(!left.matches(&other));
     }
 
     #[test]
