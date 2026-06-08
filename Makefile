@@ -3,6 +3,9 @@
 # Make does not load your shell profile, so we prepend ~/.cargo/bin to PATH.
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
+#
+# If the active rustup toolchain is incomplete, check-cargo offers to repair it.
+# Non-interactive builds can pass REPAIR_RUST=1 to repair without prompting.
 
 .PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal update-release-pr upgrade validate-driver-bundle
 
@@ -61,6 +64,49 @@ check-cargo:
 		printf 'Or build without make:\n  ~/.cargo/bin/cargo build --release\n\n'; \
 		exit 1; \
 	}
+	@command -v rustc >/dev/null 2>&1 || { \
+		printf '\nerror: rustc not found (looked in PATH and $$HOME/.cargo/bin)\n\n'; \
+		printf 'Install Rust with rustup (see above) or ensure rustc is on PATH.\n\n'; \
+		exit 1; \
+	}
+	@TARGET_LIBDIR=$$(rustc --print target-libdir 2>/dev/null); \
+	HOST=$$(rustc -vV 2>/dev/null | sed -n 's/^host: //p'); \
+	if [ -z "$$TARGET_LIBDIR" ] || ! ls "$$TARGET_LIBDIR"/libstd-*.rlib >/dev/null 2>&1; then \
+		REPAIR=0; \
+		printf '\nerror: Rust standard library is missing'; \
+		if [ -n "$$HOST" ]; then printf ' for %s' "$$HOST"; fi; \
+		printf '\n\n'; \
+		printf 'This usually means a partial or interrupted rustup update left rust-std off disk.\n'; \
+		if [ "$(REPAIR_RUST)" = "1" ]; then \
+			REPAIR=1; \
+		elif [ -t 0 ]; then \
+			printf 'Repair the stable Rust toolchain now? [y/N] '; \
+			read -r confirm; \
+			case "$$confirm" in y|Y|yes|YES) REPAIR=1;; esac; \
+		else \
+			printf 'Re-run interactively to repair automatically, or run:\n'; \
+			printf '  rustup toolchain reinstall stable\n'; \
+			printf '  make install REPAIR_RUST=1\n\n'; \
+			exit 1; \
+		fi; \
+		if [ "$$REPAIR" != "1" ]; then \
+			printf 'Build cancelled.\n\n'; \
+			exit 1; \
+		fi; \
+		command -v rustup >/dev/null 2>&1 || { \
+			printf 'error: rustup not found; install rustup to repair the toolchain\n\n'; \
+			exit 1; \
+		}; \
+		printf 'Repairing Rust toolchain (stable)...\n'; \
+		rustup toolchain reinstall stable; \
+		rustup component add rustfmt clippy 2>/dev/null || true; \
+		TARGET_LIBDIR=$$(rustc --print target-libdir 2>/dev/null); \
+		if [ -z "$$TARGET_LIBDIR" ] || ! ls "$$TARGET_LIBDIR"/libstd-*.rlib >/dev/null 2>&1; then \
+			printf '\nerror: Rust toolchain repair failed; std library still missing\n\n'; \
+			exit 1; \
+		fi; \
+		printf 'Rust toolchain repair complete.\n\n'; \
+	fi
 
 clean: check-cargo
 	$(CARGO) clean

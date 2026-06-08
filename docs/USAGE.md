@@ -37,7 +37,7 @@ rusty-jack config validate
 rusty-jack config validate --json
 ```
 
-- `config init` creates the config file when it is missing. In an interactive terminal it prompts for preferred output (and optional fallback and ScalarWebAPI settings). In non-interactive mode it picks defaults.
+- `config init` creates the config file when it is missing. In an interactive terminal it uses the same first-run prompts as `install`: preferred output, optional fallback, optional ScalarWebAPI speaker wake (including LAN discovery when creating a new config). In non-interactive mode it picks defaults and skips ScalarWebAPI setup.
 - `config validate` loads the config, validates it, and rewrites it in canonical JSON key order when needed.
 
 ---
@@ -154,7 +154,21 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when it is missing. If the config already exists, Rusty Jack preserves it as the basis, updates readable `name` labels for known UIDs, and offers additive changes such as choosing a missing preferred output or adding an explicit fallback. It does not recreate the file or drop custom settings like `scalar_webapi_device`. Interactive `install` can also configure a new `scalar_webapi_device` block (host, Mac output, wake triggers). Wake triggers default to all recommended events (`keyboard`, `mouse`, `output_selected`); you can confirm that set or toggle individual triggers. Existing configs that enable ScalarWebAPI with a partial trigger list are offered the same upgrade during `install`. In `--json` mode it avoids prompts and applies only non-interactive migrations. If a stale eqMac HAL driver is present without the eqMac app, interactive `install` offers to remove it with `sudo rm -rf /Library/Audio/Plug-Ins/HAL/eqMac.driver`. If a connected HDMI/DisplayPort output is visible, `install` also offers to install the Rusty Jack native audio driver. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. The daemon writes structured logs to `~/Library/Logs/rusty-jack.log` (configurable via `logging.file` in config or `RUSTY_JACK_LOG_FILE`).
+`install` creates `~/.config/rusty-jack/config.json` when it is missing. If the config already exists, Rusty Jack shows the config path and current settings, updates readable `name` labels for known UIDs, and offers additive changes such as choosing a missing preferred output or adding an explicit fallback. It does not recreate the file or drop custom settings like `scalar_webapi_device`. Interactive reconfigure saves a timestamped backup under `config-backups/` next to the config file before applying changes. ScalarWebAPI reconfigure also scans the LAN, confirms whether the configured host appears in the scan, and offers other discovered speakers before falling back to manual host entry. Existing configs that enable ScalarWebAPI with a partial trigger list are offered a trigger upgrade during interactive `install`. In `--json` mode it avoids prompts and applies only non-interactive migrations. If a stale eqMac HAL driver is present without the eqMac app, interactive `install` offers to remove it with `sudo rm -rf /Library/Audio/Plug-Ins/HAL/eqMac.driver`. If a connected HDMI/DisplayPort output is visible, `install` also offers to install the Rusty Jack native audio driver. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. The daemon writes structured logs to `~/Library/Logs/rusty-jack.log` (configurable via `logging.file` in config or `RUSTY_JACK_LOG_FILE`).
+
+### ScalarWebAPI speaker wake (interactive install)
+
+On first-time interactive `install` or `config init`, Rusty Jack can configure [`scalar_webapi_device`](#scalar_webapi_device) without hand-editing JSON:
+
+1. **LAN scan** — sends an SSDP/UPnP M-SEARCH for ScalarWebAPI devices on the local network (about 3 seconds when the Mac has a default LAN route).
+2. **Device choice** — if one speaker is found, `install` proposes it and pre-fills `host`; if several are found, you pick from the list, enter a host manually, or skip setup; if none are found, `install` offers optional manual setup.
+3. **Connection type** — you choose how the speaker is physically connected to this Mac: HDMI/DisplayPort output, headphone/line-out port, USB audio device, or “not sure” (show all selectable outputs).
+4. **Mac output** — pick the matching CoreAudio output that should trigger wake (`scalar_webapi_device.mac_output`).
+5. **Wake triggers** — confirm the recommended set (`keyboard`, `mouse`, `output_selected`) or toggle individual triggers.
+
+Rusty Jack targets **network speakers** for this flow. TV-class ScalarWebAPI endpoints (for example Bravia displays) are **not** proposed during install discovery even if they answer on the LAN. Re-run interactive `install` later to add ScalarWebAPI to an existing config or use the reconfigure prompts when updating an existing file.
+
+At runtime, wake traffic still uses SSDP/UPnP to resolve the JSON-RPC base URL from the configured `host`; the config `port` default is only a legacy fallback.
 
 ### Native HDMI/DisplayPort Driver
 
@@ -366,14 +380,14 @@ Integer 0–100. Created automatically from the preferred route's current effect
 
 ### `scalar_webapi_device`
 
-Optional block for waking a ScalarWebAPI-compatible device. Rusty Jack discovers the JSON-RPC base URL via SSDP/UPnP (`X_ScalarWebAPI_BaseURL`); Sony devices typically advertise a port such as `54480`, not the config default. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`, the device is not already active, and the Mac reports the speaker host as reachable. The daemon re-checks power status on startup (not every scheduled poll while already routed). When `triggers` includes `keyboard` or `mouse`, `daemon` wakes the device on idle-to-active transitions if that Mac output is already selected and power status confirms the device is not active. Wake attempts are skipped while the default LAN route is down, when SSDP discovery finds no endpoint, or when macOS reachability reports the configured host as unreachable; they retry after network recovery (including clearing the activity wake debounce when the network fingerprint changes). `mac_output` may be any Mac output connected to the external device; HDMI/DisplayPort volume control is only involved when that output is an HDMI/DP route. See `config.example.scalar-webapi-device.json`.
+Optional block for waking a ScalarWebAPI-compatible **network speaker** attached to a Mac output. Rusty Jack is not aimed at waking TVs, even though some TVs expose ScalarWebAPI on the LAN. Rusty Jack discovers the JSON-RPC base URL via SSDP/UPnP (`X_ScalarWebAPI_BaseURL`); discovered devices typically advertise a port such as `54480`, not the config default. Use [ScalarWebAPI speaker wake (interactive install)](#scalarwebapi-speaker-wake-interactive-install) to create this block on first setup. When enabled and `triggers` includes `output_selected`, `apply`, `picker`, and daemon-initiated output switches send `system.setPowerStatus` when the selected Mac output matches `scalar_webapi_device.mac_output`, the device is not already active, and the Mac reports the speaker host as reachable. The daemon re-checks power status on startup (not every scheduled poll while already routed). When `triggers` includes `keyboard` or `mouse`, `daemon` wakes the device on idle-to-active transitions if that Mac output is already selected and power status confirms the device is not active. Wake attempts are skipped while the default LAN route is down, when SSDP discovery finds no endpoint, or when macOS reachability reports the configured host as unreachable; they retry after network recovery (including clearing the activity wake debounce when the network fingerprint changes). `mac_output` may be any Mac output connected to the external device; HDMI/DisplayPort volume control is only involved when that output is an HDMI/DP route. See `config.example.scalar-webapi-device.json`.
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `false` | Enables ScalarWebAPI wake integration. |
 | `model` | `ScalarWebAPI device` | Human-readable model hint for docs/logging. |
 | `host` | none | Hostname, FQDN, or IP used to filter SSDP discovery responses. Required when enabled. |
-| `port` | `10000` | Legacy config default; JSON-RPC uses the SSDP-advertised port (for example `54480` on Sony devices). |
+| `port` | `10000` | Legacy config default; JSON-RPC uses the SSDP-advertised port (for example `54480` on many devices). |
 | `path` | protocol default | ScalarWebAPI base path. Usually omit this unless discovery is unavailable and your device needs an override. |
 | `mac_output` | none | Device selector for the Mac output connected to the device. Required when enabled. |
 | `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or daemon idle-to-active activity. |
@@ -381,7 +395,7 @@ Optional block for waking a ScalarWebAPI-compatible device. Rusty Jack discovers
 | `request_timeout_ms` | `3000` | Network timeout for device requests. |
 | `require_quick_start` | `true` | Documents the expectation that the device has its network standby/wake option enabled. |
 
-Other devices should work if they expose the same ScalarWebAPI service.
+Other ScalarWebAPI-compatible speakers should work if they expose the same service and advertise an endpoint on your LAN. Example models exercised with Rusty Jack include `SRS-ZR5`, `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`.
 
 #### ScalarWebAPI references
 
@@ -397,7 +411,7 @@ In practice, the most accurate reference is whatever your device advertises on y
 - **SSDP search target**: `urn:schemas-sony-com:service:ScalarWebAPI:1`
 - **Device description XML** (from SSDP `LOCATION:`) typically includes:
   - `X_ScalarWebAPI_BaseURL` (for example `http://<ip>:10000/sony`)
-  - `X_ScalarWebAPI_ServiceList` (service groups like `system`, `audio`, `avContent`, ...)
+  - `X_ScalarWebAPI_ServiceList` (service groups like `system`, `audio`, ...)
 - **SCPD / action list**: the UPnP service description may reference `ScalarWebApiSCPD.xml` which lists supported actions for that device/firmware.
 
 ### Reserved example keys

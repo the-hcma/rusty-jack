@@ -143,6 +143,15 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.log"
 
 ---
 
+## Install did not propose my ScalarWebAPI speaker
+
+1. Run interactive `rusty-jack install` (or `rusty-jack config init`) while the speaker is powered on, on the same LAN as the Mac, and has its network standby/wake option enabled.
+2. Confirm the Mac has a working default route and LAN address (`rusty-jack status` activity/network context or `route -n get default`).
+3. If discovery finds nothing, accept manual ScalarWebAPI setup and enter the speaker host (IP or hostname) yourself.
+4. TV-class ScalarWebAPI devices on the network are intentionally skipped during install discovery. Rusty Jack targets network speakers, not TVs.
+
+---
+
 ## ScalarWebAPI device does not wake
 
 1. Confirm the selected Mac output matches `scalar_webapi_device.mac_output`.

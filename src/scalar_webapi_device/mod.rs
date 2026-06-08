@@ -4,9 +4,16 @@ mod install;
 
 pub use install::{
     append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_wake_triggers,
-    prompt_add_scalar_webapi_device, prompt_scalar_webapi_wake_triggers,
-    ScalarWebApiInstallSelection,
+    prompt_add_scalar_webapi_device, prompt_scalar_webapi_host_selection,
+    prompt_scalar_webapi_wake_triggers, ScalarWebApiInstallSelection,
 };
+
+/// A ScalarWebAPI-compatible device discovered on the local network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredScalarWebApiDevice {
+    pub host: String,
+    pub model: Option<String>,
+}
 
 use crate::config::{Config, ScalarWebApiDeviceConfig};
 use crate::device_select::resolve_device_selector;
@@ -545,6 +552,39 @@ fn configured_endpoint(
     })
 }
 
+/// Scan the local network for ScalarWebAPI devices via SSDP/UPnP.
+pub fn discover_scalar_webapi_devices_on_lan(
+    request_timeout_ms: u64,
+) -> Result<Vec<DiscoveredScalarWebApiDevice>, RustyJackError> {
+    if !crate::network::lan_connectivity_ready() {
+        return Ok(Vec::new());
+    }
+
+    let timeout = Duration::from_millis(request_timeout_ms.max(1));
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(RustyJackError::Io)?;
+    socket
+        .set_read_timeout(Some(timeout))
+        .map_err(RustyJackError::Io)?;
+    if send_scalar_webapi_msearch(&socket, "lan")?.is_none() {
+        return Ok(Vec::new());
+    }
+    let hits = collect_scalar_webapi_ssdp_hits(&socket, timeout, None, "lan")?;
+    Ok(hits
+        .into_iter()
+        .filter(|hit| {
+            !is_scalar_webapi_tv_device(
+                hit.model.as_deref(),
+                Some(hit.location.as_str()),
+                Some(hit.xml.as_str()),
+            )
+        })
+        .map(|hit| DiscoveredScalarWebApiDevice {
+            host: hit.endpoint.host,
+            model: hit.model,
+        })
+        .collect())
+}
+
 fn discover_scalar_webapi_device_endpoint(
     api: &ScalarWebApiDeviceConfig,
 ) -> Result<Option<ScalarWebApiDeviceEndpoint>, RustyJackError> {
@@ -559,47 +599,96 @@ fn discover_scalar_webapi_device_endpoint(
     socket
         .set_read_timeout(Some(timeout))
         .map_err(RustyJackError::Io)?;
-    let request = format!(
+    if send_scalar_webapi_msearch(&socket, host)?.is_none() {
+        return Ok(None);
+    }
+
+    let hits = collect_scalar_webapi_ssdp_hits(&socket, timeout, Some(&target_ips), host)?;
+    Ok(hits.into_iter().next().map(|hit| hit.endpoint))
+}
+
+#[derive(Debug, Clone)]
+struct ScalarWebApiSsdpHit {
+    endpoint: ScalarWebApiDeviceEndpoint,
+    model: Option<String>,
+    location: String,
+    xml: String,
+}
+
+fn scalar_webapi_msearch_request() -> String {
+    format!(
         "M-SEARCH * HTTP/1.1\r\n\
          HOST: {SSDP_ADDR}\r\n\
          MAN: \"ssdp:discover\"\r\n\
          MX: 1\r\n\
          ST: {SCALAR_WEBAPI_ST}\r\n\r\n"
-    );
-    match socket.send_to(request.as_bytes(), SSDP_ADDR) {
-        Ok(_) => {}
+    )
+}
+
+/// `Ok(Some(()))` when sent, `Ok(None)` when skipped due to transient network errors.
+fn send_scalar_webapi_msearch(
+    socket: &UdpSocket,
+    host_context: &str,
+) -> Result<Option<()>, RustyJackError> {
+    match socket.send_to(scalar_webapi_msearch_request().as_bytes(), SSDP_ADDR) {
+        Ok(_) => Ok(Some(())),
         Err(err) if is_transient_network_error(&err) => {
             let ssdp_url = scalar_ssdp_url();
             tracing::debug!(
                 target: "daemon",
-                "[scalar] url={ssdp_url} host={host}: SSDP M-SEARCH skipped: {err}"
+                "[scalar] url={ssdp_url} host={host_context}: SSDP M-SEARCH skipped: {err}"
             );
-            return Ok(None);
+            Ok(None)
         }
         Err(err) => {
             let ssdp_url = scalar_ssdp_url();
-            return Err(scalar_speaker_err(
+            Err(scalar_speaker_err(
                 &ssdp_url,
-                format!("host={host}: could not send SSDP M-SEARCH: {err}"),
-            ));
+                format!("host={host_context}: could not send SSDP M-SEARCH: {err}"),
+            ))
         }
     }
+}
 
+fn collect_scalar_webapi_ssdp_hits(
+    socket: &UdpSocket,
+    timeout: Duration,
+    target_ips: Option<&[IpAddr]>,
+    host_context: &str,
+) -> Result<Vec<ScalarWebApiSsdpHit>, RustyJackError> {
+    let mut hits = Vec::new();
     let mut buf = [0_u8; 4096];
     loop {
         match socket.recv_from(&mut buf) {
             Ok((len, addr)) => {
-                if !target_ips.contains(&addr.ip()) {
+                if target_ips.is_some_and(|ips| !ips.contains(&addr.ip())) {
                     continue;
                 }
                 let response = String::from_utf8_lossy(&buf[..len]);
                 let Some(location) = http_header(&response, "location") else {
                     continue;
                 };
-                let xml = http_get(location, timeout)?;
-                if let Some(base_url) = extract_xml_text(&xml, "X_ScalarWebAPI_BaseURL") {
-                    return parse_http_url(&base_url).map(Some);
+                let Ok(xml) = http_get(location, timeout) else {
+                    continue;
+                };
+                let Some(base_url) = extract_xml_text(&xml, "X_ScalarWebAPI_BaseURL") else {
+                    continue;
+                };
+                let Ok(endpoint) = parse_http_url(&base_url) else {
+                    continue;
+                };
+                if hits
+                    .iter()
+                    .any(|hit: &ScalarWebApiSsdpHit| hit.endpoint.host == endpoint.host)
+                {
+                    continue;
                 }
+                hits.push(ScalarWebApiSsdpHit {
+                    endpoint,
+                    model: model_hint_from_discovery(location, &xml),
+                    location: location.to_string(),
+                    xml,
+                });
             }
             Err(err)
                 if matches!(
@@ -607,17 +696,58 @@ fn discover_scalar_webapi_device_endpoint(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                return Ok(None);
+                break;
             }
             Err(err) => {
                 let ssdp_url = scalar_ssdp_url();
                 return Err(scalar_speaker_err(
                     &ssdp_url,
-                    format!("host={host}: could not read SSDP response: {err}"),
+                    format!("host={host_context}: could not read SSDP response: {err}"),
                 ));
             }
         }
     }
+    Ok(hits)
+}
+
+fn model_hint_from_discovery(location: &str, xml: &str) -> Option<String> {
+    model_hint_from_upnp_xml(xml).or_else(|| model_hint_from_location_url(location))
+}
+
+fn model_hint_from_upnp_xml(xml: &str) -> Option<String> {
+    extract_xml_text(xml, "friendlyName")
+        .or_else(|| extract_xml_text(xml, "modelName"))
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn model_hint_from_location_url(location: &str) -> Option<String> {
+    let filename = location.rsplit('/').next()?.trim();
+    let stem = filename.strip_suffix(".xml")?;
+    let (_, model) = stem.rsplit_once('_')?;
+    (!model.is_empty()).then(|| model.to_string())
+}
+
+fn is_scalar_webapi_tv_device(
+    model: Option<&str>,
+    location: Option<&str>,
+    xml: Option<&str>,
+) -> bool {
+    for text in [
+        model.unwrap_or_default(),
+        location.unwrap_or_default(),
+        xml.unwrap_or_default(),
+    ] {
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("bravia")
+            || lower.contains("sony tv")
+            || lower.contains("mediarenderer_tv")
+            || lower.contains("_tv.xml")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn resolve_host_ips(host: &str) -> Result<Vec<IpAddr>, RustyJackError> {
@@ -964,6 +1094,42 @@ mod tests {
             endpoint.service_endpoint(SYSTEM_SERVICE),
             format!("http://192.168.86.18:54480/{expected_path}/system")
         );
+    }
+
+    #[test]
+    fn test_model_hint_from_location_url() {
+        assert_eq!(
+            model_hint_from_location_url("http://192.168.86.18:54380/MediaRenderer_SRS-ZR5.xml")
+                .as_deref(),
+            Some("SRS-ZR5")
+        );
+        assert_eq!(
+            model_hint_from_location_url("http://speaker/device.xml"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_is_scalar_webapi_tv_device_detects_bravia() {
+        assert!(is_scalar_webapi_tv_device(
+            Some("BRAVIA 4K VH2"),
+            Some("http://192.168.1.10:8080/MediaRenderer_BRAVIA.xml"),
+            None,
+        ));
+        assert!(!is_scalar_webapi_tv_device(
+            Some("SRS-ZR5"),
+            Some("http://192.168.86.18:54380/MediaRenderer_SRS-ZR5.xml"),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_model_hint_from_upnp_xml() {
+        let xml = r#"
+<root>
+  <friendlyName>SRS-ZR5</friendlyName>
+</root>"#;
+        assert_eq!(model_hint_from_upnp_xml(xml).as_deref(), Some("SRS-ZR5"));
     }
 
     #[test]
