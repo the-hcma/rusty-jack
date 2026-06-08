@@ -1,6 +1,6 @@
 # Rusty Jack — Implementation Plan
 
-**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack currently integrates with **eqMac** as the functional software volume layer when eqMac is already installed. Rusty Jack now packages its own HAL driver with a minimal virtual output device; the passthrough software-volume pipeline remains the next native-driver phase.
+**Rusty Jack** is a macOS **command-line audio router** (no GUI) that keeps system audio on a configured **HDMI, DisplayPort, USB-C dock, or line-out** output. It lists outputs, applies JSON routing policy, provides an interactive picker, can run as a launchd-friendly daemon, and can wake configured ScalarWebAPI-compatible devices. For fixed-volume HDMI/DP displays, Rusty Jack prefers its **native HAL driver** with a virtual default output and daemon **passthrough software volume** when the driver is installed; **eqMac** remains the fallback when eqMac is already installed and the native driver is not.
 
 This plan is based on investigation of the open-source [eqMac v1.3.2](https://github.com/bitgapp/eqMac) tree (`native/app`, `native/driver`, `native/shared`) and comparable tools ([audio-priority-cli](https://github.com/mateusbadalotti/audio-priority-cli-macos), [audioswitch](https://github.com/retrography/audioswitch)).
 
@@ -20,7 +20,7 @@ This document mixes shipped architecture and roadmap notes. For the exact user-f
 | Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
 | LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, status reporting |
 | ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
-| Native HDMI/DP software volume without eqMac | In progress: packaged AudioServerPlugIn with minimal virtual output, stereo stream, and controls; passthrough planned |
+| Native HDMI/DP software volume without eqMac | Implemented in code: packaged AudioServerPlugIn, shared ring, daemon passthrough engine, and virtual-default routing; **hardware validation** (volume keys on real HDMI/DP) remains the Phase 7 exit gate |
 
 ---
 
@@ -72,8 +72,8 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, and status reporting |
 | Periodic inspection + auto-switch | Shipped polling daemon with config reload; property listeners remain future refinement |
 | JSON configuration | `~/.config/rusty-jack/config.json` (path overridable) |
-| Homebrew distribution | Implemented through the tap workflow/formula; source install path is `make install` |
-| **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent and removes the plist; config/log purge is future work |
+| Homebrew distribution | Tap `the-hcma/tap` ships `v0.1.1`; formula template and release workflows live in-repo; Release Please automation is being re-enabled |
+| **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent, removes the plist, can remove the native driver, and restores the saved default output; optional config purge via `--remove-config` |
 | **Intel + Apple Silicon** | Cross-compile both targets; release **universal** binary + per-arch Homebrew bottles |
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
 | Rust + best-practice tooling | `rustfmt`, `clippy` (deny warnings in CI), optional `cargo-deny` / `cargo-audit` |
@@ -549,11 +549,11 @@ Binary name: **`rusty-jack`** (crate `rusty-jack`, `RUSTY_JACK_CONFIG` env overr
 
 ### Planned CLI helpers
 
-| Planned helper | Purpose |
-|----------------|---------|
-| LaunchAgent status | Report loaded state without manual `launchctl` commands |
-| Config init/validate | Generate starter config and validate config without running policy |
-| Full uninstall/purge | Optional config/log removal and audio restore orchestration |
+| Planned helper | Purpose | Status |
+|----------------|---------|--------|
+| LaunchAgent status | Report loaded state without manual `launchctl` commands | Shipped via `rusty-jack status` (`daemon` block) |
+| Config init/validate | Generate starter config and validate config without running policy | Shipped: `rusty-jack config init`, `config validate` |
+| Full uninstall/purge | Optional config/log removal and audio restore orchestration | Partial: `uninstall --remove-config`, audio restore, and driver removal; log purge remains future work |
 
 ### Example session
 
@@ -674,7 +674,7 @@ Check: `list`, `apply`, `install`, `pause`, `resume`, `uninstall`, `upgrade`, sl
 
 Rust compiles to a **native Mach-O binary** per architecture (`aarch64-apple-darwin`, `x86_64-apple-darwin`). Homebrew builds or bottles each arch separately; releases may also ship a **universal** tarball for manual install.
 
-Homebrew distribution is not shipped yet. Current local install uses `make install`; LaunchAgent installation is handled by `rusty-jack install`.
+Homebrew distribution is live via `the-hcma/tap` (`brew install the-hcma/tap/rusty-jack`). Local source install remains `make install`; LaunchAgent installation is handled by `rusty-jack install`. Release Please and the tap formula updater are re-enabled from the paused state once release environment tokens are in place.
 
 ### Recommended path
 
@@ -717,7 +717,7 @@ Not required for typical Homebrew installs. Notarize only if you also ship a sta
 
 ## 9. Clean uninstall (current + design)
 
-Uninstall must leave the Mac in a predictable state — no orphaned launchd job, no stale plists, no silent background process. Current shipped behavior is `rusty-jack uninstall` / `disable`, which stops/disables the per-user job and removes the plist. Config/log purge and audio restore are future design items.
+Uninstall must leave the Mac in a predictable state — no orphaned launchd job, no stale plists, no silent background process. Shipped behavior is `rusty-jack uninstall` / `disable`, which stops/disables the per-user job and removes the plist; `uninstall` can also remove the native driver, restore the saved default output, and optionally purge config. Log purge and Homebrew formula `uninstall` hooks are follow-up packaging work.
 
 ### What gets removed
 
@@ -725,10 +725,11 @@ Uninstall must leave the Mac in a predictable state — no orphaned launchd job,
 |-----------|-----------------|-----------------------|--------------|
 | `launchctl bootout` + stop daemon | yes | yes | yes |
 | `~/Library/LaunchAgents/com.*.rusty-jack.plist` | yes | yes | yes |
-| `~/.config/rusty-jack/` | no | no | yes |
-| `~/.local/state/rusty-jack/` (saved default UID, install metadata) | no | yes | yes |
+| Native HAL driver (`RustyJack.driver`) | optional (`uninstall`, not `disable`) | yes | yes |
+| `~/.config/rusty-jack/` | optional (`--remove-config`) | optional | yes |
+| `~/.local/state/rusty-jack/` (saved default UID, install metadata) | cleared on restore | yes | yes |
 | `~/Library/Logs/rusty-jack*.log` | no | no | yes |
-| Restore previous default output | no | yes (if state exists) | optional (`--no-restore-audio`) |
+| Restore previous default output | yes (best effort) | yes (if state exists) | optional (`--no-restore-audio`) |
 
 ### State file (for restore)
 
@@ -913,6 +914,7 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 - [ ] `AudioHal` trait + `CoreAudioHal` impl + `MockHal` for tests
 - [ ] Enumerate output devices (UID, name, transport, alive)
 - [x] `list` and `status` subcommands
+- [x] `AudioHal` trait + `CoreAudioHal` impl + `MockHal` for tests
 - [ ] **Tests:** `coreaudio/device.rs` — filter HDMI, exclude aggregates, empty list; `default_output.rs` — get default from mock; parse transport FourCC
 
 ### Phase 2 — Write path (1 day)
@@ -924,13 +926,13 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 ### Phase 3 — Config + policy (1 day)
 
 - [x] JSON config load/validate
-- [ ] `config init` / `config validate` helpers
+- [x] `config init` / `config validate` helpers
 - [x] Policy engine + `apply` respects `preferred_device`, legacy `preferred_device_uid`, and fallbacks
 - [x] **Tests:** `config.rs`, `policy.rs`, command smoke tests
 
 ### Phase 4 — Daemon + listeners + poll (2–3 days)
 
-- [ ] Property listeners + run loop thread
+- [x] Property listeners in daemon (complement polling; dedicated CFRunLoop thread remains optional refinement)
 - [x] Poll timer with `poll_interval_ms`, `switch_delay_ms`, and config reload
 - [x] `daemon` subcommand
 - [x] Idle-to-active activity sampling for ScalarWebAPI wake triggers
@@ -939,10 +941,10 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 ### Phase 5 — launchd + uninstall (1 day)
 
 - [x] Plist template + `install` / `pause` / `resume` / `disable` / `uninstall` / `upgrade`
-- [ ] LaunchAgent status helper
-- [ ] Full purge flow for config/log removal
-- [ ] State file `pre_install_default.json` on first switch
-- [ ] Homebrew formula lifecycle hooks
+- [x] LaunchAgent status helper (via `rusty-jack status`)
+- [ ] Full purge flow for config/log removal (config optional today; logs not purged)
+- [x] State file `pre_install_default.json` on first switch
+- [ ] Homebrew formula lifecycle hooks (`def uninstall` in formula template and release workflows)
 - [x] README/usage/troubleshooting: install / uninstall / upgrade flow
 - [x] **Tests:** `launchd.rs` path/result serialization and command wrappers
 
@@ -963,10 +965,11 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 - [x] `driver install` / `driver uninstall` lifecycle via `rusty-jack install`, `upgrade`, and `uninstall`
 - [x] Daemon **passthrough loop**: capture on virtual `WriteMix` ring, apply **software volume**, render to configured physical UID via CoreAudio IO proc
 - [x] Set virtual device as **default output** + **default system output** when driver is active and passthrough is armed
-- [ ] `uninstall` removes driver and restores prior physical default
-- [ ] **Tests:** ring-buffer / gain math unit tests; mock render path; driver property handlers where testable off-hardware
+- [x] `uninstall` removes driver and restores prior physical default (best effort via saved UID)
+- [ ] **Tests:** expand ring-buffer / mock render-path coverage; driver property handlers where testable off-hardware (gain math unit tests exist)
+- [ ] **Hardware validation:** confirm F10/F11/F12 change audible level on real HDMI/DP with the native driver (ignored HAL smoke tests exist)
 
-**Definition of done (Phase 7):** User selects HDMI/DP monitor; **F10/F11/F12 change audible volume**; `rusty-jack list` shows virtual + physical devices; clean uninstall restores pre-install audio stack.
+**Definition of done (Phase 7):** User selects HDMI/DP monitor; **F10/F11/F12 change audible volume**; `rusty-jack list` shows virtual + physical devices; clean uninstall restores pre-install audio stack. Code paths are shipped; hardware proof is the remaining gate.
 
 ### ScalarWebAPI device wake on user input activity (implemented; refinements remain)
 
@@ -987,7 +990,7 @@ Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and th
 
 **Future:** Wake-on-LAN from `getSystemInformation` MAC; input select on ScalarWebAPI device if needed; native event tap if idle polling proves too coarse.
 
-**Remaining estimate:** LaunchAgent helpers and packaging are small follow-up work; native virtual driver remains the largest remaining feature.
+**Remaining estimate:** Hardware validation for Phase 7, packaging polish (Homebrew uninstall hook, Release Please re-enable), and optional ScalarWebAPI / listener refinements.
 
 **Definition of done (every phase):** feature code + unit tests for touched modules + green `cargo test`.
 
@@ -1134,6 +1137,6 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 
 ---
 
-*Document version: 1.9 — current routing daemon, eqMac fallback, LaunchAgent controls, ScalarWebAPI wake support, and packaged HAL virtual output; native HDMI/DP passthrough remains future work.*
+*Document version: 2.0 — synced with shipped routing daemon, eqMac fallback, LaunchAgent controls, ScalarWebAPI wake, native HAL driver lifecycle, and daemon passthrough pipeline; Phase 7 exit gate is hardware validation and release packaging polish.*
 
 Copyright (c) 2026 Henrique Andrade / thehcma.
