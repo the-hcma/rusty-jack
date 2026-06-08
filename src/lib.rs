@@ -14,6 +14,7 @@ pub mod hal_plugin;
 pub mod hdmi_displayport_volume_control;
 pub mod launchd;
 pub mod list_fmt;
+pub mod logging;
 pub mod native_driver;
 #[cfg(target_os = "macos")]
 pub mod native_driver_hal_smoke;
@@ -40,6 +41,9 @@ pub use error::RustyJackError;
 ///
 /// Returns an error if CoreAudio enumeration fails or a subcommand fails.
 pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
+    if !matches!(cli.command, cli::Commands::Daemon) {
+        logging::init_cli();
+    }
     match cli.command {
         cli::Commands::Apply(args) => {
             let hal = coreaudio::platform_hal()?;

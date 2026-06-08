@@ -4,6 +4,7 @@ use crate::activity::PlatformActivityMonitor;
 use crate::config::{load_config, resolve_config_path};
 use crate::coreaudio::AudioHal;
 use crate::device_select::resolve_device_selector;
+use crate::logging::{init_daemon, DaemonLoggingOptions};
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -13,6 +14,9 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
         .context("no config path — use --config or ~/.config/rusty-jack/config.json")?;
     let config = load_config(&path).map_err(anyhow::Error::new)?;
 
+    let logging_options = DaemonLoggingOptions::from(&config.logging);
+    init_daemon(&logging_options).map_err(anyhow::Error::new)?;
+
     // Detect common config mismatches early so they show up on daemon restarts.
     if let Ok(list) = hal.list_outputs() {
         let preferred_selector = config.preferred_selector();
@@ -21,14 +25,9 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
                 let resolved_label = device.friendly_label();
                 let stored = config.preferred_device.name.as_deref();
                 if stored.is_some_and(|name| name != resolved_label) {
-                    eprintln!(
-                        "warning: config preferred_device.name is `{}` but connected device is `{}` ({})",
-                        stored.unwrap_or("(missing)"),
-                        resolved_label,
-                        uid
-                    );
-                    eprintln!(
-                        "warning: consider re-running `rusty-jack install` to refresh stored device names"
+                    tracing::warn!(
+                        target: "daemon",
+                        "[config] preferred_device.name={stored:?} connected={resolved_label} uid={uid}; consider re-running `rusty-jack install` to refresh stored device names"
                     );
                 }
             }
@@ -45,14 +44,9 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
                     let resolved_label = device.friendly_label();
                     let stored = api.mac_output.name.as_deref();
                     if stored.is_some_and(|name| name != resolved_label) {
-                        eprintln!(
-                            "warning: config scalar_webapi_device.mac_output.name is `{}` but connected device is `{}` ({})",
-                            stored.unwrap_or("(missing)"),
-                            resolved_label,
-                            uid
-                        );
-                        eprintln!(
-                            "warning: consider re-running `rusty-jack install` to refresh stored device names"
+                        tracing::warn!(
+                            target: "daemon",
+                            "[config] scalar_webapi_device.mac_output.name={stored:?} connected={resolved_label} uid={uid}; consider re-running `rusty-jack install` to refresh stored device names"
                         );
                     }
                 }
@@ -60,9 +54,11 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
         }
     }
 
-    println!(
-        "rusty-jack daemon running (poll={}ms, activity_poll={}ms)",
-        config.poll_interval_ms, config.activity_poll_interval_ms
+    tracing::info!(
+        target: "daemon",
+        "[daemon] started poll={}ms activity_poll={}ms",
+        config.poll_interval_ms,
+        config.activity_poll_interval_ms
     );
 
     let activity = PlatformActivityMonitor;

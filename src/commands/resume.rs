@@ -173,6 +173,7 @@ mod tests {
             also_set_system_output: true,
             volume,
             scalar_webapi_device: None,
+            ..Default::default()
         }
     }
 

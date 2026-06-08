@@ -101,6 +101,32 @@ impl ScalarWebApiDeviceConfig {
     }
 }
 
+/// Reserved logging settings (used by the daemon).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default = "default_log_file")]
+    pub file: String,
+}
+
+fn default_log_level() -> String {
+    "info".into()
+}
+
+fn default_log_file() -> String {
+    "~/Library/Logs/rusty-jack.log".into()
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            file: default_log_file(),
+        }
+    }
+}
+
 /// User configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Config {
@@ -129,6 +155,8 @@ pub struct Config {
     pub volume: Option<u8>,
     #[serde(default)]
     pub scalar_webapi_device: Option<ScalarWebApiDeviceConfig>,
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 fn default_also_set_system_output() -> bool {
@@ -153,6 +181,26 @@ fn default_activity_idle_threshold_ms() -> u64 {
 
 fn default_activity_poll_interval_ms() -> u64 {
     1_000
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            auto_switch: default_auto_switch(),
+            poll_interval_ms: default_poll_interval_ms(),
+            switch_delay_ms: default_switch_delay_ms(),
+            activity_idle_threshold_ms: default_activity_idle_threshold_ms(),
+            activity_poll_interval_ms: default_activity_poll_interval_ms(),
+            preferred_device: DeviceSelectorConfig::default(),
+            preferred_device_uid: None,
+            fallback_uids: Vec::new(),
+            also_set_system_output: default_also_set_system_output(),
+            volume: None,
+            scalar_webapi_device: None,
+            logging: LoggingConfig::default(),
+        }
+    }
 }
 
 impl Config {
@@ -503,6 +551,41 @@ mod tests {
         .unwrap();
         let config = load_config(file.path()).unwrap();
         assert_eq!(config.volume, Some(13));
+    }
+
+    #[test]
+    fn test_load_config_with_logging_section() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }},
+  "logging": {{
+    "file": "/tmp/rusty-jack-test.log",
+    "level": "debug"
+  }}
+}}"#
+        )
+        .unwrap();
+        let config = load_config(file.path()).unwrap();
+        assert_eq!(config.logging.file, "/tmp/rusty-jack-test.log");
+        assert_eq!(config.logging.level, "debug");
+    }
+
+    #[test]
+    fn test_load_config_defaults_logging_when_omitted() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{
+  "version": 1,
+  "preferred_device": {{ "uid": "BuiltInHeadphoneOutputDevice" }}
+}}"#
+        )
+        .unwrap();
+        let config = load_config(file.path()).unwrap();
+        assert_eq!(config.logging, LoggingConfig::default());
     }
 
     #[test]

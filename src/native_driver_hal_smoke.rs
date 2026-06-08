@@ -3,7 +3,7 @@
 //! Set `RUSTY_JACK_HAL_DRIVER_SMOKE=1` and run:
 //! `cargo test --test native_driver_hal_smoke -- --ignored --nocapture`
 
-use crate::config::{Config, DeviceSelectorConfig};
+use crate::config::{Config, DeviceSelectorConfig, LoggingConfig};
 use crate::coreaudio::AudioHal;
 use crate::eqmac::EQMAC_HAL_DRIVER_PATH;
 use crate::hdmi_displayport_volume_control::{native_driver_info, RUSTY_JACK_VIRTUAL_OUTPUT_UID};
@@ -160,6 +160,7 @@ pub fn smoke_config_for_hdmi(devices: &[OutputDevice]) -> Result<Config, RustyJa
         also_set_system_output: true,
         volume: Some(25),
         scalar_webapi_device: None,
+        logging: LoggingConfig::default(),
     })
 }
 

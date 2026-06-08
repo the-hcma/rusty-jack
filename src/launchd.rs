@@ -545,20 +545,19 @@ pub fn install_daemon() -> Result<InstallResult, RustyJackError> {
     })
 }
 
-/// Paths where launchd writes daemon stdout and stderr.
+/// Paths where the daemon writes structured logs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DaemonLogPaths {
-    pub stdout: String,
-    pub stderr: String,
+    pub file: String,
 }
 
-/// Resolve the per-user daemon log paths used by the LaunchAgent plist.
+/// Resolve the per-user daemon log path used by the daemon logger.
 pub fn daemon_log_paths() -> Result<DaemonLogPaths, RustyJackError> {
-    let home = home_dir_or_err()?;
-    let logs_dir = home.join("Library/Logs");
+    let path = crate::logging::resolve_log_file_path(std::path::Path::new(
+        "~/Library/Logs/rusty-jack.log",
+    ))?;
     Ok(DaemonLogPaths {
-        stdout: logs_dir.join("rusty-jack.stdout.log").display().to_string(),
-        stderr: logs_dir.join("rusty-jack.stderr.log").display().to_string(),
+        file: path.display().to_string(),
     })
 }
 
@@ -923,28 +922,23 @@ mod tests {
     fn test_daemon_log_paths_under_home() {
         let home = std::env::var("HOME").expect("HOME should be set in tests");
         let paths = daemon_log_paths().unwrap();
-        assert!(paths.stdout.ends_with("rusty-jack.stdout.log"));
-        assert!(paths.stderr.ends_with("rusty-jack.stderr.log"));
-        assert!(paths.stdout.starts_with(&home));
-        assert!(paths.stderr.starts_with(&home));
+        assert!(paths.file.ends_with("rusty-jack.log"));
+        assert!(paths.file.starts_with(&home));
     }
 
     #[test]
     fn test_render_launch_agent_plist_replaces_placeholders() {
         let plist = render_launch_agent_plist("/tmp/rusty-jack", "/Users/example");
         assert!(plist.contains("<string>/tmp/rusty-jack</string>"));
-        assert!(
-            plist.contains("<string>/Users/example/Library/Logs/rusty-jack.stdout.log</string>")
-        );
+        assert!(plist.contains("<string>daemon</string>"));
         assert!(!plist.contains("@BINARY_PATH@"));
-        assert!(!plist.contains("@HOME@"));
+        assert!(!plist.contains("StandardOutPath"));
     }
 
     #[test]
     fn test_render_launch_agent_plist_escapes_xml() {
         let plist = render_launch_agent_plist("/tmp/rusty&jack", "/Users/a<b");
         assert!(plist.contains("/tmp/rusty&amp;jack"));
-        assert!(plist.contains("/Users/a&lt;b/Library/Logs"));
     }
 
     #[test]
