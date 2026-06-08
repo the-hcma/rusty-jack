@@ -119,7 +119,11 @@ brew info the-hcma/tap/rusty-jack
 
 ## Troubleshooting
 
-**No release PR after `make update-release-pr`:** recent commits may not use releasable prefixes (`feat:`, `fix:`, etc.).
+**No release PR after `make update-release-pr`:** recent commits may not use releasable prefixes (`feat:`, `fix:`, etc.). When release-please does open/update a PR, the script retries GitHub lookups for up to ~40s and parses PR numbers from release-please output; override with `RUSTY_JACK_RELEASE_PR_LOOKUP_ATTEMPTS` and `RUSTY_JACK_RELEASE_PR_LOOKUP_INTERVAL_SECS`.
+
+**`No open release-please PR found` after a successful run:** the release PR may still be indexing. Re-run `make update-release-pr` or open the PR from the `release-please--branches--main` branch on GitHub.
+
+**`publish-release` fails on tap checks with `no checks reported`:** the tap has no CI configured. The script now skips check watch in that case and waits for auto-merge instead. Transient `gh` failures retry automatically (`RUSTY_JACK_TAP_CHECKS_ATTEMPTS`, `RUSTY_JACK_TAP_PR_LOOKUP_ATTEMPTS`).
 
 **`untagged, merged release PRs outstanding` from release-please:** the release PR merged but the GitHub tag was never created. `make update-release-pr` now detects this and runs `make publish-release` first. You can also publish manually:
 
