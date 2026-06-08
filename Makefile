@@ -4,7 +4,7 @@
 # If cargo is still missing, run:  curl -sSf https://sh.rustup.rs | sh
 # then:  source "$HOME/.cargo/env"
 
-.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package release sign-driver-bundle test uninstall universal upgrade validate-driver-bundle
+.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package release render-homebrew-formula sign-driver-bundle test uninstall universal upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -33,6 +33,8 @@ DRIVER_BUNDLE_SOURCES := \
 	driver/RustyJack/passthrough_ring.c \
 	driver/RustyJack/passthrough_ring.h \
 	scripts/build-driver-bundle
+
+HOMEBREW_FORMULA_TEMPLATE := packaging/homebrew/rusty-jack.formula.in
 
 all: test build
 
@@ -122,6 +124,14 @@ upgrade: check-cargo
 	fi; \
 	$(MAKE) driver-bundle DRIVER_BUNDLE_OUTPUT="$(INSTALL_SHARE_DIR)"; \
 	RUSTY_JACK_UPGRADE_PREVIOUS_VERSION="$$PREV_VER" rusty-jack upgrade --force
+
+render-homebrew-formula:
+	@test -n '$(ARCHIVE_URL)' || { echo 'ARCHIVE_URL is required' >&2; exit 1; }
+	@test -n '$(ARCHIVE_SHA256)' || { echo 'ARCHIVE_SHA256 is required' >&2; exit 1; }
+	sed \
+	  -e 's|@ARCHIVE_URL@|$(ARCHIVE_URL)|g' \
+	  -e 's|@ARCHIVE_SHA256@|$(ARCHIVE_SHA256)|g' \
+	  '$(HOMEBREW_FORMULA_TEMPLATE)'
 
 validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
 	./scripts/validate-driver-bundle "$(DRIVER_BUNDLE)"
