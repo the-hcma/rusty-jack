@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.3](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.2...rusty-jack-v0.6.3) (2026-06-08)
+
+
+### Bug Fixes
+
+* gate native driver install until signed release ships ([#105](https://github.com/the-hcma/rusty-jack/issues/105)) ([60349ed](https://github.com/the-hcma/rusty-jack/commit/60349edaec22eba6bbe725d18c5629304fe05b32))
+* harden CI checkout against ephemeral merge refs ([#107](https://github.com/the-hcma/rusty-jack/issues/107)) ([a5784fc](https://github.com/the-hcma/rusty-jack/commit/a5784fc61a3f675eb3b54e5d2e02109f4ce6b935))
+* print tap PR URL before waiting for merge in publish-release ([#108](https://github.com/the-hcma/rusty-jack/issues/108)) ([57454cc](https://github.com/the-hcma/rusty-jack/commit/57454cc22c4926dd66dbf25fc906d7354cd77f9f))
+
 ## [0.6.2](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.1...rusty-jack-v0.6.2) (2026-06-08)
 
 
