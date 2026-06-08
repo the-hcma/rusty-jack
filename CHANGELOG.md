@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.2.0...rusty-jack-v0.3.0) (2026-06-08)
+
+
+### Features
+
+* add activity poll logging and status ([#87](https://github.com/the-hcma/rusty-jack/issues/87)) ([b928f86](https://github.com/the-hcma/rusty-jack/commit/b928f86924d1a9188775ef001aad02902e4518fa))
+* add daemon logging ([#86](https://github.com/the-hcma/rusty-jack/issues/86)) ([e0a2b6b](https://github.com/the-hcma/rusty-jack/commit/e0a2b6ba43931c16dcd779401312a29c5864f0fc))
+* show daemon log paths in status and improve brew caveats ([#85](https://github.com/the-hcma/rusty-jack/issues/85)) ([16e5b8d](https://github.com/the-hcma/rusty-jack/commit/16e5b8d7556f4d88621db91cdf0001c06dbb0030))
+
+
+### Bug Fixes
+
+* harden publish-release repair and tap PR handling ([#83](https://github.com/the-hcma/rusty-jack/issues/83)) ([f8f5c3d](https://github.com/the-hcma/rusty-jack/commit/f8f5c3df8ebcfb663f8b3e0d70a9589f6516d89f))
+* resolve release-please tag names in publish-release ([#81](https://github.com/the-hcma/rusty-jack/issues/81)) ([e39da48](https://github.com/the-hcma/rusty-jack/commit/e39da48e3d93c0d8eec05924d6f8142099b80ccc))
+* use SSDP endpoint only and reduce redundant ScalarWebAPI wakes ([#89](https://github.com/the-hcma/rusty-jack/issues/89)) ([f9c9d56](https://github.com/the-hcma/rusty-jack/commit/f9c9d5653c3a93a8b45ad2868ffff42e9f550ebd))
+
 ## [0.2.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.1.1...rusty-jack-v0.2.0) (2026-06-08)
 
 
