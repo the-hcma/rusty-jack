@@ -74,7 +74,13 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
         }
         cli::Commands::List(args) => {
             let hal = coreaudio::platform_hal()?;
-            commands::list::run(hal.as_ref(), args.hdmi, args.json)?;
+            commands::list::run(
+                hal.as_ref(),
+                args.hdmi,
+                args.json,
+                args.discover,
+                cli.config.as_deref(),
+            )?;
         }
         cli::Commands::Pause(args) => commands::pause::run(args.json)?,
         cli::Commands::Picker(args) => {

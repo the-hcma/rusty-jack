@@ -1,6 +1,9 @@
 //! Format device lists for terminal or JSON output.
 
 use crate::output_device::OutputDevice;
+use crate::scalar_webapi_device::{
+    format_scalar_webapi_device_column_suffix, ScalarWebApiMacOutputLink,
+};
 use crate::system_default::{DeviceList, SystemDefaultInfo};
 use anyhow::Result;
 use std::io::{self, IsTerminal, Write};
@@ -31,7 +34,21 @@ fn pad_cell(s: &str, width: usize) -> String {
     }
 }
 
-fn compute_widths(devices: &[OutputDevice]) -> TableWidths {
+fn device_column_name(
+    device: &OutputDevice,
+    scalar_link: Option<&ScalarWebApiMacOutputLink>,
+) -> String {
+    let mut name = device.name.clone();
+    if let Some(link) = scalar_link.filter(|link| link.mac_output_uid == device.uid) {
+        name.push_str(&format_scalar_webapi_device_column_suffix(link));
+    }
+    name
+}
+
+fn compute_widths(
+    devices: &[OutputDevice],
+    scalar_link: Option<&ScalarWebApiMacOutputLink>,
+) -> TableWidths {
     let mut cols = [
         display_width("IDX"),
         display_width("ACT"),
@@ -46,7 +63,7 @@ fn compute_widths(devices: &[OutputDevice]) -> TableWidths {
         cols[1] = cols[1].max(if d.is_active { 1 } else { 0 });
         cols[2] = cols[2].max(display_width(if d.is_alive { "yes" } else { "no" }));
         cols[3] = cols[3].max(display_width(&d.transport.to_string()));
-        cols[4] = cols[4].max(display_width(&d.name));
+        cols[4] = cols[4].max(display_width(&device_column_name(d, scalar_link)));
         cols[5] = cols[5].max(display_width(&d.uid));
     }
 
@@ -96,14 +113,20 @@ fn format_header(w: &TableWidths) -> String {
     render_cells(["IDX", "ACT", "ALIVE", "TRANSPORT", "DEVICE", "UID"], w)
 }
 
-fn format_row(index: usize, device: &OutputDevice, w: &TableWidths) -> String {
+fn format_row(
+    index: usize,
+    device: &OutputDevice,
+    w: &TableWidths,
+    scalar_link: Option<&ScalarWebApiMacOutputLink>,
+) -> String {
+    let device_name = device_column_name(device, scalar_link);
     render_cells(
         [
             &index.to_string(),
             active_marker(device),
             if device.is_alive { "yes" } else { "no" },
             &device.transport.to_string(),
-            &device.name,
+            &device_name,
             &device.uid,
         ],
         w,
@@ -136,22 +159,32 @@ fn colorize_table_row(row: &str, device: &OutputDevice, use_color: bool) -> Stri
 /// Build a human-readable table (without trailing newline).
 #[must_use]
 pub fn format_table(devices: &[OutputDevice]) -> String {
-    format_table_with_color(devices, false)
+    format_table_with_scalar_link(devices, None, false)
 }
 
 /// Build a table; highlight the active output device in green when `use_color` is true.
 #[must_use]
 pub fn format_table_with_color(devices: &[OutputDevice], use_color: bool) -> String {
+    format_table_with_scalar_link(devices, None, use_color)
+}
+
+/// Build a table with optional ScalarWebAPI suffix on the linked Mac output row.
+#[must_use]
+pub fn format_table_with_scalar_link(
+    devices: &[OutputDevice],
+    scalar_link: Option<&ScalarWebApiMacOutputLink>,
+    use_color: bool,
+) -> String {
     if devices.is_empty() {
         return String::new();
     }
 
-    let w = compute_widths(devices);
+    let w = compute_widths(devices, scalar_link);
     let mut lines = Vec::with_capacity(devices.len() + 1);
     lines.push(format_header(&w));
 
     for (index, device) in devices.iter().enumerate() {
-        let row = format_row(index, device, &w);
+        let row = format_row(index, device, &w, scalar_link);
         lines.push(colorize_table_row(&row, device, use_color));
     }
 
@@ -169,7 +202,11 @@ pub fn print_device_table(list: &DeviceList) -> Result<()> {
     writeln!(
         out,
         "{}",
-        format_table_with_color(&list.devices, stdout_supports_color())
+        format_table_with_scalar_link(
+            &list.devices,
+            list.scalar_webapi_mac_output.as_ref(),
+            stdout_supports_color(),
+        )
     )?;
     Ok(())
 }
@@ -221,6 +258,24 @@ pub fn format_detail_rows(indent: &str, rows: &[(&str, &str)]) -> Vec<String> {
 pub fn format_labeled_section(title: &str, indent: &str, rows: &[(&str, &str)]) -> String {
     let mut lines = vec![title.to_string()];
     lines.extend(format_detail_rows(indent, rows));
+    lines.join("\n")
+}
+
+#[must_use]
+pub fn format_scalar_webapi_discovery_footer(
+    discovered_count: usize,
+    configured_host: Option<&str>,
+    configured_hardware_model: Option<&str>,
+) -> String {
+    let mut lines = vec![format!(
+        "ScalarWebAPI discovery: found {discovered_count} speaker(s)."
+    )];
+    if let Some(host) = configured_host {
+        let model_suffix = configured_hardware_model
+            .map(|model| format!(" ({model})"))
+            .unwrap_or_default();
+        lines.push(format!("Configured host: {host}{model_suffix}"));
+    }
     lines.join("\n")
 }
 
@@ -334,7 +389,7 @@ mod tests {
     fn test_all_rows_share_column_offsets() {
         let devices = sample_devices();
         let table = format_table(&devices);
-        let w = compute_widths(&devices);
+        let w = compute_widths(&devices, None);
         let expected = column_starts(&w);
         let lines: Vec<&str> = table.lines().collect();
 
@@ -357,7 +412,7 @@ mod tests {
     #[test]
     fn test_table_content() {
         let devices = sample_devices();
-        let w = compute_widths(&devices);
+        let w = compute_widths(&devices, None);
         let table = format_table(&devices);
         let lines: Vec<&str> = table.lines().collect();
 
@@ -456,6 +511,22 @@ mod tests {
     }
 
     #[test]
+    fn test_scalar_webapi_suffix_on_linked_mac_output_row() {
+        let devices = sample_devices();
+        let link = ScalarWebApiMacOutputLink {
+            mac_output_uid: devices[0].uid.clone(),
+            mac_output_label: Some(devices[0].name.clone()),
+            model: "The Lair".into(),
+            host: Some("192.168.86.18".into()),
+        };
+        let table = format_table_with_scalar_link(&devices, Some(&link), false);
+        let built_in_line = table.lines().nth(1).unwrap();
+        assert!(built_in_line.contains("The Lair @ 192.168.86.18"));
+        let hdmi_line = table.lines().nth(2).unwrap();
+        assert!(!hdmi_line.contains("The Lair"));
+    }
+
+    #[test]
     fn test_print_json_includes_active_flag() {
         let list = DeviceList {
             devices: vec![OutputDevice {
@@ -468,9 +539,22 @@ mod tests {
                 is_active: true,
             }],
             system_default: None,
+            scalar_webapi_mac_output: None,
         };
         let json = serde_json::to_string(&list).unwrap();
         assert!(json.contains("\"is_active\":true"));
         assert!(json.contains("\"devices\""));
+    }
+
+    #[test]
+    fn test_scalar_webapi_discovery_footer() {
+        let footer = format_scalar_webapi_discovery_footer(
+            2,
+            Some("scalarwebapi-device.local"),
+            Some("SRS-ZR5"),
+        );
+        assert!(footer.contains("found 2 speaker(s)"));
+        assert!(footer.contains("scalarwebapi-device.local"));
+        assert!(footer.contains("SRS-ZR5"));
     }
 }

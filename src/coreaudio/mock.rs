@@ -79,6 +79,7 @@ impl MockHal {
         DeviceList {
             devices,
             system_default: None,
+            scalar_webapi_mac_output: None,
         }
     }
 }

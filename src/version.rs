@@ -6,6 +6,31 @@ pub const VERSION: &str = env!("RUSTY_JACK_VERSION");
 /// Short git commit hash at build time (`unknown` when not built from a git checkout).
 pub const GIT_COMMIT: &str = env!("RUSTY_JACK_GIT_COMMIT");
 
+/// Package version from `Cargo.toml` at build time.
+pub const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Build-time version metadata for status and daemon reporting.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct BinaryVersion {
+    pub version: String,
+    pub commit: String,
+}
+
+impl BinaryVersion {
+    #[must_use]
+    pub fn current() -> Self {
+        Self {
+            version: PKG_VERSION.into(),
+            commit: GIT_COMMIT.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn display(&self) -> String {
+        format!("{} (commit {})", self.version, self.commit)
+    }
+}
+
 /// Copyright notice shown in CLI help.
 pub const COPYRIGHT: &str = "Copyright (c) 2026 Henrique Andrade / thehcma";
 

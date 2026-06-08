@@ -85,6 +85,7 @@ impl AudioHal for CoreAudioHal {
         Ok(DeviceList {
             devices: out,
             system_default,
+            scalar_webapi_mac_output: None,
         })
     }
 

@@ -1,5 +1,6 @@
 //! Resolve a configured device selector to a CoreAudio UID.
 
+use crate::config::DeviceSelectorConfig;
 use crate::output_device::OutputDevice;
 
 /// Pick a device by explicit UID.
@@ -57,6 +58,31 @@ pub fn resolve_device_selector(
     Ok(device.uid.clone())
 }
 
+/// Prefer the configured `name`, otherwise the live CoreAudio device label.
+#[must_use]
+pub fn display_label_for_selector(
+    selector: &DeviceSelectorConfig,
+    devices: &[OutputDevice],
+) -> Option<String> {
+    if let Some(name) = selector
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return Some(name.to_string());
+    }
+
+    let uid = selector
+        .uid
+        .as_deref()
+        .filter(|uid| !crate::config::is_placeholder_uid(uid))?;
+    devices
+        .iter()
+        .find(|device| device.uid == uid)
+        .map(OutputDevice::friendly_label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,6 +109,32 @@ mod tests {
         assert_eq!(
             resolve_device_selector(&selector, &devices).unwrap(),
             "hdmi-1"
+        );
+    }
+
+    #[test]
+    fn test_display_label_prefers_config_name() {
+        let devices = vec![device("hdmi-1", true)];
+        let selector = DeviceSelectorConfig {
+            name: Some("The Lair".into()),
+            uid: Some("hdmi-1".into()),
+        };
+        assert_eq!(
+            display_label_for_selector(&selector, &devices).as_deref(),
+            Some("The Lair")
+        );
+    }
+
+    #[test]
+    fn test_display_label_falls_back_to_live_device() {
+        let devices = vec![device("hdmi-1", true)];
+        let selector = DeviceSelectorConfig {
+            name: None,
+            uid: Some("hdmi-1".into()),
+        };
+        assert_eq!(
+            display_label_for_selector(&selector, &devices).as_deref(),
+            Some("HDMI")
         );
     }
 
