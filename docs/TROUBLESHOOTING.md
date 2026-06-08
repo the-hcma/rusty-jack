@@ -6,16 +6,16 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, HDMI/Display
 
 **Cause:** The system default is a **physical HDMI/DP device** with no software volume scalar.
 
-**Fix:**
+**Fix (today):**
 
 1. Run `rusty-jack status` and check the **HDMI/DisplayPort Volume Control** block.
-2. Run `rusty-jack install` with the HDMI/DP device connected and accept the native driver prompt. If eqMac is already installed, Rusty Jack can use it as a fallback.
+2. If **[eqMac](https://eqmac.app) is already installed**, let Rusty Jack use it (`apply`, `picker`, or daemon). That is the supported HDMI/DP volume-key path until release builds ship a **Developer ID–signed** `RustyJack.driver`.
 3. Run `rusty-jack apply` or pick your monitor in `picker`.
 4. Confirm a virtual volume-control device is the **system default** in Sound settings (or `rusty-jack status` shows a virtual default footer routing to your monitor).
 
-If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver`, run `make install` from a source checkout, or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
+**Native driver:** Homebrew and release packages bundle `RustyJack.driver`, but it is **ad-hoc signed**. macOS usually **refuses to load** it (Console: `signature not valid: -67050`). Installing it via `rusty-jack install` does **not** make HDMI volume work on a typical Mac until the bundle is signed — see [DRIVER_SIGNING.md](./DRIVER_SIGNING.md). Developers can run `make sign-driver-bundle` with a Developer ID certificate.
 
-The packaged `RustyJack.driver` currently exposes the minimal virtual output and controls, but it is still a null output. Until the passthrough pipeline lands, use eqMac as the functional volume-control fallback if you need HDMI/DP keyboard volume today.
+If the installer says the driver bundle is not available, install from a package that includes `RustyJack.driver`, run `make install` from a source checkout, or set `RUSTY_JACK_DRIVER_BUNDLE` to the bundle path before running `rusty-jack install`.
 
 ---
 
@@ -68,13 +68,13 @@ warning: HDMI/DisplayPort volume keys need Rusty Jack's native audio driver.
   Install the Rusty Jack driver to control volume for connected HDMI/DisplayPort outputs.
 ```
 
-Run `rusty-jack install` interactively with the HDMI/DisplayPort output connected and accept the native driver prompt. If eqMac is already installed, Rusty Jack uses it as a compatibility fallback. Routing to HDMI still works; only **volume control** is missing.
+Use **eqMac** if already installed. Accepting the native driver prompt from `rusty-jack install` does not enable HDMI volume on release builds until the HAL bundle is Developer ID–signed. Routing to HDMI still works; **volume control** needs eqMac or a signed native driver.
 
 ---
 
 ## Native driver installed but no “Rusty Jack” output in Sound settings
 
-`rusty-jack status` can report the driver bundle while CoreAudio has not published the virtual output.
+**Expected on release/Homebrew installs.** `rusty-jack status` can report the driver bundle while CoreAudio has not published the virtual output because the shipped bundle is **not Developer ID–signed**.
 
 1. Install the HAL bundle under **`/Library/Audio/Plug-Ins/HAL/RustyJack.driver`** (not only `~/Library/...`). `rusty-jack driver swap-in` does this with sudo.
 2. Restart CoreAudio: `sudo killall -9 coreaudiod` (wait a few seconds).

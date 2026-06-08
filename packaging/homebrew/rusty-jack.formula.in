@@ -47,6 +47,10 @@ class RustyJack < Formula
       `status` flags a stale daemon when the running LaunchAgent binary does not
       match the installed CLI version/commit.
 
+      HDMI/DisplayPort keyboard volume: the bundled RustyJack.driver is not
+      Developer ID–signed yet, so macOS usually will not load it. Use eqMac if
+      already installed until signed drivers ship. See docs/DRIVER_SIGNING.md.
+
       Daemon logs: ~/Library/Logs/rusty-jack.log (one file; rotated by the app).
 
       Each macOS user who wants auto-routing should run `rusty-jack install`

@@ -60,7 +60,7 @@ Requires valid config. Results:
 
 **Volume:** For this one-shot command, if `volume` is set in config, it is applied only when a switch occurs (not on `no_change`).
 
-**HDMI/DisplayPort volume control:** Rusty Jack prefers its native driver when installed. If not, it starts eqMac only when the target is HDMI/DisplayPort and eqMac is already installed.
+**HDMI/DisplayPort volume control:** Shipped `RustyJack.driver` bundles are **not Developer ID–signed**, so macOS usually will not load them for end users. **Use eqMac** when it is already installed. A locally signed driver is for development; see [DRIVER_SIGNING.md](./DRIVER_SIGNING.md).
 
 ---
 
@@ -172,7 +172,9 @@ At runtime, wake traffic still uses SSDP/UPnP to resolve the JSON-RPC base URL f
 
 ### Native HDMI/DisplayPort Driver
 
-The native driver is the preferred volume-key path for connected HDMI/DisplayPort outputs. Rusty Jack installs it only when a live HDMI/DP output is present; USB microphones, built-in outputs, Bluetooth, and virtual devices do not trigger the offer.
+> **Not yet usable from Homebrew/releases.** Packages include `RustyJack.driver`, but it is ad-hoc signed. macOS AMFI typically rejects it (`signature not valid: -67050`) until the bundle is signed with a **Developer ID Application** identity (and notarized for other Macs). For HDMI/DP volume keys today, use **eqMac** if already installed. Developers: [DRIVER_SIGNING.md](./DRIVER_SIGNING.md).
+
+When a **signed** native driver is available, it is the preferred volume-key path for connected HDMI/DisplayPort outputs. Rusty Jack offers install only when a live HDMI/DP output is present; USB microphones, built-in outputs, Bluetooth, and virtual devices do not trigger the offer.
 
 Interactive install:
 
@@ -192,7 +194,7 @@ The driver is installed to:
 ~/Library/Audio/Plug-Ins/HAL/RustyJack.driver
 ```
 
-This is a per-user HAL plug-in path, so install and removal do not need `sudo`. After installing, restart audio apps if they do not immediately see the virtual device. `rusty-jack status` reports scope, path, version, stage, and the current null-output warning.
+This is a per-user HAL plug-in path, so install and removal do not need `sudo`. On **unsigned release bundles**, CoreAudio may never publish the virtual output even though `rusty-jack status` lists the installed path — that is expected until you sign the bundle. After a successful signed install, restart audio apps if they do not immediately see the virtual device. `rusty-jack status` reports scope, path, version, stage, and warnings.
 
 Packages include the bundle at `share/rusty-jack/RustyJack.driver`. Source installs can build the same layout with `make install`, or just validate the packaged bundle with:
 
