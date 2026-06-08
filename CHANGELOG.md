@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.0...rusty-jack-v0.6.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* detect stale daemon via LaunchAgent version env ([#101](https://github.com/the-hcma/rusty-jack/issues/101)) ([7cad47b](https://github.com/the-hcma/rusty-jack/commit/7cad47be2939f0196e7b28a0086600ba47052ec4))
+* print release PR URL last in update-release-pr ([#100](https://github.com/the-hcma/rusty-jack/issues/100)) ([5f0a417](https://github.com/the-hcma/rusty-jack/commit/5f0a4173817f32aac604e785fd0c711bd12f2e4c))
+
 ## [0.6.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.5.0...rusty-jack-v0.6.0) (2026-06-08)
 
 
