@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.1...rusty-jack-v0.6.2) (2026-06-08)
+
+
+### Bug Fixes
+
+* add retries to release PR URL lookup and tap publish wait ([#103](https://github.com/the-hcma/rusty-jack/issues/103)) ([74f8e86](https://github.com/the-hcma/rusty-jack/commit/74f8e86074aeb076fb8c3a698bcf82f93daf2488))
+* show running daemon version in upgrade output ([#104](https://github.com/the-hcma/rusty-jack/issues/104)) ([a1e945e](https://github.com/the-hcma/rusty-jack/commit/a1e945ea3cd42e7820d0b61608351bec21f30dfa))
+
 ## [0.6.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.0...rusty-jack-v0.6.1) (2026-06-08)
 
 
