@@ -23,6 +23,10 @@ Options:
   --dry-run    Print checks without calling release-please.
   -h, --help   Show this help.
 
+Environment:
+  RUSTY_JACK_RELEASE_PR_LOOKUP_ATTEMPTS      Retries finding release PR (default: 8)
+  RUSTY_JACK_RELEASE_PR_LOOKUP_INTERVAL_SECS Seconds between lookups (default: 5)
+
 See docs/RELEASING.md for the full release flow.
 EOF
 }
@@ -55,7 +59,7 @@ release_lib_publish_pending_release_if_needed "${REPO}" "${DRY_RUN}" "${ROOT}"
 
 release_lib_print_release_pr_url_line() {
   local pr_url
-  pr_url="$(release_lib_open_release_pr_url "${REPO}")"
+  pr_url="$(release_lib_resolve_release_pr_url "${REPO}" "${RELEASE_LIB_RELEASE_PLEASE_OUTPUT:-}")"
   if [[ -n "${pr_url}" ]]; then
     echo "${pr_url}"
   elif [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -74,6 +78,10 @@ fi
 
 release_lib_verify_repo_access "${REPO}"
 echo "Updating release PR for ${REPO}..."
-release_lib_run_release_please release-pr "${REPO}"
+RELEASE_LIB_RELEASE_PLEASE_OUTPUT=""
+if ! release_lib_run_release_please release-pr "${REPO}"; then
+  echo "error: release-please release-pr failed" >&2
+  exit 1
+fi
 echo "Done. Review the release-please PR on GitHub, then merge it before running make publish-release."
 release_lib_print_release_pr_url_line

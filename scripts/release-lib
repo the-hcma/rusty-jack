@@ -73,16 +73,52 @@ release_lib_verify_repo_access() {
   gh api "repos/${repo}" --jq .full_name >/dev/null
 }
 
+# Populated by release_lib_run_release_please (stdout+stderr).
+RELEASE_LIB_RELEASE_PLEASE_OUTPUT=""
+
 release_lib_run_release_please() {
   local subcommand="$1"
   local repo="$2"
+  local output rc
 
   release_lib_require_cmd npx
-  npx --yes release-please@latest "${subcommand}" \
-    --token="${GH_TOKEN}" \
-    --repo-url="${repo}" \
-    --config-file=release-please-config.json \
-    --manifest-file=.release-please-manifest.json
+  set +e
+  output="$(
+    npx --yes release-please@latest "${subcommand}" \
+      --token="${GH_TOKEN}" \
+      --repo-url="${repo}" \
+      --config-file=release-please-config.json \
+      --manifest-file=.release-please-manifest.json 2>&1
+  )"
+  rc=$?
+  set -e
+  RELEASE_LIB_RELEASE_PLEASE_OUTPUT="${output}"
+  printf '%s\n' "${output}"
+  return "${rc}"
+}
+
+release_lib_parse_release_please_pr_numbers() {
+  local output="$1"
+  local bracket numbers
+
+  bracket="$(printf '%s\n' "${output}" | grep -oE '\[[0-9, ]+\]' | tail -n1 || true)"
+  if [[ -z "${bracket}" ]]; then
+    return 0
+  fi
+  numbers="${bracket//[\[\]]/}"
+  numbers="${numbers//,/ }"
+  for number in ${numbers}; do
+    if [[ "${number}" =~ ^[0-9]+$ ]]; then
+      echo "${number}"
+    fi
+  done
+}
+
+release_lib_pr_url_from_number() {
+  local repo="$1"
+  local number="$2"
+
+  gh pr view "${number}" --repo "${repo}" --json url --jq .url 2>/dev/null || true
 }
 
 release_lib_resolve_release_tag() {
@@ -131,19 +167,82 @@ release_lib_find_unpublished_release() {
 # Return URL of the open release-please PR, or empty when none exists.
 release_lib_open_release_pr_url() {
   local repo="$1"
-  local pr_url
+  local pr_url search
 
   pr_url="$(gh pr list --repo "${repo}" --state open --label release-please \
-    --json url --jq '.[0].url // empty')"
+    --json url --jq '.[0].url // empty' 2>/dev/null || true)"
   if [[ -n "${pr_url}" ]]; then
     echo "${pr_url}"
     return 0
   fi
 
-  pr_url="$(gh pr list --repo "${repo}" --state open \
-    --search "release rusty-jack in:title" \
-    --json url --jq '.[0].url // empty')"
-  echo "${pr_url}"
+  pr_url="$(gh pr list --repo "${repo}" --state open --label "autorelease: pending" \
+    --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+  if [[ -n "${pr_url}" ]]; then
+    echo "${pr_url}"
+    return 0
+  fi
+
+  pr_url="$(gh pr list --repo "${repo}" --state open --head "release-please--branches--main" \
+    --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+  if [[ -n "${pr_url}" ]]; then
+    echo "${pr_url}"
+    return 0
+  fi
+
+  for search in \
+    "release rusty-jack in:title" \
+    "chore(main): release rusty-jack in:title" \
+    "chore: release rusty-jack in:title" \
+    "chore(main): release in:title"; do
+    pr_url="$(gh pr list --repo "${repo}" --state open --search "${search}" \
+      --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+    if [[ -n "${pr_url}" ]]; then
+      echo "${pr_url}"
+      return 0
+    fi
+  done
+
+  echo ""
+}
+
+release_lib_open_release_pr_url_with_retry() {
+  local repo="$1"
+  local attempts="${2:-${RUSTY_JACK_RELEASE_PR_LOOKUP_ATTEMPTS:-8}}"
+  local interval="${3:-${RUSTY_JACK_RELEASE_PR_LOOKUP_INTERVAL_SECS:-5}}"
+  local attempt pr_url
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    pr_url="$(release_lib_open_release_pr_url "${repo}")"
+    if [[ -n "${pr_url}" ]]; then
+      echo "${pr_url}"
+      return 0
+    fi
+    if (( attempt < attempts )); then
+      echo "Waiting for release PR to appear (${attempt}/${attempts})..." >&2
+      sleep "${interval}"
+    fi
+  done
+
+  echo ""
+  return 1
+}
+
+# Prefer PR numbers printed by release-please, then retry GitHub lookups.
+release_lib_resolve_release_pr_url() {
+  local repo="$1"
+  local release_please_output="${2:-}"
+  local number pr_url
+
+  for number in $(release_lib_parse_release_please_pr_numbers "${release_please_output}"); do
+    pr_url="$(release_lib_pr_url_from_number "${repo}" "${number}")"
+    if [[ -n "${pr_url}" ]]; then
+      echo "${pr_url}"
+      return 0
+    fi
+  done
+
+  release_lib_open_release_pr_url_with_retry "${repo}" || true
 }
 
 release_lib_publish_pending_release_if_needed() {
@@ -228,6 +327,29 @@ release_lib_configure_git_identity() {
   git config user.email "${email}"
 }
 
+release_lib_find_open_tap_pr_number() {
+  local tap_repo="$1"
+  local branch="$2"
+  local attempts="${3:-${RUSTY_JACK_TAP_PR_LOOKUP_ATTEMPTS:-6}}"
+  local interval="${4:-${RUSTY_JACK_TAP_PR_LOOKUP_INTERVAL_SECS:-5}}"
+  local attempt pr_number
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    pr_number="$(gh pr list --repo "${tap_repo}" --head "${branch}" --state open --json number \
+      --jq '.[0].number // empty' 2>/dev/null || true)"
+    if [[ -n "${pr_number}" ]]; then
+      echo "${pr_number}"
+      return 0
+    fi
+    if (( attempt < attempts )); then
+      echo "Waiting for tap PR on branch ${branch} (${attempt}/${attempts})..." >&2
+      sleep "${interval}"
+    fi
+  done
+
+  return 1
+}
+
 release_lib_open_tap_pr() {
   local tap_repo="$1"
   local branch="$2"
@@ -235,14 +357,12 @@ release_lib_open_tap_pr() {
   local body="$4"
   local pr_number pr_url
 
-  pr_number="$(gh pr list --repo "${tap_repo}" --head "${branch}" --state open --json number \
-    --jq '.[0].number // empty')"
+  pr_number="$(release_lib_find_open_tap_pr_number "${tap_repo}" "${branch}" 1 0 || true)"
   if [[ -n "${pr_number}" ]]; then
     gh pr edit "${pr_number}" --repo "${tap_repo}" --title "${title}" --body "${body}" >/dev/null
   else
     gh pr create --repo "${tap_repo}" --base main --head "${branch}" --title "${title}" --body "${body}" >/dev/null
-    pr_number="$(gh pr list --repo "${tap_repo}" --head "${branch}" --state open --json number \
-      --jq '.[0].number // empty')"
+    pr_number="$(release_lib_find_open_tap_pr_number "${tap_repo}" "${branch}")" || true
   fi
   if [[ -z "${pr_number}" ]]; then
     echo "error: could not find open tap PR for branch ${branch}" >&2
@@ -253,35 +373,109 @@ release_lib_open_tap_pr() {
   echo "${pr_url}"
 }
 
+release_lib_wait_for_tap_pr_checks() {
+  local tap_repo="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local attempts="${4:-${RUSTY_JACK_TAP_CHECKS_ATTEMPTS:-3}}"
+  local interval="${5:-10}"
+  local attempt output rc
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    set +e
+    output="$(gh pr checks "${pr_number}" --repo "${tap_repo}" 2>&1)"
+    rc=$?
+    set -e
+
+    if [[ "${rc}" -eq 0 ]]; then
+      if [[ -z "${output}" ]]; then
+        echo "No tap PR checks configured; skipping check watch."
+        return 0
+      fi
+      echo "Watching tap PR checks (${pr_url})..."
+      if gh pr checks "${pr_number}" --repo "${tap_repo}" --watch --fail-fast; then
+        return 0
+      fi
+      if (( attempt < attempts )); then
+        echo "Tap PR checks failed; retrying (${attempt}/${attempts})..." >&2
+        sleep "${interval}"
+        continue
+      fi
+      echo "error: tap PR checks failed: ${pr_url}" >&2
+      return 1
+    fi
+
+    if echo "${output}" | grep -qi "no checks reported"; then
+      echo "No tap PR checks configured; skipping check watch."
+      return 0
+    fi
+
+    if (( attempt < attempts )); then
+      echo "Could not read tap PR checks; retrying (${attempt}/${attempts})..." >&2
+      sleep "${interval}"
+    else
+      echo "${output}" >&2
+      echo "error: tap PR checks failed: ${pr_url}" >&2
+      return 1
+    fi
+  done
+
+  return 1
+}
+
 # Block until the tap PR merges (after CI passes and auto-merge runs).
 release_lib_wait_for_tap_pr_merge() {
   local tap_repo="$1"
   local pr_url="$2"
   local pr_number state interval=15
   local timeout_secs="${RUSTY_JACK_TAP_MERGE_TIMEOUT_SECS:-1800}"
-  local start
+  local start view_attempts=3 view_attempt
 
   if [[ -z "${pr_url}" ]]; then
     return 0
   fi
 
-  pr_number="$(gh pr view "${pr_url}" --repo "${tap_repo}" --json number --jq .number)"
-  state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state)"
+  for ((view_attempt = 1; view_attempt <= view_attempts; view_attempt++)); do
+    if pr_number="$(gh pr view "${pr_url}" --repo "${tap_repo}" --json number --jq .number 2>/dev/null)"; then
+      break
+    fi
+    if (( view_attempt < view_attempts )); then
+      echo "Could not read tap PR metadata; retrying (${view_attempt}/${view_attempts})..." >&2
+      sleep 5
+    else
+      echo "error: could not read tap PR metadata: ${pr_url}" >&2
+      return 1
+    fi
+  done
+
+  for ((view_attempt = 1; view_attempt <= view_attempts; view_attempt++)); do
+    if state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state 2>/dev/null)"; then
+      break
+    fi
+    if (( view_attempt < view_attempts )); then
+      echo "Could not read tap PR state; retrying (${view_attempt}/${view_attempts})..." >&2
+      sleep 5
+    else
+      echo "error: could not read tap PR state: ${pr_url}" >&2
+      return 1
+    fi
+  done
+
   if [[ "${state}" == "MERGED" ]]; then
     echo "Tap PR already merged."
     return 0
   fi
 
-  echo "Watching tap PR checks (${pr_url})..."
-  if ! gh pr checks "${pr_number}" --repo "${tap_repo}" --watch --fail-fast; then
-    echo "error: tap PR checks failed: ${pr_url}" >&2
-    return 1
-  fi
+  release_lib_wait_for_tap_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}"
 
   echo "Waiting for tap PR to merge..."
   start="${SECONDS}"
   while (( SECONDS - start < timeout_secs )); do
-    state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state)"
+    if ! state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state 2>/dev/null)"; then
+      echo "Could not read tap PR state; retrying..." >&2
+      sleep "${interval}"
+      continue
+    fi
     if [[ "${state}" == "MERGED" ]]; then
       echo "Tap PR merged."
       return 0
