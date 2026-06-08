@@ -227,9 +227,7 @@ fn daemon_tick_with_hooks(
             }
         } else if matches!(
             reason,
-            DaemonTickReason::Startup
-                | DaemonTickReason::StartupRetry
-                | DaemonTickReason::Scheduled
+            DaemonTickReason::Startup | DaemonTickReason::StartupRetry
         ) {
             let checked_target = scalar_webapi_device_checked_target_or_fallback(
                 config,
@@ -520,7 +518,7 @@ fn scalar_webapi_device_checked_target_or_fallback(
         ),
         Ok(None) => {}
         Err(err) => {
-            tracing::warn!(target: "daemon", "[scalar] {err}");
+            tracing::warn!(target: "daemon", "[scalar] {}", err.detail_message());
             if allow_scalar_webapi_device_fallback(reason, scalar_webapi_device_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
                     tracing::warn!(
@@ -566,7 +564,7 @@ fn scalar_webapi_device_activity_fallback_target(
         }
         Ok(None) => None,
         Err(err) => {
-            tracing::warn!(target: "daemon", "[scalar] {err}");
+            tracing::warn!(target: "daemon", "[scalar] {}", err.detail_message());
             if allow_scalar_webapi_device_fallback(
                 DaemonTickReason::UserActivity,
                 scalar_webapi_device_fallback,
@@ -1000,11 +998,12 @@ mod tests {
     fn fake_scalar_webapi_device_wake_result() -> ScalarWebApiDeviceWakeResult {
         ScalarWebApiDeviceWakeResult {
             endpoint: format!(
-                "http://scalarwebapi-device.local:10000/{}/system",
+                "http://scalarwebapi-device.local:54480/{}/system",
                 protocol_path()
             ),
             status_code: 200,
             previous_status: Some("standby".into()),
+            trigger: crate::scalar_webapi_device::OUTPUT_SELECTED_TRIGGER.into(),
         }
     }
 
@@ -1216,7 +1215,7 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_scheduled_no_change_falls_back_when_network_changed() {
+    fn test_daemon_scheduled_no_change_skips_scalar_wake_without_fallback() {
         let hal = MockHal::new(vec![
             builtin_speakers("BuiltInHeadphoneOutputDevice"),
             builtin_speakers("BuiltInSpeakerDevice"),
@@ -1241,10 +1240,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
         assert_eq!(
             hal.default_output_uid().unwrap().as_deref(),
-            Some("BuiltInSpeakerDevice")
+            Some("BuiltInHeadphoneOutputDevice")
         );
     }
 

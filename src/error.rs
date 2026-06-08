@@ -23,6 +23,21 @@ pub enum RustyJackError {
     Io(#[from] std::io::Error),
 }
 
+impl RustyJackError {
+    /// Inner message without the `thiserror` category prefix (for structured logs).
+    #[must_use]
+    pub fn detail_message(&self) -> String {
+        match self {
+            Self::Config(msg)
+            | Self::CoreAudio(msg)
+            | Self::Launchd(msg)
+            | Self::AppLaunch(msg)
+            | Self::Speaker(msg) => msg.clone(),
+            Self::Io(err) => err.to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,6 +54,18 @@ mod tests {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "plist");
         let err: RustyJackError = io_err.into();
         assert!(matches!(err, RustyJackError::Io(_)));
+    }
+
+    #[test]
+    fn test_detail_message_strips_speaker_prefix() {
+        let err = RustyJackError::Speaker(
+            "url=http://192.168.1.1:54480/sony/system: connect failed".into(),
+        );
+        assert_eq!(
+            err.detail_message(),
+            "url=http://192.168.1.1:54480/sony/system: connect failed"
+        );
+        assert!(!err.detail_message().contains("speaker wake error"));
     }
 
     #[test]

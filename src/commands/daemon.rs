@@ -15,6 +15,9 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
     let config = load_config(&path).map_err(anyhow::Error::new)?;
 
     let logging_options = DaemonLoggingOptions::from(&config.logging);
+    let log_path =
+        crate::logging::resolve_log_file_path(&logging_options.file).map_err(anyhow::Error::new)?;
+    eprintln!("rusty-jack daemon: writing logs to {}", log_path.display());
     init_daemon(&logging_options).map_err(anyhow::Error::new)?;
 
     // Detect common config mismatches early so they show up on daemon restarts.
