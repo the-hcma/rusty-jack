@@ -14,30 +14,30 @@ Both workflows publish Homebrew changes through a pull request in `the-hcma/home
 ## One-Time Setup
 
 1. Create the public tap repository `the-hcma/homebrew-tap`.
-2. Create a protected GitHub environment named `release` in `the-hcma/rusty-jack`.
-3. Restrict the `release` environment to trusted reviewers.
-4. Add `RELEASE_PLEASE_TOKEN` as a `release` environment secret. This must be a fine-grained token with write access to `the-hcma/rusty-jack`; a real token is needed so Release Please PRs trigger required CI.
-5. Add `HOMEBREW_TAP_TOKEN` as a `release` environment secret. This must have write access to `the-hcma/homebrew-tap`.
+2. Create a GitHub environment named `release` in `the-hcma/rusty-jack`.
+3. Add `RELEASE_PLEASE_TOKEN` as a `release` environment secret. This must be a fine-grained token with write access to `the-hcma/rusty-jack`; a real token is needed so Release Please PRs trigger required CI.
+4. Add `HOMEBREW_TAP_TOKEN` as a `release` environment secret. This must have write access to `the-hcma/homebrew-tap`.
+5. Do **not** add required reviewers to the `release` environment. Release Please runs automatically on pushes to `main`; the Release Please PR is the human approval gate.
 6. Ensure the tap allows auto-merge and has CI protecting `main`; tap formula updates are merged only after `Tap CI` passes.
 
-Do not store release tokens as repository-level secrets. Repository secrets can be referenced by any workflow merged to `main`; environment secrets are only exposed after the protected environment is approved.
+Keep release tokens in the `release` environment rather than repository secrets. Workflow changes still have to pass branch protection and CODEOWNERS review before reaching `main`.
 
 ## Security Model
 
-Release tokens are gated by the `release` environment:
+Release tokens live in the `release` environment without deployment protection rules:
 
-- `Release Please` and `Release` jobs declare `environment: release`.
-- A workflow run cannot access `RELEASE_PLEASE_TOKEN` or `HOMEBREW_TAP_TOKEN` until an allowed environment reviewer approves the job.
+- `Release Please` and `Release` jobs declare `environment: release` so they can read the PATs.
+- Routine pushes to `main` do **not** wait for a separate workflow deployment approval.
+- The Release Please PR (version bump, `CHANGELOG.md`, and release notes) is the human gate before a tag is created.
 - Pull requests from forks do not receive these secrets.
-- Changes to release workflows still have to pass branch protection and CODEOWNERS review before reaching `main`.
 - Tap updates go through a protected pull request in `the-hcma/homebrew-tap`; the token cannot push directly to tap `main`.
 
-If an unexpected release workflow is waiting for approval, reject it and inspect the workflow diff before approving any later run.
+If an unexpected release workflow change reaches `main`, inspect the workflow diff before the next Release Please PR merges.
 
 ## Normal Release
 
 1. Merge feature and fix PRs using conventional commit messages, for example `feat:`, `fix:`, or `docs:`.
-2. Wait for the `Release Please` workflow on `main`.
+2. Release Please runs automatically on the resulting push to `main` and opens or updates a release PR.
 3. Review the Release Please PR. It updates:
    - `Cargo.toml`
    - `Cargo.lock`
@@ -45,11 +45,11 @@ If an unexpected release workflow is waiting for approval, reject it and inspect
    - `.release-please-manifest.json`
 4. Merge the Release Please PR after CI passes.
 
-After the release PR merges, Release Please creates the GitHub release and tag. The same workflow then:
+After the release PR merges, Release Please creates the GitHub release and tag. The `Update Homebrew tap` job in the same workflow then:
 
 - validates that the release version matches `Cargo.toml`
 - downloads the tag tarball and computes its SHA-256
-- opens or updates a tap PR for `Formula/rusty-jack.rb`
+- opens or updates a tap PR for `Formula/rusty-jack.rb` from `make render-homebrew-formula`
 - enables auto-merge for the tap PR after `Tap CI` passes
 
 ## Backfill Or Repair
@@ -97,5 +97,7 @@ brew install rusty-jack
 ## Troubleshooting
 
 If no release PR appears, check that recent commits use releasable conventional commit prefixes such as `feat:` or `fix:`.
+
+If Release Please fails with `token` missing, confirm `RELEASE_PLEASE_TOKEN` is set on the `release` environment.
 
 If tap publication fails, fix the cause in `the-hcma/homebrew-tap` or the `HOMEBREW_TAP_TOKEN`, then rerun the `Release` workflow with the same tag.

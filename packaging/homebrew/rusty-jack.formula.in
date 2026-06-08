@@ -1,20 +1,10 @@
-# Homebrew formula reference for the-hcma/homebrew-tap.
-#
-# Stable releases are rendered from packaging/homebrew/rusty-jack.formula.in:
-#   make render-homebrew-formula ARCHIVE_URL=... ARCHIVE_SHA256=...
-#
-#   brew tap the-hcma/tap
-#   brew install rusty-jack
-#
 class RustyJack < Formula
   desc "Route HDMI audio for volume keys and wake ScalarWebAPI-compatible speakers"
   homepage "https://github.com/the-hcma/rusty-jack"
+  url "@ARCHIVE_URL@"
+  sha256 "@ARCHIVE_SHA256@"
   license "MIT"
   head "https://github.com/the-hcma/rusty-jack.git", branch: "main"
-
-  # Stable tap releases use a versioned URL + sha256:
-  # url "https://github.com/the-hcma/rusty-jack/archive/refs/tags/v0.1.1.tar.gz"
-  # sha256 "..."
 
   depends_on "rust" => :build
   depends_on macos: :monterey
