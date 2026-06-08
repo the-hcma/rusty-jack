@@ -26,8 +26,15 @@ class RustyJack < Formula
       After installing the formula, set up config and the per-user LaunchAgent:
         rusty-jack install
 
-      Check routing and daemon state (including log paths):
+      Check routing, daemon state, activity polling, and log path:
         rusty-jack status
+
+      Daemon logs: ~/Library/Logs/rusty-jack.log (one file; rotated by the app).
+      After upgrading from older releases, refresh the LaunchAgent once:
+        rusty-jack upgrade --force
+
+      Each macOS user who wants auto-routing should run `rusty-jack install`
+      in their own account (Homebrew is shared; the LaunchAgent is per-user).
 
       Before uninstalling the formula, stop and remove the LaunchAgent:
         rusty-jack uninstall --keep-config

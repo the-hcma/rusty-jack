@@ -184,7 +184,7 @@ Minimal example:
 }
 ```
 
-`match`, `exclude`, and `logging` in `config.example.json` are reserved for future behavior and currently ignored by the loader.
+`match` and `exclude` in `config.example.json` are reserved for future behavior. The `logging` block sets daemon log level and file path (default `~/Library/Logs/rusty-jack.log`).
 
 ScalarWebAPI device example: [`config.example.scalar-webapi-device.json`](./config.example.scalar-webapi-device.json). Other devices should work if they expose the same ScalarWebAPI service; Rusty Jack discovers the advertised endpoint and uses `system.getPowerStatus` / `system.setPowerStatus`.
 
@@ -241,7 +241,9 @@ Plist template: [`launchd/com.example.rusty-jack.plist.template`](./launchd/com.
 | `uninstall` | Same daemon uninstall behavior as `disable` |
 | `upgrade` | Rewrite plist for the current binary path when needed |
 
-`daemon` runs in the current user session and reloads config before each scheduled poll. The LaunchAgent is per-user: each macOS login account that wants auto-routing installs its own plist under `~/Library/LaunchAgents`, with its own config and logs. Two users can install it at the same time because each job lives in a separate `gui/<uid>` launchd domain.
+`daemon` runs in the current user session and reloads config before each scheduled poll. The LaunchAgent is per-user: each macOS login account that wants auto-routing installs its own plist under `~/Library/LaunchAgents`, with its own config and logs. Two users can install it at the same time because each job lives in a separate `gui/<uid>` launchd domain. Activity-based ScalarWebAPI wake and eqMac routing follow the installing user's session — run `rusty-jack install` in every account that should auto-route and wake devices on that Mac.
+
+Daemon logs are written in a single rotated file (`~/Library/Logs/rusty-jack.log` by default). `rusty-jack status` shows the log path, daemon state, and the latest activity poll (idle time, console user, last idle→active transition).
 
 ### Install the LaunchAgent
 
@@ -250,7 +252,7 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain.
+`install` creates `~/.config/rusty-jack/config.json` when needed, prompting for a preferred output and an optional explicit fallback output. If no explicit fallback is configured, Rusty Jack still uses the Mac's built-in output automatically when available. It then renders `~/Library/LaunchAgents/com.example.rusty-jack.plist` from the bundled template, points it at the current `rusty-jack` binary, creates `~/Library/Logs`, and bootstraps the job in your `gui/<uid>` launchd domain. Structured daemon logs go to `~/Library/Logs/rusty-jack.log`.
 
 Use `rusty-jack pause` to stop auto-routing temporarily, `rusty-jack resume` to start it again, and `rusty-jack uninstall` to stop it and remove the plist. If `picker` paused the daemon after a manual non-preferred selection, interactive `resume` asks before switching back to the configured output. Uninstall offers to remove `~/.config/rusty-jack/config.json`; use `rusty-jack uninstall --only-driver` to remove only the native audio driver, or `disable` for daemon-only removal that always keeps config and logs.
 
@@ -264,7 +266,7 @@ git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` to refresh and restart the LaunchAgent after an in-place source install. The CLI `upgrade` command itself does not download or build Rusty Jack, and without `--force` it reports when the LaunchAgent is already current.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` to refresh and restart the LaunchAgent after an in-place source install. The CLI `upgrade` command itself does not download or build Rusty Jack, and without `--force` it reports when the LaunchAgent is already current. After upgrading from older releases that used separate launchd stdout/stderr logs, run `rusty-jack upgrade --force` once so the plist matches in-app logging.
 
 ---
 

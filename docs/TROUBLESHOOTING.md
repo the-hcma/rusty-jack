@@ -136,9 +136,10 @@ launchctl print "gui/$(id -u)/com.example.rusty-jack"
 4. Check logs:
 
 ```bash
-tail -n 100 "$HOME/Library/Logs/rusty-jack.stderr.log"
-tail -n 100 "$HOME/Library/Logs/rusty-jack.stdout.log"
+tail -n 100 "$HOME/Library/Logs/rusty-jack.log"
 ```
+
+`rusty-jack status` shows the log path in the Daemon block and the latest activity poll in the Activity block (idle time, console user, last idle→active transition). Set `RUSTY_JACK_LOG_LEVEL=debug` before starting the daemon to log every activity poll; transitions log at `info` by default.
 
 ---
 

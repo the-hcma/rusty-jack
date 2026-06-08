@@ -130,7 +130,7 @@ rusty-jack upgrade [--json] [--force]
 | `uninstall` | **Removed** | Stopped + disabled |
 | `upgrade` | Rewritten only when needed | Paused, then resumed if it was running |
 
-LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not system-wide. Each macOS account that wants auto-routing can install its own `~/Library/LaunchAgents/com.example.rusty-jack.plist`; the jobs do not conflict across users.
+LaunchAgents run in a single user’s GUI launchd domain (`gui/<uid>`), not system-wide. Each macOS account that wants auto-routing can install its own `~/Library/LaunchAgents/com.example.rusty-jack.plist`; the jobs do not conflict across users. Activity-based ScalarWebAPI wake and eqMac routing apply to the installing user’s audio session only — if multiple people use the same Mac, run `rusty-jack install` in each account that should auto-route and wake devices.
 
 ### Install
 
@@ -154,7 +154,7 @@ make install
 rusty-jack install
 ```
 
-`install` creates `~/.config/rusty-jack/config.json` when it is missing. If the config already exists, Rusty Jack preserves it as the basis, updates readable `name` labels for known UIDs, and offers additive changes such as choosing a missing preferred output or adding an explicit fallback. It does not recreate the file or drop custom settings like `scalar_webapi_device`. Interactive `install` can also configure a new `scalar_webapi_device` block (host, Mac output, wake triggers). Wake triggers default to all recommended events (`keyboard`, `mouse`, `output_selected`); you can confirm that set or toggle individual triggers. Existing configs that enable ScalarWebAPI with a partial trigger list are offered the same upgrade during `install`. In `--json` mode it avoids prompts and applies only non-interactive migrations. If a stale eqMac HAL driver is present without the eqMac app, interactive `install` offers to remove it with `sudo rm -rf /Library/Audio/Plug-Ins/HAL/eqMac.driver`. If a connected HDMI/DisplayPort output is visible, `install` also offers to install the Rusty Jack native audio driver. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. Logs go to `~/Library/Logs/rusty-jack.stdout.log` and `~/Library/Logs/rusty-jack.stderr.log`.
+`install` creates `~/.config/rusty-jack/config.json` when it is missing. If the config already exists, Rusty Jack preserves it as the basis, updates readable `name` labels for known UIDs, and offers additive changes such as choosing a missing preferred output or adding an explicit fallback. It does not recreate the file or drop custom settings like `scalar_webapi_device`. Interactive `install` can also configure a new `scalar_webapi_device` block (host, Mac output, wake triggers). Wake triggers default to all recommended events (`keyboard`, `mouse`, `output_selected`); you can confirm that set or toggle individual triggers. Existing configs that enable ScalarWebAPI with a partial trigger list are offered the same upgrade during `install`. In `--json` mode it avoids prompts and applies only non-interactive migrations. If a stale eqMac HAL driver is present without the eqMac app, interactive `install` offers to remove it with `sudo rm -rf /Library/Audio/Plug-Ins/HAL/eqMac.driver`. If a connected HDMI/DisplayPort output is visible, `install` also offers to install the Rusty Jack native audio driver. It then writes `~/Library/LaunchAgents/com.example.rusty-jack.plist`, creates `~/Library/Logs`, bootstraps the job in the current user’s launchd domain, and starts `rusty-jack daemon`. The daemon writes structured logs to `~/Library/Logs/rusty-jack.log` (configurable via `logging.file` in config or `RUSTY_JACK_LOG_FILE`).
 
 ### Native HDMI/DisplayPort Driver
 
@@ -222,7 +222,7 @@ git pull
 make upgrade
 ```
 
-`make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` so launchd restarts after an in-place source install. The CLI `upgrade` command itself does not download source or build a new binary. It checks the bundled native driver against the installed driver and only offers a driver upgrade when the bundled driver has a material change. It rewrites the plist only when the LaunchAgent differs from the current `rusty-jack` executable, reports the before/after version and commit for real daemon refreshes, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it. Use `--force` to rewrite/restart even when the LaunchAgent already matches.
+`make upgrade` installs the new binary once, then runs `rusty-jack upgrade --force` so launchd restarts after an in-place source install. The CLI `upgrade` command itself does not download source or build a new binary. It checks the bundled native driver against the installed driver and only offers a driver upgrade when the bundled driver has a material change. It rewrites the plist only when the LaunchAgent differs from the current `rusty-jack` executable, reports the before/after version and commit for real daemon refreshes, and automatically pauses/resumes the daemon if it was running. If the daemon was paused before the upgrade, it stays paused; if the daemon was not installed yet, `upgrade` installs it. Use `--force` to rewrite/restart even when the LaunchAgent already matches — recommended after upgrading from releases that used separate launchd stdout/stderr log paths so the plist picks up in-app logging.
 
 ---
 
@@ -305,11 +305,13 @@ Policy block fields (aligned columns):
 
 HDMI/DisplayPort Volume Control block fields include whether a connected HDMI/DP output is detected, whether the Rusty Jack native driver is installed, whether the driver is recommended for the current hardware, whether eqMac fallback is installed, any managed eqMac backup created by `rusty-jack driver swap-in`, and a recommendation when a connected HDMI/DP route needs volume control.
 
-Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, and PID when available. State values:
+Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, PID when available, and the daemon log file path. State values:
 
 - `running` — LaunchAgent plist exists and launchd reports the job loaded; PID is shown when available.
 - `paused` — plist exists but launchd does not currently have the job loaded. If picker paused the daemon for a manual output override, `status` includes a `reason` and a note telling you to run `rusty-jack resume`.
 - `not_installed` — plist is not present under `~/Library/LaunchAgents`.
+
+When the daemon has run at least one activity poll, an **Activity** block shows the latest idle sample, console and daemon users, configured keyboard/mouse wake triggers, and the last idle→active transition (proxy for recent keyboard/mouse activity). Activity polls log at `debug`; transitions log at `info`.
 
 Config is optional for `status`; without it, policy reports “not configured”.
 
@@ -400,7 +402,7 @@ In practice, the most accurate reference is whatever your device advertises on y
 
 ### Reserved example keys
 
-`match`, `exclude`, and `logging` appear in `config.example.json` as roadmap placeholders. The current loader ignores unknown keys and does not apply those settings.
+`match` and `exclude` appear in `config.example.json` as roadmap placeholders and are not applied yet. The `logging` block configures daemon log level and file path (`~/Library/Logs/rusty-jack.log` by default). Override with `RUSTY_JACK_LOG_LEVEL`, `RUSTY_JACK_LOG_FILE`, or `RUST_LOG`.
 
 ---
 
