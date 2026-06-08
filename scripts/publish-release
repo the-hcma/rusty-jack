@@ -156,7 +156,7 @@ update_homebrew_tap() {
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "[dry-run] would download archive for rusty-jack-v${VERSION} or v${VERSION}"
     echo "[dry-run] would render Formula/rusty-jack.rb and open tap PR ${TAP_BRANCH}"
-    echo "[dry-run] tap PR URL would be printed before waiting for checks and merge"
+    echo "[dry-run] would wait for tap PR checks and merge, then print PR merged: <URL>"
     return 0
   fi
 
@@ -220,17 +220,16 @@ EOF
 
   TAP_PR_URL="$(release_lib_open_tap_pr "${TAP_REPO}" "${TAP_BRANCH}" "rusty-jack ${TAG}" "${body}")"
   echo "Opened tap update PR for ${TAG} (auto-merge enabled)"
-  echo "${TAP_PR_URL}"
   release_lib_wait_for_tap_pr_merge "${TAP_REPO}" "${TAP_PR_URL}"
 }
 
 publish_release_print_last_line() {
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] tap PR URL would be printed before waiting for merge, then again as the last line"
+    echo "[dry-run] would print PR merged: <tap PR URL>"
     return 0
   fi
   if [[ -n "${TAP_PR_URL}" ]]; then
-    echo "${TAP_PR_URL}"
+    echo "PR merged: ${TAP_PR_URL}"
     return 0
   fi
   echo "Homebrew formula already current; no tap PR needed."
@@ -242,5 +241,4 @@ fi
 
 update_homebrew_tap
 
-echo "Done."
 publish_release_print_last_line

@@ -462,7 +462,6 @@ release_lib_wait_for_tap_pr_merge() {
   done
 
   if [[ "${state}" == "MERGED" ]]; then
-    echo "Tap PR already merged."
     return 0
   fi
 
@@ -477,7 +476,6 @@ release_lib_wait_for_tap_pr_merge() {
       continue
     fi
     if [[ "${state}" == "MERGED" ]]; then
-      echo "Tap PR merged."
       return 0
     fi
     if [[ "${state}" != "OPEN" ]]; then
