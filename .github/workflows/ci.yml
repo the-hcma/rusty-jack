@@ -9,6 +9,10 @@ on:
   pull_request:
     # Stacked PRs (Graphite) target a non-main base branch; run CI anyway.
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
   RUST_BACKTRACE: 1
@@ -35,12 +39,12 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - name: checkout
-        run: |
-          git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_REF}"
-          git checkout --detach FETCH_HEAD
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          # refs/pull/N/merge is deleted as soon as a PR merges; head.sha stays fetchable
+          # while macOS runners are still queued.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: install Rust toolchain
         run: |
@@ -73,12 +77,10 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - name: checkout
-        run: |
-          git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_REF}"
-          git checkout --detach FETCH_HEAD
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: install Rust toolchain
         run: |
@@ -96,12 +98,10 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: macos-14
     steps:
-      - name: checkout
-        run: |
-          git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_REF}"
-          git checkout --detach FETCH_HEAD
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: install Rust toolchain
         run: |
