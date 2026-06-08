@@ -129,6 +129,27 @@ impl ScalarWebApiDeviceEndpoint {
     }
 }
 
+fn scalar_http_url(host: &str, port: u16, path: &str) -> String {
+    format!("http://{host}:{port}{path}")
+}
+
+fn scalar_ssdp_url() -> String {
+    format!("ssdp://{SSDP_ADDR}")
+}
+
+fn scalar_speaker_err(url: &str, detail: impl std::fmt::Display) -> RustyJackError {
+    RustyJackError::Speaker(format!("url={url}: {detail}"))
+}
+
+fn is_transient_network_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NetworkUnreachable
+            | std::io::ErrorKind::HostUnreachable
+            | std::io::ErrorKind::NotConnected
+    ) || err.raw_os_error() == Some(65)
+}
+
 /// Return true when every recommended wake trigger is configured.
 #[must_use]
 pub fn has_all_default_wake_triggers(triggers: &[String]) -> bool {
@@ -331,12 +352,15 @@ fn activity_trigger_enabled(api: &ScalarWebApiDeviceConfig) -> bool {
 }
 
 pub fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, RustyJackError> {
+    let host = scalar_webapi_device_host(api)?;
     let endpoint = resolve_scalar_webapi_device_endpoint(api)?.ok_or_else(|| {
-        RustyJackError::Speaker(format!(
-            "ScalarWebAPI SSDP discovery found no JSON-RPC endpoint for {} (configured port {} is not used for Sony devices)",
-            scalar_webapi_device_host(api).unwrap_or("(unset)"),
-            api.port
-        ))
+        scalar_speaker_err(
+            &scalar_ssdp_url(),
+            format!(
+                "host={host}: SSDP discovery found no JSON-RPC endpoint (configured port {} is not used)",
+                api.port
+            ),
+        )
     })?;
     current_power_status_at_endpoint(api, &endpoint)
 }
@@ -426,9 +450,10 @@ fn send_wake_command_to(
     ensure_success_json(&response, &endpoint)?;
     let status_code = parse_http_status(&response)?;
     if !(200..300).contains(&status_code) {
-        return Err(RustyJackError::Speaker(format!(
-            "{endpoint} returned HTTP {status_code}"
-        )));
+        return Err(scalar_speaker_err(
+            &endpoint,
+            format!("returned HTTP {status_code}"),
+        ));
     }
 
     Ok(ScalarWebApiDeviceWakeResult {
@@ -541,9 +566,24 @@ fn discover_scalar_webapi_device_endpoint(
          MX: 1\r\n\
          ST: {SCALAR_WEBAPI_ST}\r\n\r\n"
     );
-    socket
-        .send_to(request.as_bytes(), SSDP_ADDR)
-        .map_err(|err| RustyJackError::Speaker(format!("could not send SSDP discovery: {err}")))?;
+    match socket.send_to(request.as_bytes(), SSDP_ADDR) {
+        Ok(_) => {}
+        Err(err) if is_transient_network_error(&err) => {
+            let ssdp_url = scalar_ssdp_url();
+            tracing::debug!(
+                target: "daemon",
+                "[scalar] url={ssdp_url} host={host}: SSDP M-SEARCH skipped: {err}"
+            );
+            return Ok(None);
+        }
+        Err(err) => {
+            let ssdp_url = scalar_ssdp_url();
+            return Err(scalar_speaker_err(
+                &ssdp_url,
+                format!("host={host}: could not send SSDP M-SEARCH: {err}"),
+            ));
+        }
+    }
 
     let mut buf = [0_u8; 4096];
     loop {
@@ -570,9 +610,11 @@ fn discover_scalar_webapi_device_endpoint(
                 return Ok(None);
             }
             Err(err) => {
-                return Err(RustyJackError::Speaker(format!(
-                    "could not read SSDP response: {err}"
-                )));
+                let ssdp_url = scalar_ssdp_url();
+                return Err(scalar_speaker_err(
+                    &ssdp_url,
+                    format!("host={host}: could not read SSDP response: {err}"),
+                ));
             }
         }
     }
@@ -581,7 +623,12 @@ fn discover_scalar_webapi_device_endpoint(
 fn resolve_host_ips(host: &str) -> Result<Vec<IpAddr>, RustyJackError> {
     (host, 0)
         .to_socket_addrs()
-        .map_err(|err| RustyJackError::Speaker(format!("could not resolve {host}: {err}")))
+        .map_err(|err| {
+            scalar_speaker_err(
+                &scalar_http_url(host, 0, "/"),
+                format!("host={host}: could not resolve: {err}"),
+            )
+        })
         .map(|addrs| addrs.map(|addr| addr.ip()).collect())
 }
 
@@ -613,12 +660,19 @@ fn http_get(url: &str, timeout: Duration) -> Result<String, RustyJackError> {
          Connection: close\r\n\r\n",
         request_path, endpoint.host, endpoint.port
     );
-    let response = send_http(&endpoint.host, endpoint.port, &request, timeout)?;
+    let response = send_http(
+        &scalar_http_url(&endpoint.host, endpoint.port, request_path),
+        &endpoint.host,
+        endpoint.port,
+        &request,
+        timeout,
+    )?;
     let status_code = parse_http_status(&response)?;
     if !(200..300).contains(&status_code) {
-        return Err(RustyJackError::Speaker(format!(
-            "{url} returned HTTP {status_code}"
-        )));
+        return Err(scalar_speaker_err(
+            url,
+            format!("GET returned HTTP {status_code}"),
+        ));
     }
     Ok(response
         .split_once("\r\n\r\n")
@@ -635,6 +689,7 @@ fn post_json(
     timeout_ms: u64,
 ) -> Result<String, RustyJackError> {
     let timeout = Duration::from_millis(timeout_ms.max(1));
+    let url = scalar_http_url(host, port, path);
     let request = format!(
         "POST {path} HTTP/1.1\r\n\
          Host: {host}:{port}\r\n\
@@ -645,7 +700,7 @@ fn post_json(
          {body}",
         body.len()
     );
-    send_http(host, port, &request, timeout)
+    send_http(&url, host, port, &request, timeout)
 }
 
 fn websocket_json(
@@ -659,16 +714,15 @@ fn websocket_json(
     let request_path = if path.is_empty() { "/" } else { path };
     let url = format!("ws://{host}:{port}{request_path}");
     let request = url.as_str().into_client_request().map_err(|err| {
-        RustyJackError::Speaker(format!("could not build WebSocket request: {err}"))
+        scalar_speaker_err(&url, format!("could not build WebSocket request: {err}"))
     })?;
     let address: SocketAddr = (host, port)
         .to_socket_addrs()
-        .map_err(|err| RustyJackError::Speaker(format!("could not resolve {host}: {err}")))?
+        .map_err(|err| scalar_speaker_err(&url, format!("could not resolve host: {err}")))?
         .next()
-        .ok_or_else(|| RustyJackError::Speaker(format!("could not resolve {host}")))?;
-    let stream = TcpStream::connect_timeout(&address, timeout).map_err(|err| {
-        RustyJackError::Speaker(format!("could not connect to {host}:{port}: {err}"))
-    })?;
+        .ok_or_else(|| scalar_speaker_err(&url, "could not resolve host"))?;
+    let stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|err| scalar_speaker_err(&url, format!("connect failed: {err}")))?;
     stream
         .set_read_timeout(Some(timeout))
         .map_err(RustyJackError::Io)?;
@@ -677,39 +731,44 @@ fn websocket_json(
         .map_err(RustyJackError::Io)?;
 
     let (mut socket, response) = tungstenite::client(request, stream)
-        .map_err(|err| RustyJackError::Speaker(format!("WebSocket handshake failed: {err}")))?;
+        .map_err(|err| scalar_speaker_err(&url, format!("WebSocket handshake failed: {err}")))?;
     if response.status().as_u16() != 101 {
-        return Err(RustyJackError::Speaker(format!(
-            "WebSocket upgrade returned HTTP {}",
-            response.status()
-        )));
+        return Err(scalar_speaker_err(
+            &url,
+            format!("WebSocket upgrade returned HTTP {}", response.status()),
+        ));
     }
 
     socket
         .send(Message::Text(body.to_string().into()))
-        .map_err(|err| RustyJackError::Speaker(format!("could not send WebSocket frame: {err}")))?;
+        .map_err(|err| {
+            scalar_speaker_err(&url, format!("could not send WebSocket frame: {err}"))
+        })?;
     let message = socket.read().map_err(|err| {
-        RustyJackError::Speaker(format!("could not read WebSocket response: {err}"))
+        scalar_speaker_err(&url, format!("could not read WebSocket response: {err}"))
     })?;
     let _ = socket.close(None);
     let body = match message {
         Message::Text(text) => text.to_string(),
         Message::Binary(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Message::Close(_) => {
-            return Err(RustyJackError::Speaker(
-                "ScalarWebAPI device closed WebSocket before response".into(),
+            return Err(scalar_speaker_err(
+                &url,
+                "device closed WebSocket before response",
             ));
         }
         other => {
-            return Err(RustyJackError::Speaker(format!(
-                "unexpected WebSocket response: {other:?}"
-            )));
+            return Err(scalar_speaker_err(
+                &url,
+                format!("unexpected WebSocket response: {other:?}"),
+            ));
         }
     };
     Ok(format!("HTTP/1.1 200 OK\r\n\r\n{body}"))
 }
 
 fn send_http(
+    url: &str,
     host: &str,
     port: u16,
     request: &str,
@@ -717,12 +776,11 @@ fn send_http(
 ) -> Result<String, RustyJackError> {
     let address: SocketAddr = (host, port)
         .to_socket_addrs()
-        .map_err(|err| RustyJackError::Speaker(format!("could not resolve {host}: {err}")))?
+        .map_err(|err| scalar_speaker_err(url, format!("could not resolve host: {err}")))?
         .next()
-        .ok_or_else(|| RustyJackError::Speaker(format!("could not resolve {host}")))?;
-    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|err| {
-        RustyJackError::Speaker(format!("could not connect to {host}:{port}: {err}"))
-    })?;
+        .ok_or_else(|| scalar_speaker_err(url, "could not resolve host"))?;
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|err| scalar_speaker_err(url, format!("connect failed: {err}")))?;
     stream
         .set_read_timeout(Some(timeout))
         .map_err(RustyJackError::Io)?;
@@ -732,12 +790,12 @@ fn send_http(
 
     stream
         .write_all(request.as_bytes())
-        .map_err(|err| RustyJackError::Speaker(format!("could not send HTTP request: {err}")))?;
+        .map_err(|err| scalar_speaker_err(url, format!("could not send HTTP request: {err}")))?;
 
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
-        .map_err(|err| RustyJackError::Speaker(format!("could not read HTTP response: {err}")))?;
+        .map_err(|err| scalar_speaker_err(url, format!("could not read HTTP response: {err}")))?;
     Ok(String::from_utf8_lossy(&response).into_owned())
 }
 
@@ -751,16 +809,18 @@ fn ensure_json_has(response: &str, expected: &str, label: &str) -> Result<(), Ru
         .map(|(_, body)| body.trim())
         .unwrap_or(response.trim());
     if body.contains("\"error\"") {
-        return Err(RustyJackError::Speaker(format!(
-            "{label} returned error payload: {body}"
-        )));
+        return Err(scalar_speaker_err(
+            label,
+            format!("returned error payload: {body}"),
+        ));
     }
     if body.contains(expected) {
         return Ok(());
     }
-    Err(RustyJackError::Speaker(format!(
-        "{label} returned unexpected payload: {body}"
-    )))
+    Err(scalar_speaker_err(
+        label,
+        format!("returned unexpected payload: {body}"),
+    ))
 }
 
 fn response_body(response: &str) -> &str {
@@ -973,6 +1033,24 @@ mod tests {
     fn test_power_status_from_response() {
         let response = "HTTP/1.1 200 OK\r\n\r\n{\"result\":[{\"status\":\"standby\"}],\"id\":1}";
         assert_eq!(power_status_from_response(response).unwrap(), "standby");
+    }
+
+    #[test]
+    fn test_scalar_speaker_err_includes_url() {
+        let err = scalar_speaker_err(
+            "ssdp://239.255.255.250:1900",
+            "host=192.168.86.18: could not send SSDP M-SEARCH: No route to host",
+        );
+        assert_eq!(
+            err.to_string(),
+            "speaker wake error: url=ssdp://239.255.255.250:1900: host=192.168.86.18: could not send SSDP M-SEARCH: No route to host"
+        );
+    }
+
+    #[test]
+    fn test_is_transient_network_error() {
+        let err = std::io::Error::from_raw_os_error(65);
+        assert!(is_transient_network_error(&err));
     }
 
     #[test]

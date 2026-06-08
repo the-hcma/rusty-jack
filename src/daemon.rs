@@ -518,7 +518,7 @@ fn scalar_webapi_device_checked_target_or_fallback(
         ),
         Ok(None) => {}
         Err(err) => {
-            tracing::warn!(target: "daemon", "[scalar] {err}");
+            tracing::warn!(target: "daemon", "[scalar] {}", err.detail_message());
             if allow_scalar_webapi_device_fallback(reason, scalar_webapi_device_fallback) {
                 if let Some(fallback) = fallback_excluding(config, devices, &target.uid) {
                     tracing::warn!(
@@ -564,7 +564,7 @@ fn scalar_webapi_device_activity_fallback_target(
         }
         Ok(None) => None,
         Err(err) => {
-            tracing::warn!(target: "daemon", "[scalar] {err}");
+            tracing::warn!(target: "daemon", "[scalar] {}", err.detail_message());
             if allow_scalar_webapi_device_fallback(
                 DaemonTickReason::UserActivity,
                 scalar_webapi_device_fallback,

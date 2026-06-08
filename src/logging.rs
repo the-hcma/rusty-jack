@@ -129,8 +129,11 @@ fn init_daemon_inner(options: &DaemonLoggingOptions) -> Result<(), RustyJackErro
     } else {
         "local time"
     };
-    tracing::info!(target: "logging", "Log level: {level} | Timestamps: {timestamp_mode}");
-    tracing::info!(target: "logging", "Logging to: {}", file_path.display());
+    tracing::debug!(
+        target: "logging",
+        "Daemon logging initialized (level={level}, timestamps={timestamp_mode}, file={})",
+        file_path.display()
+    );
     Ok(())
 }
 
