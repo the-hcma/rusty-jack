@@ -27,7 +27,7 @@ rusty-jack status    # includes daemon log paths
 
 If `~/.config/rusty-jack/config.json` already exists, `install` preserves it and migrates it in place. It updates readable device `name` labels for known UIDs and offers additive choices, without dropping custom settings such as `scalar_webapi_device`.
 
-For **HDMI/DP volume keys**, Rusty Jack offers its native audio driver when a connected HDMI/DisplayPort output is present. If [eqMac](https://eqmac.app) is already installed, Rusty Jack can use it as a compatibility fallback. For **ScalarWebAPI-compatible speakers**, interactive `install` can scan the LAN, propose discovered network speakers (not TVs), and write `scalar_webapi_device` so Rusty Jack can wake the speaker when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#scalarwebapi-speaker-wake-interactive-install).
+For **HDMI/DP volume keys**, Rusty Jack is building a native HAL driver path, but **shipped releases do not yet include a Developer ID–signed driver**, so macOS usually refuses to load the bundled `RustyJack.driver` (AMFI `signature not valid: -67050`). **Use [eqMac](https://eqmac.app) today** when it is already installed. Signing and notarization for end-user driver installs are tracked in [docs/DRIVER_SIGNING.md](./docs/DRIVER_SIGNING.md). For **ScalarWebAPI-compatible speakers**, interactive `install` can scan the LAN, propose discovered network speakers (not TVs), and write `scalar_webapi_device` so Rusty Jack can wake the speaker when its Mac output is selected or when the daemon sees idle-to-active activity. See [Volume on external displays](#volume-on-external-displays) and [docs/USAGE.md](./docs/USAGE.md#scalarwebapi-speaker-wake-interactive-install).
 
 Full command reference: [docs/USAGE.md](./docs/USAGE.md). Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
@@ -48,12 +48,12 @@ Built-in speakers and most Bluetooth headsets expose **software-controllable vol
 | Switch once to preferred device or fallback from config | `apply` |
 | Pick interactively or by device index | `picker`, `picker --index N` |
 | Apply configured volume after a real switch | `volume` |
-| Prefer the Rusty Jack native driver for connected HDMI/DisplayPort volume control; use eqMac only when already installed | automatic during `apply` / `picker` / `daemon` |
+| Prefer a signed Rusty Jack native driver for HDMI/DisplayPort volume control when available; use eqMac when already installed today | automatic during `apply` / `picker` / `daemon` |
 | Run a background auto-switch supervisor | `daemon` |
 | Pause, resume, or uninstall the per-user LaunchAgent | `pause`, `resume`, `disable` |
 | Wake ScalarWebAPI-compatible devices on output selection or idle-to-active daemon triggers | `scalar_webapi_device` |
 
-Switching the default output to a **physical HDMI device alone does not fix volume keys**. Rusty Jack solves the routing and daemon automation side and now detects when connected HDMI/DisplayPort outputs need volume control. Its native HAL driver is the preferred path; **eqMac** is used only when it is already installed.
+Switching the default output to a **physical HDMI device alone does not fix volume keys**. Rusty Jack solves routing and daemon automation and detects when connected HDMI/DisplayPort outputs need volume control. **Until the HAL driver is Developer ID–signed and shipped**, **eqMac** (when already installed) is the practical HDMI/DP volume-key path; the bundled native driver is for development and signing work only.
 
 ---
 
@@ -70,14 +70,14 @@ HDMI/DisplayPort volume control needs:
 1. A **virtual HAL device** as the system default (what volume keys target).
 2. An **app** that captures audio, applies software gain, and renders to the physical monitor.
 
-Rusty Jack offers this path only when a connected HDMI/DisplayPort output is present. It prefers its own native HAL driver. If that driver is not installed and eqMac is already installed, it starts eqMac when you switch to an HDMI/DisplayPort device:
+Rusty Jack detects when a connected HDMI/DisplayPort output needs volume control. **Release builds do not yet prompt to install the native HAL driver** (unsigned bundles are not loadable on typical Macs). If eqMac is already installed, Rusty Jack starts it when you switch to an HDMI/DisplayPort device:
 
 | HDMI/DP volume-control state | Behavior |
 |------------------------------|----------|
 | Rusty Jack native driver installed | Use it as the preferred HDMI/DP volume-control path |
 | eqMac installed + running | No action |
 | eqMac installed, not running | `open -a eqMac`, brief startup wait |
-| No Rusty Jack driver and no eqMac | Recommend the Rusty Jack native driver |
+| No signed Rusty Jack driver and no eqMac | Routing works; HDMI/DP volume keys need eqMac or a signed native driver (not yet in releases) |
 
 Detection: Rusty Jack scans connected CoreAudio outputs for HDMI/DisplayPort transports before offering the driver path. It scans installed HAL `.driver` bundles for `com.the-hcma.rusty-jack.driver`, then checks for eqMac via `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.driver` plus `pgrep -x eqMac`. If eqMac is not installed, Rusty Jack recommends its own driver rather than suggesting an eqMac install.
 
@@ -85,9 +85,13 @@ Detection: Rusty Jack scans connected CoreAudio outputs for HDMI/DisplayPort tra
 
 When set (0–100), rusty-jack uses it for the configured preferred output. Other outputs keep their own remembered volume in `~/.config/rusty-jack/device-volumes.json`; Rusty Jack records a non-preferred output's volume before switching away and restores it when switching back.
 
-### Native driver
+### Native driver (not yet end-user ready)
 
-Run `rusty-jack install` with an HDMI/DisplayPort output connected. In an interactive terminal Rusty Jack offers to install `RustyJack.driver` to:
+Homebrew and release packages include `RustyJack.driver`, but it is **ad-hoc signed only**. macOS typically **does not load** that bundle for real use until it is re-signed with a **Developer ID Application** certificate (and usually notarized for other Macs). See [docs/DRIVER_SIGNING.md](./docs/DRIVER_SIGNING.md).
+
+For **HDMI/DP keyboard volume today**, use **eqMac** if it is already installed. The native driver installer remains available for developers who sign the bundle locally.
+
+Run `rusty-jack install` with an HDMI/DisplayPort output connected. In an interactive terminal Rusty Jack may offer to install `RustyJack.driver` to:
 
 ```text
 ~/Library/Audio/Plug-Ins/HAL/RustyJack.driver
@@ -95,7 +99,7 @@ Run `rusty-jack install` with an HDMI/DisplayPort output connected. In an intera
 
 The installer looks for a bundled driver next to the binary, under `../share/rusty-jack/RustyJack.driver` for Homebrew-style installs, or at `RUSTY_JACK_DRIVER_BUNDLE` for source/testing builds. `make install` builds the source bundle into `~/.cargo/share/rusty-jack/RustyJack.driver`; Homebrew installs the same bundle into `share/rusty-jack`. `rusty-jack uninstall` offers to remove the driver when it is installed. `rusty-jack upgrade` compares the bundled and installed driver and only offers a driver upgrade when the bundle materially changed.
 
-The packaged driver currently exposes a minimal virtual HAL output named **Rusty Jack**, including a stereo output stream and basic volume/mute controls. It installs in the per-user HAL directory without `sudo`. It is safe for macOS to load, but it is still a null output until the passthrough software-volume pipeline is wired up; `rusty-jack status` reports the driver scope, path, version, stage, and warning.
+The driver exposes a virtual HAL output named **Rusty Jack** with stereo output and volume/mute controls. Passthrough to the physical HDMI/DP device is implemented, but **releases still ship an unsigned bundle** — expect `rusty-jack status` to show the driver path while **Sound settings may not list Rusty Jack** until you sign with Developer ID. `rusty-jack status` reports driver scope, path, version, stage, and warnings.
 
 For explicit eqMac replacement testing, use `rusty-jack driver swap-in` and `rusty-jack driver swap-out`. `swap-in` moves `/Library/Audio/Plug-Ins/HAL/eqMac.driver` to a managed backup under `~/.config/rusty-jack/driver-backups/` with `sudo`, then installs or refreshes the user-scoped Rusty Jack driver. `swap-out` removes the Rusty Jack user driver and restores the backed-up eqMac driver with `sudo`. JSON/noninteractive mode will not move the system eqMac driver; rerun the command interactively for those steps. `rusty-jack status` shows the managed eqMac backup when one exists.
 
@@ -336,7 +340,7 @@ Confirm `--help` commit matches `git rev-parse --short HEAD`.
 
 See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 
-- Volume keys dead on HDMI/DisplayPort without the Rusty Jack driver or installed eqMac fallback
+- Volume keys dead on HDMI/DisplayPort — use installed eqMac today; release native driver needs Developer ID signing
 - eqMac installed but volume still wrong
 - Zoom / virtual devices in the picker
 - Policy “no change” / wrong monitor
@@ -351,7 +355,7 @@ See **[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)** for:
 | ScalarWebAPI device wake via ScalarWebAPI + daemon idle polling | Implemented |
 | LaunchAgent install, upgrade, uninstall, and status helper | Implemented |
 | Native event listener refinements for activity detection | Planned |
-| Native driver bundle + installer | Implemented: packaged HAL bundle with minimal virtual output device |
+| Native driver bundle + installer | Implemented in tree; **not end-user ready** until Developer ID signing + notarization ship in releases |
 
 Full plan: **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)**.
 
