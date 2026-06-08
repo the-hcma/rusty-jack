@@ -53,9 +53,22 @@ release_lib_ensure_synced_main "${DRY_RUN}"
 
 release_lib_publish_pending_release_if_needed "${REPO}" "${DRY_RUN}" "${ROOT}"
 
+release_lib_print_release_pr_url_line() {
+  local pr_url
+  pr_url="$(release_lib_open_release_pr_url "${REPO}")"
+  if [[ -n "${pr_url}" ]]; then
+    echo "${pr_url}"
+  elif [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "[dry-run] no open release-please PR found"
+  else
+    echo "No open release-please PR found."
+  fi
+}
+
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] would verify write access to ${REPO}"
   echo "[dry-run] would run: npx release-please release-pr --repo-url=${REPO}"
+  release_lib_print_release_pr_url_line
   exit 0
 fi
 
@@ -63,3 +76,4 @@ release_lib_verify_repo_access "${REPO}"
 echo "Updating release PR for ${REPO}..."
 release_lib_run_release_please release-pr "${REPO}"
 echo "Done. Review the release-please PR on GitHub, then merge it before running make publish-release."
+release_lib_print_release_pr_url_line
