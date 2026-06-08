@@ -312,6 +312,7 @@ mod tests {
         let list = DeviceList {
             devices: vec![hdmi("hdmi-1", "TV", true)],
             system_default: None,
+            scalar_webapi_mac_output: None,
         };
         let policy = evaluate_policy(&list, None, None);
         assert!(!policy.configured);
@@ -322,6 +323,7 @@ mod tests {
         let list = DeviceList {
             devices: vec![hdmi("hdmi-1", "DELL U3219Q", true)],
             system_default: None,
+            scalar_webapi_mac_output: None,
         };
         let policy = evaluate_policy(
             &list,
@@ -341,6 +343,7 @@ mod tests {
                 hdmi("hdmi-2", "DELL U3223QE", false),
             ],
             system_default: None,
+            scalar_webapi_mac_output: None,
         };
         let policy = evaluate_policy(&list, Some(&config_with_uid("hdmi-2")), None);
         assert_eq!(policy.matches_preferred, Some(false));
@@ -351,6 +354,7 @@ mod tests {
         let list = DeviceList {
             devices: vec![hdmi("hdmi-1", "LG TV", true)],
             system_default: None,
+            scalar_webapi_mac_output: None,
         };
         let policy = evaluate_policy(&list, Some(&config_with_uid("missing")), None);
         assert!(policy.message.contains("not connected"));

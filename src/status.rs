@@ -7,7 +7,7 @@ use crate::hdmi_displayport_volume_control::{
 use crate::launchd::{DaemonLogPaths, DaemonStatus};
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
-use crate::scalar_webapi_device;
+use crate::scalar_webapi_device::{self, ScalarWebApiMacOutputLink};
 use crate::state::ActivitySnapshot;
 use crate::system_default::DeviceList;
 use anyhow::Result;
@@ -61,6 +61,8 @@ pub struct StatusSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scalar_webapi: Option<ScalarWebApiStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub scalar_webapi_mac_output: Option<ScalarWebApiMacOutputLink>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_logs: Option<DaemonLogPaths>,
@@ -72,7 +74,11 @@ pub struct StatusSnapshot {
 pub struct ScalarWebApiStatus {
     pub enabled: bool,
     pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub mac_output_uid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mac_output_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub power_status: Option<String>,
 }
@@ -92,6 +98,7 @@ pub fn build_status(
         &DeviceList {
             devices: list.devices.clone(),
             system_default: list.system_default.clone(),
+            scalar_webapi_mac_output: list.scalar_webapi_mac_output.clone(),
         },
         config,
         config_path,
@@ -103,7 +110,10 @@ pub fn build_status(
         .or(policy.active_device_uid.as_deref());
     let hdmi_displayport_volume_control =
         hdmi_displayport_volume_control_status_for_target(&list.devices, selected_uid);
-    let scalar_webapi = build_scalar_webapi_status(config);
+    let scalar_webapi_mac_output = config.and_then(|config| {
+        scalar_webapi_device::scalar_webapi_mac_output_link(config, &list.devices)
+    });
+    let scalar_webapi = build_scalar_webapi_status(config, scalar_webapi_mac_output.as_ref());
 
     StatusSnapshot {
         devices: list.devices,
@@ -112,26 +122,44 @@ pub fn build_status(
         volume_percent,
         hdmi_displayport_volume_control,
         scalar_webapi,
+        scalar_webapi_mac_output,
         daemon,
         daemon_logs,
         activity,
     }
 }
 
-fn build_scalar_webapi_status(config: Option<&Config>) -> Option<ScalarWebApiStatus> {
+fn build_scalar_webapi_status(
+    config: Option<&Config>,
+    link: Option<&ScalarWebApiMacOutputLink>,
+) -> Option<ScalarWebApiStatus> {
     let api = config
         .and_then(|c| c.scalar_webapi_device.as_ref())
         .filter(|api| api.enabled)?;
     Some(ScalarWebApiStatus {
         enabled: api.enabled,
         host: api.host.clone(),
-        mac_output_uid: api.mac_output.uid.clone(),
+        model: Some(api.model.clone()),
+        mac_output_uid: link
+            .map(|link| link.mac_output_uid.clone())
+            .or_else(|| api.mac_output.uid.clone()),
+        mac_output_label: link.and_then(|link| link.mac_output_label.clone()),
         power_status: scalar_webapi_device::current_power_status(api).ok(),
     })
 }
 
 fn format_scalar_webapi_block(status: &ScalarWebApiStatus) -> String {
-    let rows: Vec<(&str, String)> = vec![
+    let mac_output = match (
+        status.mac_output_label.as_deref(),
+        status.mac_output_uid.as_deref(),
+    ) {
+        (Some(label), Some(uid)) => format!("{label} ({uid})"),
+        (Some(label), None) => label.to_string(),
+        (None, Some(uid)) => uid.to_string(),
+        (None, None) => "(unset)".into(),
+    };
+
+    let mut rows: Vec<(&str, String)> = vec![
         (
             "enabled",
             if status.enabled {
@@ -144,13 +172,14 @@ fn format_scalar_webapi_block(status: &ScalarWebApiStatus) -> String {
             "host",
             status.host.clone().unwrap_or_else(|| "(unset)".into()),
         ),
-        (
-            "mac output",
-            status
-                .mac_output_uid
-                .clone()
-                .unwrap_or_else(|| "(unset)".into()),
-        ),
+    ];
+
+    if let Some(model) = &status.model {
+        rows.push(("model", model.clone()));
+    }
+
+    rows.extend([
+        ("mac output", mac_output),
         (
             "power",
             status
@@ -158,7 +187,7 @@ fn format_scalar_webapi_block(status: &ScalarWebApiStatus) -> String {
                 .clone()
                 .unwrap_or_else(|| "unknown".into()),
         ),
-    ];
+    ]);
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     format_labeled_section("ScalarWebAPI", "  ", &borrowed)
 }
@@ -439,6 +468,7 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
     let list = DeviceList {
         devices: snapshot.devices.clone(),
         system_default: snapshot.system_default.clone(),
+        scalar_webapi_mac_output: snapshot.scalar_webapi_mac_output.clone(),
     };
 
     list_fmt::print_device_table(&list)?;
@@ -525,6 +555,7 @@ mod tests {
             DeviceList {
                 devices: vec![hdmi_device(true)],
                 system_default: None,
+                scalar_webapi_mac_output: None,
             },
             None,
             None,
@@ -564,6 +595,7 @@ mod tests {
             DeviceList {
                 devices: vec![hdmi_device(true)],
                 system_default: None,
+                scalar_webapi_mac_output: None,
             },
             Some(&config),
             Some(Path::new("/tmp/config.json")),
@@ -600,6 +632,7 @@ mod tests {
                     routed_to_uid: Some("hdmi-1".into()),
                     routed_to_label: Some("HDMI (DELL U3219Q)".into()),
                 }),
+                scalar_webapi_mac_output: None,
             },
             None,
             None,
@@ -668,6 +701,21 @@ mod tests {
         assert!(block.contains("matches"));
         assert!(block.contains("preferred"));
         assert!(block.contains("HDMI (hdmi-1)"));
+    }
+
+    #[test]
+    fn test_format_scalar_webapi_block_includes_model_and_mac_output_label() {
+        let block = format_scalar_webapi_block(&ScalarWebApiStatus {
+            enabled: true,
+            host: Some("192.168.86.18".into()),
+            model: Some("The Lair".into()),
+            mac_output_uid: Some("BuiltInHeadphoneOutputDevice".into()),
+            mac_output_label: Some("External Headphones".into()),
+            power_status: Some("active".into()),
+        });
+        assert!(block.contains("model"));
+        assert!(block.contains("The Lair"));
+        assert!(block.contains("External Headphones (BuiltInHeadphoneOutputDevice)"));
     }
 
     #[test]
@@ -853,6 +901,7 @@ mod tests {
             DeviceList {
                 devices: vec![hdmi_device(true)],
                 system_default: None,
+                scalar_webapi_mac_output: None,
             },
             None,
             None,
@@ -872,6 +921,7 @@ mod tests {
             DeviceList {
                 devices: vec![hdmi_device(true)],
                 system_default: None,
+                scalar_webapi_mac_output: None,
             },
             None,
             None,

@@ -16,9 +16,11 @@ pub struct DiscoveredScalarWebApiDevice {
 }
 
 use crate::config::{Config, ScalarWebApiDeviceConfig};
-use crate::device_select::resolve_device_selector;
+use crate::device_select::{display_label_for_selector, resolve_device_selector};
 use crate::output_device::OutputDevice;
+use crate::system_default::DeviceList;
 use crate::RustyJackError;
+use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::Mutex;
@@ -59,6 +61,82 @@ fn human_readable_trigger_label(trigger: &str, mac_output_label: Option<&str>) -
             .unwrap_or_else(|| "output device selection".into()),
         other => other.to_string(),
     }
+}
+
+/// Default config `model` when install does not discover a friendlier label.
+pub const GENERIC_SCALAR_WEBAPI_MODEL: &str = "ScalarWebAPI device";
+
+/// ScalarWebAPI speaker linked to a Mac output in config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScalarWebApiMacOutputLink {
+    pub mac_output_uid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mac_output_label: Option<String>,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+/// Build the ScalarWebAPI link shown in `list` / `status` when enabled in config.
+#[must_use]
+pub fn scalar_webapi_mac_output_link(
+    config: &Config,
+    devices: &[OutputDevice],
+) -> Option<ScalarWebApiMacOutputLink> {
+    let api = config
+        .scalar_webapi_device
+        .as_ref()
+        .filter(|api| api.enabled)?;
+    let mac_output_uid = configured_mac_output_uid(api, devices)?;
+    Some(ScalarWebApiMacOutputLink {
+        mac_output_uid,
+        mac_output_label: display_label_for_selector(&api.mac_output, devices),
+        model: api.model.clone(),
+        host: api.host.clone(),
+    })
+}
+
+/// Attach ScalarWebAPI display metadata to a device list using config.
+#[must_use]
+pub fn attach_scalar_webapi_mac_output(
+    mut list: DeviceList,
+    config: Option<&Config>,
+) -> DeviceList {
+    list.scalar_webapi_mac_output =
+        config.and_then(|config| scalar_webapi_mac_output_link(config, &list.devices));
+    list
+}
+
+/// Short suffix for the linked Mac output row in device tables.
+#[must_use]
+pub fn format_scalar_webapi_device_column_suffix(link: &ScalarWebApiMacOutputLink) -> String {
+    let host = link.host.as_deref().unwrap_or("").trim();
+    if link.model == GENERIC_SCALAR_WEBAPI_MODEL || link.model.trim().is_empty() {
+        if host.is_empty() {
+            String::new()
+        } else {
+            format!(" — {host}")
+        }
+    } else if host.is_empty() {
+        format!(" — {}", link.model)
+    } else {
+        format!(" — {} @ {host}", link.model)
+    }
+}
+
+fn configured_mac_output_uid(
+    api: &ScalarWebApiDeviceConfig,
+    devices: &[OutputDevice],
+) -> Option<String> {
+    resolve_device_selector(&api.mac_output.clone().into(), devices)
+        .ok()
+        .or_else(|| {
+            api.mac_output
+                .uid
+                .as_deref()
+                .filter(|uid| !crate::config::is_placeholder_uid(uid))
+                .map(str::to_string)
+        })
 }
 
 fn format_readable_trigger_list(items: &[String]) -> String {
@@ -1121,6 +1199,20 @@ mod tests {
             Some("http://192.168.86.18:54380/MediaRenderer_SRS-ZR5.xml"),
             None,
         ));
+    }
+
+    #[test]
+    fn test_format_scalar_webapi_device_column_suffix() {
+        let link = ScalarWebApiMacOutputLink {
+            mac_output_uid: "BuiltInHeadphoneOutputDevice".into(),
+            mac_output_label: Some("External Headphones".into()),
+            model: "The Lair".into(),
+            host: Some("192.168.86.18".into()),
+        };
+        assert_eq!(
+            format_scalar_webapi_device_column_suffix(&link),
+            " — The Lair @ 192.168.86.18"
+        );
     }
 
     #[test]

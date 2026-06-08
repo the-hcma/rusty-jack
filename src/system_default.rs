@@ -1,6 +1,7 @@
 //! System default output device details (especially virtual HAL routers).
 
 use crate::output_device::OutputDevice;
+use crate::scalar_webapi_device::ScalarWebApiMacOutputLink;
 use crate::transport::TransportKind;
 use serde::Serialize;
 
@@ -51,6 +52,8 @@ pub struct DeviceList {
     pub devices: Vec<OutputDevice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_default: Option<SystemDefaultInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scalar_webapi_mac_output: Option<ScalarWebApiMacOutputLink>,
 }
 
 /// Pick a human-readable label for the routed physical device.

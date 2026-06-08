@@ -1,13 +1,30 @@
 //! `rusty-jack list` — enumerate output devices.
 
+use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
 use crate::list_fmt;
 use crate::output_device::filter_hdmi_devices;
+use crate::scalar_webapi_device::attach_scalar_webapi_mac_output;
 use anyhow::Result;
+use std::path::Path;
 
 /// List output devices, optionally filtered to HDMI-class transports.
-pub fn run(hal: &dyn AudioHal, hdmi_only: bool, json: bool) -> Result<()> {
+pub fn run(
+    hal: &dyn AudioHal,
+    hdmi_only: bool,
+    json: bool,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    let resolved = resolve_config_path(config_path);
+    let explicit = config_path.is_some();
+    let config = if let Some(path) = resolved.as_deref() {
+        load_config_optional(path, explicit)?
+    } else {
+        None
+    };
+
     let mut list = hal.list_outputs()?;
+    list = attach_scalar_webapi_mac_output(list, config.as_ref());
 
     if hdmi_only {
         list.devices = filter_hdmi_devices(&list.devices);
@@ -64,6 +81,6 @@ mod tests {
     #[test]
     fn test_run_json_does_not_panic() {
         let hal = MockHal::new(fixture_devices());
-        run(&hal, false, true).unwrap();
+        run(&hal, false, true, None).unwrap();
     }
 }

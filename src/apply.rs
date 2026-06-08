@@ -321,6 +321,7 @@ mod tests {
         let list = DeviceList {
             devices: vec![hdmi_device("hdmi-1", "DELL U3219Q")],
             system_default: None,
+            scalar_webapi_mac_output: None,
         };
         assert_eq!(label_for_uid(&list, "hdmi-1"), "DELL U3219Q");
     }
@@ -343,6 +344,7 @@ mod tests {
                 routed_to_uid: None,
                 routed_to_label: None,
             }),
+            scalar_webapi_mac_output: None,
         };
         assert_eq!(
             label_for_uid(&list, "EQMOutputCapture"),
