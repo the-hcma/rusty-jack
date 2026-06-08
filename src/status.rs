@@ -8,8 +8,10 @@ use crate::launchd::{DaemonLogPaths, DaemonStatus};
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
 use crate::scalar_webapi_device;
+use crate::state::ActivitySnapshot;
 use crate::system_default::DeviceList;
 use anyhow::Result;
+use chrono::{Local, TimeZone};
 use serde::Serialize;
 use std::io::{self, Write};
 use std::path::Path;
@@ -46,7 +48,7 @@ pub struct PolicyStatus {
 }
 
 /// Snapshot returned by `rusty-jack status`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StatusSnapshot {
     pub devices: Vec<crate::output_device::OutputDevice>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,6 +64,8 @@ pub struct StatusSnapshot {
     pub daemon: Option<DaemonStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_logs: Option<DaemonLogPaths>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ActivitySnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,6 +86,7 @@ pub fn build_status(
     volume_percent: Option<u8>,
     daemon: Option<DaemonStatus>,
     daemon_logs: Option<DaemonLogPaths>,
+    activity: Option<ActivitySnapshot>,
 ) -> StatusSnapshot {
     let policy = evaluate_policy(
         &DeviceList {
@@ -109,6 +114,7 @@ pub fn build_status(
         scalar_webapi,
         daemon,
         daemon_logs,
+        activity,
     }
 }
 
@@ -309,6 +315,71 @@ fn format_daemon_logs_block(logs: &DaemonLogPaths) -> String {
     format_labeled_section("Daemon", "  ", &[("log", logs.file.as_str())])
 }
 
+fn format_activity_block(snapshot: &ActivitySnapshot) -> String {
+    let mut rows: Vec<(&str, String)> = vec![
+        (
+            "last sample",
+            format_unix_local(snapshot.sampled_at_unix_seconds),
+        ),
+        (
+            "idle",
+            format!(
+                "{:.1}s (threshold {:.1}s)",
+                snapshot.idle_seconds, snapshot.threshold_seconds
+            ),
+        ),
+        (
+            "state",
+            if snapshot.is_idle {
+                "idle".into()
+            } else {
+                "active".into()
+            },
+        ),
+    ];
+
+    if let Some(at) = snapshot.last_became_active_at_unix_seconds {
+        let user = snapshot
+            .last_became_active_console_user
+            .as_deref()
+            .unwrap_or("(unknown)");
+        rows.push((
+            "last became_active",
+            format!("{} (console user {user})", format_unix_local(at)),
+        ));
+    } else {
+        rows.push(("last became_active", "(none recorded)".into()));
+    }
+
+    rows.push((
+        "console user",
+        snapshot
+            .console_user
+            .clone()
+            .unwrap_or_else(|| "(unknown)".into()),
+    ));
+    rows.push(("daemon user", snapshot.daemon_user.clone()));
+    rows.push((
+        "wake triggers",
+        if snapshot.triggers.is_empty() {
+            "(none)".into()
+        } else {
+            snapshot.triggers.join(", ")
+        },
+    ));
+
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    format_labeled_section("Activity", "  ", &borrowed)
+}
+
+fn format_unix_local(unix: u64) -> String {
+    Local
+        .timestamp_opt(unix as i64, 0)
+        .single()
+        .map(|dt| format!("{} local", dt.format("%Y-%m-%d %H:%M:%S")))
+        .unwrap_or_else(|| "(unknown)".into())
+}
+
 fn format_policy_block(policy: &PolicyStatus, volume_percent: Option<u8>) -> String {
     let mut rows: Vec<(&str, String)> = vec![(
         "configured",
@@ -413,6 +484,10 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
         writeln!(out)?;
         writeln!(out, "{}", format_scalar_webapi_block(scalar))?;
     }
+    if let Some(activity) = &snapshot.activity {
+        writeln!(out)?;
+        writeln!(out, "{}", format_activity_block(activity))?;
+    }
     Ok(())
 }
 
@@ -456,6 +531,7 @@ mod tests {
             Some(42),
             None,
             None,
+            None,
         );
         assert!(!snapshot.policy.configured);
         assert_eq!(snapshot.volume_percent, Some(42));
@@ -494,6 +570,7 @@ mod tests {
             Some(13),
             None,
             None,
+            None,
         );
         assert!(snapshot.policy.configured);
         assert_eq!(snapshot.policy.matches_preferred, Some(true));
@@ -524,6 +601,7 @@ mod tests {
                     routed_to_label: Some("HDMI (DELL U3219Q)".into()),
                 }),
             },
+            None,
             None,
             None,
             None,
@@ -590,6 +668,27 @@ mod tests {
         assert!(block.contains("matches"));
         assert!(block.contains("preferred"));
         assert!(block.contains("HDMI (hdmi-1)"));
+    }
+
+    #[test]
+    fn test_format_activity_block_shows_poll_snapshot() {
+        let block = format_activity_block(&ActivitySnapshot {
+            sampled_at_unix_seconds: 1_714_000_000,
+            idle_seconds: 12.4,
+            threshold_seconds: 60.0,
+            is_idle: false,
+            console_user: Some("hcma".into()),
+            daemon_user: "hcma".into(),
+            triggers: vec!["keyboard".into(), "mouse".into()],
+            last_became_active_at_unix_seconds: Some(1_713_999_000),
+            last_became_active_console_user: Some("hcma".into()),
+            last_became_active_daemon_user: Some("hcma".into()),
+        });
+        assert!(block.contains("Activity"));
+        assert!(block.contains("12.4s (threshold 60.0s)"));
+        assert!(block.contains("console user"));
+        assert!(block.contains("hcma"));
+        assert!(block.contains("keyboard, mouse"));
     }
 
     #[test]
@@ -760,6 +859,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"active_device_uid\""));
@@ -785,6 +885,7 @@ mod tests {
             Some(crate::launchd::DaemonLogPaths {
                 file: "/tmp/rusty-jack.log".into(),
             }),
+            None,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"volume_percent\":13"));

@@ -667,7 +667,19 @@ pub fn run_forever(
             let idle_threshold = Duration::from_millis(config.activity_idle_threshold_ms);
             match activity.idle_duration() {
                 Ok(idle_duration) => {
-                    if state.observe_idle_duration(idle_duration, idle_threshold) {
+                    let became_active = state.observe_idle_duration(idle_duration, idle_threshold);
+                    if let Err(err) = crate::activity::record_activity_poll(
+                        idle_duration,
+                        idle_threshold,
+                        &config,
+                        became_active,
+                    ) {
+                        tracing::warn!(
+                            target: "daemon",
+                            "[activity] could not persist activity snapshot: {err}"
+                        );
+                    }
+                    if became_active {
                         match load_config(config_path) {
                             Ok(updated) => config = updated,
                             Err(err) => {
@@ -776,7 +788,15 @@ fn print_daemon_switch(result: &ApplyResult, list: &DeviceList) {
 fn seed_activity_state(activity: &dyn ActivityMonitor, state: &mut DaemonState, config: &Config) {
     if let Ok(idle_duration) = activity.idle_duration() {
         let threshold = Duration::from_millis(config.activity_idle_threshold_ms);
-        let _ = state.observe_idle_duration(idle_duration, threshold);
+        let became_active = state.observe_idle_duration(idle_duration, threshold);
+        if let Err(err) =
+            crate::activity::record_activity_poll(idle_duration, threshold, config, became_active)
+        {
+            tracing::warn!(
+                target: "daemon",
+                "[activity] could not persist initial activity snapshot: {err}"
+            );
+        }
     }
 }
 

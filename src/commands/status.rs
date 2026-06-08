@@ -25,6 +25,7 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     let volume_percent = active_uid.and_then(|uid| hal.output_volume_percent(uid));
     let daemon = crate::launchd::daemon_status().ok();
     let daemon_logs = crate::launchd::daemon_log_paths().ok();
+    let activity = crate::state::load_activity_snapshot().ok().flatten();
     let snapshot = build_status(
         list,
         config.as_ref(),
@@ -32,6 +33,7 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         volume_percent,
         daemon,
         daemon_logs,
+        activity,
     );
 
     if json {
