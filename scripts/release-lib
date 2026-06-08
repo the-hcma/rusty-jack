@@ -103,6 +103,55 @@ release_lib_primary_release_tag() {
   echo "rusty-jack-v${1}"
 }
 
+# Print version|pr_number|pr_url when a merged release PR exists but GitHub has no tag.
+release_lib_find_unpublished_release() {
+  local repo="$1"
+  local version pr_number pr_url
+
+  version="$(release_lib_cargo_version)"
+  if [[ -z "${version}" ]]; then
+    return 1
+  fi
+
+  if release_lib_resolve_release_tag "${repo}" "${version}" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  pr_number="$(gh pr list --repo "${repo}" --state merged \
+    --search "release rusty-jack ${version} in:title" \
+    --json number --jq '.[0].number // empty')"
+  if [[ -z "${pr_number}" ]]; then
+    return 1
+  fi
+
+  pr_url="$(gh pr view "${pr_number}" --repo "${repo}" --json url --jq .url)"
+  printf '%s|%s|%s' "${version}" "${pr_number}" "${pr_url}"
+}
+
+release_lib_publish_pending_release_if_needed() {
+  local repo="$1"
+  local dry_run="${2:-0}"
+  local root="$3"
+  local unpublished version pr_number pr_url tag
+
+  if ! unpublished="$(release_lib_find_unpublished_release "${repo}")"; then
+    return 0
+  fi
+
+  IFS='|' read -r version pr_number pr_url <<<"${unpublished}"
+  tag="$(release_lib_primary_release_tag "${version}")"
+
+  if [[ "${dry_run}" -eq 1 ]]; then
+    echo "[dry-run] would run: make publish-release (merged release PR #${pr_number} for ${version}, missing ${tag})"
+    return 0
+  fi
+
+  echo "Merged release PR #${pr_number} for ${version} has no GitHub release (${tag})."
+  echo "Publishing pending release before opening the next release PR..."
+  echo "  ${pr_url}"
+  "${root}/scripts/publish-release"
+}
+
 release_lib_find_release_merge_sha() {
   local repo="$1"
   local version="$2"

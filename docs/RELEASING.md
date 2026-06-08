@@ -24,6 +24,7 @@ No GitHub Actions secrets, environments, or release workflows are required.
 Both targets automatically:
 
 - verify you are on a **clean** `main`, `git fetch origin main`, and **fast-forward** when local `main` is behind `origin/main`
+- `make update-release-pr` also runs `make publish-release` when a merged release PR exists but its GitHub tag is still missing
 - use **`GH_TOKEN`** or `gh auth token`
 - invoke **`npx release-please@latest`** for the release-please step
 
@@ -119,6 +120,12 @@ brew info the-hcma/tap/rusty-jack
 ## Troubleshooting
 
 **No release PR after `make update-release-pr`:** recent commits may not use releasable prefixes (`feat:`, `fix:`, etc.).
+
+**`untagged, merged release PRs outstanding` from release-please:** the release PR merged but the GitHub tag was never created. `make update-release-pr` now detects this and runs `make publish-release` first. You can also publish manually:
+
+```bash
+make publish-release
+```
 
 **`main has diverged from origin/main`:** rebase or reset local `main` onto `origin/main` (for example `git pull --rebase origin main`). When local `main` is only behind the remote, `make update-release-pr` and `make publish-release` fast-forward automatically.
 

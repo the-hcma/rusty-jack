@@ -51,6 +51,8 @@ release_lib_load_token
 
 release_lib_ensure_synced_main "${DRY_RUN}"
 
+release_lib_publish_pending_release_if_needed "${REPO}" "${DRY_RUN}" "${ROOT}"
+
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] would verify write access to ${REPO}"
   echo "[dry-run] would run: npx release-please release-pr --repo-url=${REPO}"
