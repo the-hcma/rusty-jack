@@ -94,6 +94,8 @@ git checkout main && git pull --ff-only
 make publish-release
 ```
 
+If the GitHub release was deleted but the Release Please PR for that version is already merged, `make publish-release` falls back to `gh release create` using the merged release PR commit and the matching `CHANGELOG.md` section.
+
 Tap only (GitHub release already exists):
 
 ```bash

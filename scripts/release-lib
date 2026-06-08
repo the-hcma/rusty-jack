@@ -84,3 +84,82 @@ release_lib_resolve_release_tag() {
   done
   return 1
 }
+
+release_lib_primary_release_tag() {
+  echo "rusty-jack-v${1}"
+}
+
+release_lib_find_release_merge_sha() {
+  local repo="$1"
+  local version="$2"
+  gh pr list --repo "${repo}" --state merged --search "release rusty-jack ${version} in:title" \
+    --json mergeCommit --jq '.[0].mergeCommit.oid // empty'
+}
+
+release_lib_changelog_notes_file() {
+  local version="$1"
+  local notes_file
+  notes_file="$(mktemp -t rusty-jack-changelog.XXXXXX)"
+
+  awk -v ver="${version}" '
+    $0 ~ "^## \\[" ver "\\]" { found = 1 }
+    found {
+      if ($0 ~ /^## \[/ && $0 !~ "^## \\[" ver "\\]") exit
+      print
+    }
+  ' CHANGELOG.md >"${notes_file}"
+
+  if [[ ! -s "${notes_file}" ]]; then
+    rm -f "${notes_file}"
+    echo "error: no CHANGELOG.md section for version ${version}" >&2
+    return 1
+  fi
+
+  echo "${notes_file}"
+}
+
+release_lib_create_github_release_fallback() {
+  local repo="$1"
+  local version="$2"
+  local tag target_sha notes_file
+  tag="$(release_lib_primary_release_tag "${version}")"
+  target_sha="$(release_lib_find_release_merge_sha "${repo}" "${version}")"
+  if [[ -z "${target_sha}" ]]; then
+    echo "error: could not find merged release PR for version ${version}" >&2
+    return 1
+  fi
+
+  notes_file="$(release_lib_changelog_notes_file "${version}")"
+  gh release create "${tag}" --repo "${repo}" --target "${target_sha}" \
+    --title "rusty-jack: v${version}" --notes-file "${notes_file}"
+  rm -f "${notes_file}"
+}
+
+release_lib_configure_git_identity() {
+  local name email user_id
+  name="$(gh api user --jq .login)"
+  email="$(gh api user --jq '.email // ""')"
+  if [[ -z "${email}" ]]; then
+    user_id="$(gh api user --jq .id)"
+    email="${user_id}@users.noreply.github.com"
+  fi
+  git config user.name "${name}"
+  git config user.email "${email}"
+}
+
+release_lib_open_tap_pr() {
+  local tap_repo="$1"
+  local branch="$2"
+  local title="$3"
+  local body="$4"
+  local pr_number
+
+  pr_number="$(gh pr list --repo "${tap_repo}" --head "${branch}" --state open --json number \
+    --jq '.[0].number // empty')"
+  if [[ -n "${pr_number}" ]]; then
+    gh pr edit "${pr_number}" --repo "${tap_repo}" --title "${title}" --body "${body}"
+  else
+    gh pr create --repo "${tap_repo}" --base main --head "${branch}" --title "${title}" --body "${body}"
+  fi
+  gh pr merge "${branch}" --repo "${tap_repo}" --squash --auto --delete-branch
+}

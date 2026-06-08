@@ -136,7 +136,7 @@ upgrade: check-cargo
 render-homebrew-formula:
 	@test -n '$(ARCHIVE_URL)' || { echo 'ARCHIVE_URL is required' >&2; exit 1; }
 	@test -n '$(ARCHIVE_SHA256)' || { echo 'ARCHIVE_SHA256 is required' >&2; exit 1; }
-	sed \
+	@sed \
 	  -e 's|@ARCHIVE_URL@|$(ARCHIVE_URL)|g' \
 	  -e 's|@ARCHIVE_SHA256@|$(ARCHIVE_SHA256)|g' \
 	  '$(HOMEBREW_FORMULA_TEMPLATE)'
