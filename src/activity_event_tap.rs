@@ -154,11 +154,7 @@ fn event_tap_run_loop(last_event_unix_nanos: &Arc<AtomicU64>) -> Result<(), Rust
     // SAFETY: source is a valid run loop source for this thread.
     unsafe {
         extern "C" {
-            fn CFRunLoopAddSource(
-                rl: *mut c_void,
-                source: *mut c_void,
-                mode: *const c_void,
-            );
+            fn CFRunLoopAddSource(rl: *mut c_void, source: *mut c_void, mode: *const c_void);
         }
         CFRunLoopAddSource(
             run_loop.as_concrete_TypeRef() as *mut c_void,

@@ -2,18 +2,18 @@
 
 use crate::coreaudio;
 use crate::launchd::{print_disable_result, uninstall_daemon};
+use crate::logging::{print_log_purge_result, purge_daemon_logs, LogPurgeResult};
 use crate::native_driver::{
     print_uninstall_result as print_driver_uninstall_result, uninstall_if_installed,
 };
-use crate::logging::{print_log_purge_result, purge_daemon_logs, LogPurgeResult};
 use crate::setup::{
     maybe_remove_default_config, print_config_removal_result, terminal_is_interactive,
     ConfigRemovalMode,
 };
-use std::path::{Path, PathBuf};
 use crate::RustyJackError;
 use anyhow::Result;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 /// Stop the daemon, remove the LaunchAgent plist, and optionally remove driver/config.
 #[allow(clippy::too_many_arguments)]
