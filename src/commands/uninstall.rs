@@ -2,6 +2,7 @@
 
 use crate::coreaudio;
 use crate::launchd::{print_disable_result, uninstall_daemon};
+use crate::logging::{print_log_purge_result, purge_daemon_logs, LogPurgeResult};
 use crate::native_driver::{
     print_uninstall_result as print_driver_uninstall_result, uninstall_if_installed,
 };
@@ -12,16 +13,23 @@ use crate::setup::{
 use crate::RustyJackError;
 use anyhow::Result;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 /// Stop the daemon, remove the LaunchAgent plist, and optionally remove driver/config.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     json: bool,
     remove_config: bool,
     keep_config: bool,
     only_driver: bool,
     no_restore_audio: bool,
+    purge_logs: bool,
+    purge: bool,
+    config_path: Option<&Path>,
 ) -> Result<()> {
     let interactive = !json && terminal_is_interactive();
+    let remove_config = remove_config || purge;
+    let purge_logs = purge_logs || purge || remove_config;
     if only_driver {
         let native_driver = uninstall_if_installed(interactive).map_err(anyhow::Error::new)?;
         if json {
@@ -54,6 +62,19 @@ pub fn run(
         ConfigRemovalMode::Prompt
     };
     let config = maybe_remove_default_config(mode, interactive).map_err(anyhow::Error::new)?;
+    let logs = if purge_logs {
+        purge_daemon_logs(config_path).unwrap_or_else(|err| LogPurgeResult {
+            removed: Vec::new(),
+            missing: Vec::new(),
+            errors: vec![(PathBuf::from("<logs>"), err.to_string())],
+        })
+    } else {
+        LogPurgeResult {
+            removed: Vec::new(),
+            missing: Vec::new(),
+            errors: Vec::new(),
+        }
+    };
 
     if json {
         let value = serde_json::to_string_pretty(&serde_json::json!({
@@ -61,6 +82,7 @@ pub fn run(
             "native_driver": native_driver,
             "restore_audio": restore,
             "config": config,
+            "logs": logs,
         }))?;
         println!("{value}");
     } else {
@@ -68,6 +90,7 @@ pub fn run(
         print_driver_uninstall_result(&native_driver);
         print_restore_audio_result(&restore);
         print_config_removal_result(&config);
+        print_log_purge_result(&logs);
     }
 
     Ok(())

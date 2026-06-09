@@ -230,6 +230,124 @@ fn use_utc_timestamps() -> bool {
     )
 }
 
+/// Result of removing daemon log files during uninstall.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LogPurgeResult {
+    pub removed: Vec<PathBuf>,
+    pub missing: Vec<PathBuf>,
+    pub errors: Vec<(PathBuf, String)>,
+}
+
+impl LogPurgeResult {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.removed.is_empty() && self.errors.is_empty()
+    }
+}
+
+/// Paths that may hold rusty-jack daemon logs (current + legacy launchd files).
+#[must_use]
+pub fn collect_daemon_log_paths(config_file: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(path) = resolve_log_file_path(Path::new(DEFAULT_LOG_FILE)) {
+        paths.push(path);
+    }
+
+    if let Some(config_path) = config_file {
+        if let Ok(config) = crate::config::load_config(config_path) {
+            if let Ok(path) = resolve_log_file_path(Path::new(&config.logging.file)) {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let logs_dir = PathBuf::from(home).join("Library/Logs");
+        for legacy in ["rusty-jack.stdout.log", "rusty-jack.stderr.log"] {
+            paths.push(logs_dir.join(legacy));
+        }
+    }
+
+    let mut expanded = Vec::new();
+    for path in paths {
+        if !expanded.contains(&path) {
+            expanded.push(path);
+        }
+    }
+    expand_rotated_log_paths(&expanded)
+}
+
+fn expand_rotated_log_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut all = Vec::new();
+    for path in paths {
+        all.push(path.clone());
+        if let Some(parent) = path.parent() {
+            if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+                if let Ok(entries) = std::fs::read_dir(parent) {
+                    for entry in entries.flatten() {
+                        let candidate = entry.path();
+                        if candidate == *path {
+                            continue;
+                        }
+                        let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
+                            continue;
+                        };
+                        if name.starts_with(file_name) {
+                            all.push(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// Delete daemon log files collected from config and known legacy paths.
+///
+/// # Errors
+///
+/// Returns an error only when log path resolution fails before any deletion attempt.
+pub fn purge_daemon_logs(config_file: Option<&Path>) -> Result<LogPurgeResult, RustyJackError> {
+    let paths = collect_daemon_log_paths(config_file);
+    let mut result = LogPurgeResult {
+        removed: Vec::new(),
+        missing: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    for path in paths {
+        match std::fs::remove_file(&path) {
+            Ok(()) => result.removed.push(path),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => result.missing.push(path),
+            Err(err) => result.errors.push((path, err.to_string())),
+        }
+    }
+
+    Ok(result)
+}
+
+pub fn print_log_purge_result(result: &LogPurgeResult) {
+    if result.removed.is_empty() && result.errors.is_empty() {
+        return;
+    }
+    if !result.removed.is_empty() {
+        println!("Removed log files");
+        for path in &result.removed {
+            println!("  {}", path.display());
+        }
+    }
+    for (path, message) in &result.errors {
+        eprintln!("Warning: failed to remove log file {}", path.display());
+        eprintln!("  error: {message}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +371,18 @@ mod tests {
     fn test_pad_level() {
         assert_eq!(pad_level(&Level::INFO), "INFO    ");
         assert_eq!(pad_level(&Level::WARN), "WARN    ");
+    }
+
+    #[test]
+    fn test_expand_rotated_log_paths_includes_suffix_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("rusty-jack.log");
+        let rotated = dir.path().join("rusty-jack.log.1");
+        std::fs::write(&base, "base\n").unwrap();
+        std::fs::write(&rotated, "rotated\n").unwrap();
+
+        let paths = expand_rotated_log_paths(std::slice::from_ref(&base));
+        assert!(paths.contains(&base));
+        assert!(paths.contains(&rotated));
     }
 }

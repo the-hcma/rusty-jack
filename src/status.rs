@@ -726,6 +726,7 @@ mod tests {
             switch_delay_ms: 500,
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
+            activity_monitor: "idle".into(),
             preferred_device: DeviceSelectorConfig {
                 name: None,
                 uid: Some("hdmi-1".into()),
@@ -904,6 +905,7 @@ mod tests {
             switch_delay_ms: 500,
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
+            activity_monitor: "idle".into(),
             preferred_device: DeviceSelectorConfig {
                 name: None,
                 uid: Some("hdmi-1".into()),
@@ -926,6 +928,8 @@ mod tests {
                 wake_debounce_ms: 30_000,
                 request_timeout_ms: 3_000,
                 require_quick_start: true,
+                wake_on_lan: false,
+                mac_address: None,
             }),
             ..Default::default()
         };

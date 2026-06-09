@@ -241,6 +241,7 @@ mod tests {
             switch_delay_ms: 500,
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
+            activity_monitor: "idle".into(),
             preferred_device: DeviceSelectorConfig {
                 name: None,
                 uid: Some(uid.into()),

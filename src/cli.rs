@@ -43,6 +43,9 @@ pub enum Commands {
     Picker(PickerArgs),
     /// Resume a paused daemon
     Resume(ResumeArgs),
+    /// ScalarWebAPI-compatible speaker helpers
+    #[command(name = "scalar-webapi-device")]
+    ScalarWebapiDevice(ScalarWebapiDeviceArgs),
     /// Show current default output and policy status
     Status(StatusArgs),
     /// Uninstall the launchd LaunchAgent (alias for disable)
@@ -164,6 +167,33 @@ pub struct ResumeArgs {
 }
 
 #[derive(Parser, Debug)]
+pub struct ScalarWebapiDeviceArgs {
+    #[command(subcommand)]
+    pub command: ScalarWebapiDeviceCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ScalarWebapiDeviceCommand {
+    /// Scan the LAN for ScalarWebAPI-compatible speakers
+    Discover(ScalarWebapiDeviceDiscoverArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ScalarWebapiDeviceDiscoverArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+
+    /// SSDP discovery timeout in milliseconds
+    #[arg(long)]
+    pub timeout_ms: Option<u64>,
+
+    /// Fetch `mac_address` for the configured device and write it to the config file
+    #[arg(long)]
+    pub update_config: bool,
+}
+
+#[derive(Parser, Debug)]
 pub struct StatusArgs {
     /// Emit JSON instead of human-readable text
     #[arg(long)]
@@ -191,6 +221,14 @@ pub struct UninstallArgs {
     /// Skip restoring the pre-install default output device, if present
     #[arg(long)]
     pub no_restore_audio: bool,
+
+    /// Remove daemon log files (included automatically with `--remove-config`)
+    #[arg(long, conflicts_with = "only_driver")]
+    pub purge_logs: bool,
+
+    /// Full cleanup: remove config, purge logs, and restore audio (same as `--remove-config --purge-logs`)
+    #[arg(long, conflicts_with_all = ["only_driver", "keep_config", "remove_config", "purge_logs"])]
+    pub purge: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -416,6 +454,40 @@ mod tests {
             "--keep-config",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn test_uninstall_purge_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "uninstall", "--purge"]).unwrap();
+        match cli.command {
+            Commands::Uninstall(args) => {
+                assert!(args.purge);
+                assert!(!args.only_driver);
+            }
+            _ => panic!("expected uninstall"),
+        }
+    }
+
+    #[test]
+    fn test_scalar_webapi_device_discover_parses() {
+        let cli = Cli::try_parse_from([
+            "rusty-jack",
+            "scalar-webapi-device",
+            "discover",
+            "--json",
+            "--timeout-ms",
+            "5000",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::ScalarWebapiDevice(args) => match args.command {
+                ScalarWebapiDeviceCommand::Discover(args) => {
+                    assert!(args.json);
+                    assert_eq!(args.timeout_ms, Some(5000));
+                }
+            },
+            _ => panic!("expected scalar-webapi-device"),
+        }
     }
 
     #[test]

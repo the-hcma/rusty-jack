@@ -10,6 +10,7 @@ pub mod list;
 pub mod pause;
 pub mod picker;
 pub mod resume;
+pub mod scalar_webapi_device;
 pub mod status;
 pub mod uninstall;
 pub mod upgrade;

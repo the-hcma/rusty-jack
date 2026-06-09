@@ -16,6 +16,59 @@ fn hal_plugin_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+use super::DriverBundleSignature;
+
+/// Return the signing authority for a `.driver` bundle, when `codesign` is available.
+#[must_use]
+pub fn driver_bundle_signature(path: &Path) -> DriverBundleSignature {
+    parse_codesign_authority(&codesign_display(path)).unwrap_or(DriverBundleSignature::Unsigned)
+}
+
+/// True when the bundle is signed with a Developer ID Application certificate.
+#[must_use]
+pub fn driver_bundle_has_developer_id_signature(path: &Path) -> bool {
+    matches!(
+        driver_bundle_signature(path),
+        DriverBundleSignature::Authority(authority) if authority.contains("Developer ID Application")
+    )
+}
+
+fn codesign_display(path: &Path) -> String {
+    Command::new("codesign")
+        .args(["-dv", "--verbose=4"])
+        .arg(path)
+        .output()
+        .map(|output| {
+            let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
+            if text.is_empty() {
+                text = String::from_utf8_lossy(&output.stdout).into_owned();
+            }
+            text
+        })
+        .unwrap_or_default()
+}
+
+fn parse_codesign_authority(output: &str) -> Option<DriverBundleSignature> {
+    for line in output.lines() {
+        let line = line.trim();
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "Authority" {
+            continue;
+        }
+        let authority = value.trim();
+        if authority.eq_ignore_ascii_case("adhoc") {
+            return Some(DriverBundleSignature::AdHoc);
+        }
+        if authority.is_empty() {
+            return Some(DriverBundleSignature::Unsigned);
+        }
+        return Some(DriverBundleSignature::Authority(authority.to_string()));
+    }
+    None
+}
+
 pub fn driver_bundle_info(path: &Path) -> Option<HalDriverInfo> {
     let plist = path.join("Contents/Info.plist");
     if !plist.is_file() {
@@ -156,6 +209,25 @@ pub fn match_hal_driver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_codesign_authority_developer_id() {
+        let output = "Authority=Developer ID Application: Example (TEAMID)\nTeamIdentifier=TEAMID";
+        assert_eq!(
+            parse_codesign_authority(output),
+            Some(DriverBundleSignature::Authority(
+                "Developer ID Application: Example (TEAMID)".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_codesign_authority_adhoc() {
+        assert_eq!(
+            parse_codesign_authority("Authority=adhoc\n"),
+            Some(DriverBundleSignature::AdHoc)
+        );
+    }
 
     #[test]
     fn test_match_eqmac_driver_by_uid() {

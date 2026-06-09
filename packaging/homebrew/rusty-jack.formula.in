@@ -47,21 +47,23 @@ class RustyJack < Formula
       `status` flags a stale daemon when the running LaunchAgent binary does not
       match the installed CLI version/commit.
 
-      HDMI/DisplayPort keyboard volume: the bundled RustyJack.driver is not
-      Developer ID–signed yet, so macOS usually will not load it. Release builds
-      do not prompt to install it; use eqMac if already installed until signed
-      drivers ship. See docs/DRIVER_SIGNING.md.
+      HDMI/DisplayPort keyboard volume: when the bundled RustyJack.driver is
+      Developer ID–signed, `install` / `picker` / `upgrade` may offer native
+      driver install. Ad-hoc signed release bundles still need eqMac today; see
+      docs/DRIVER_SIGNING.md.
 
       Daemon logs: ~/Library/Logs/rusty-jack.log (one file; rotated by the app).
 
       Each macOS user who wants auto-routing should run `rusty-jack install`
       in their own account (Homebrew is shared; the LaunchAgent is per-user).
 
-      Before uninstalling the formula, stop and remove the LaunchAgent:
-        rusty-jack uninstall --keep-config
+      `brew uninstall` runs `rusty-jack disable` automatically to stop the LaunchAgent.
 
-      To remove the default config too:
-        rusty-jack uninstall --remove-config
+      For a full per-user cleanup (config + logs + optional driver removal):
+        rusty-jack uninstall --purge
+
+      To keep config but remove logs:
+        rusty-jack uninstall --purge-logs
     EOS
   end
 

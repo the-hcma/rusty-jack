@@ -179,7 +179,21 @@ fn test_uninstall_subcommand_in_help() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Uninstall"))
-        .stdout(predicate::str::contains("--only-driver"));
+        .stdout(predicate::str::contains("--only-driver"))
+        .stdout(predicate::str::contains("--purge"));
+}
+
+#[test]
+fn test_scalar_webapi_device_discover_in_help() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .arg("scalar-webapi-device")
+        .arg("discover")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ScalarWebAPI"))
+        .stdout(predicate::str::contains("--timeout-ms"));
 }
 
 #[test]
