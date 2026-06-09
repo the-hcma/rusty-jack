@@ -6,6 +6,20 @@ use std::time::Duration;
 
 const WOL_PORT: u16 = 9;
 
+/// Normalize a MAC string to lowercase colon form (`aa:bb:cc:dd:ee:ff`).
+///
+/// # Errors
+///
+/// Returns an error when the address is not six bytes.
+pub fn normalize_mac_address(value: &str) -> Result<String, RustyJackError> {
+    let mac = parse_mac_address(value)?;
+    Ok(mac
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(":"))
+}
+
 /// Build a standard Wake-on-LAN magic packet for `mac_address` (`aa:bb:cc:dd:ee:ff`).
 ///
 /// # Errors
@@ -79,5 +93,13 @@ mod tests {
     #[test]
     fn test_build_magic_packet_rejects_short_mac() {
         assert!(build_magic_packet("aa:bb:cc").is_err());
+    }
+
+    #[test]
+    fn test_normalize_mac_address_accepts_dashes() {
+        assert_eq!(
+            normalize_mac_address("10-4f-a8-f3-01-17").unwrap(),
+            "10:4f:a8:f3:01:17"
+        );
     }
 }

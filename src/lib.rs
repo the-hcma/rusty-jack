@@ -98,6 +98,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
                 commands::scalar_webapi_device::discover(
                     args.json,
                     args.timeout_ms,
+                    args.update_config,
                     cli.config.as_deref(),
                 )?;
             }

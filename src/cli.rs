@@ -187,6 +187,10 @@ pub struct ScalarWebapiDeviceDiscoverArgs {
     /// SSDP discovery timeout in milliseconds
     #[arg(long)]
     pub timeout_ms: Option<u64>,
+
+    /// Fetch `mac_address` for the configured device and write it to the config file
+    #[arg(long)]
+    pub update_config: bool,
 }
 
 #[derive(Parser, Debug)]

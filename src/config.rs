@@ -57,6 +57,10 @@ pub struct ScalarWebApiDeviceConfig {
     /// When true, send a Wake-on-LAN packet before/alongside ScalarWebAPI `setPowerStatus`.
     #[serde(default)]
     pub wake_on_lan: bool,
+    /// Wired MAC for Wake-on-LAN (`aa:bb:cc:dd:ee:ff`). Populate via install/discover or
+    /// `getSystemInformation` while the speaker is reachable; required when the API is down.
+    #[serde(default)]
+    pub mac_address: Option<String>,
 }
 
 fn default_scalar_webapi_device_model() -> String {
@@ -307,6 +311,10 @@ fn rewrite_config_if_needed(path: &Path, raw: &str, value: &Value) -> Result<(),
     Ok(())
 }
 
+pub(crate) fn atomic_write_config(path: &Path, contents: &str) -> Result<(), RustyJackError> {
+    atomic_write(path, contents)
+}
+
 fn atomic_write(path: &Path, contents: &str) -> Result<(), RustyJackError> {
     let parent = path
         .parent()
@@ -504,6 +512,7 @@ mod tests {
             request_timeout_ms: 3_000,
             require_quick_start: true,
             wake_on_lan: false,
+            mac_address: None,
         };
         let expected_url = format!("http://scalarwebapi-device.local:10000/{protocol_path}");
         assert_eq!(api.endpoint_url().as_deref(), Some(expected_url.as_str()));

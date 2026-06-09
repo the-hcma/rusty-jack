@@ -238,6 +238,7 @@ mod tests {
                 request_timeout_ms: 3_000,
                 require_quick_start: true,
                 wake_on_lan: false,
+                mac_address: None,
             }),
             ..Default::default()
         };
