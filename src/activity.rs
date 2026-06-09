@@ -35,7 +35,7 @@ pub fn daemon_user_name() -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
-/// ScalarWebAPI wake triggers that fire on idle→active transitions.
+/// ScalarWebAPI wake triggers that fire while the Mac is active and on idle→active transitions.
 #[must_use]
 pub fn activity_wake_triggers(config: &Config) -> Vec<String> {
     config

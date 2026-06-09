@@ -35,7 +35,10 @@ pub enum DaemonTickReason {
     Startup,
     StartupRetry,
     Scheduled,
+    /// Mac transitioned from idle to active (keyboard/mouse activity resumed).
     UserActivity,
+    /// Mac is active and the daemon is keeping ScalarWebAPI devices and eqMac alive.
+    KeepAwake,
 }
 
 /// Outcome of one daemon policy evaluation.
@@ -206,7 +209,10 @@ fn daemon_tick_with_hooks(
     let hdmi_uid = passthrough_physical_uid(config, &list.devices).unwrap_or(&physical.uid);
 
     if current_uid.as_deref() == Some(target.uid.as_str()) {
-        if reason == DaemonTickReason::UserActivity {
+        if matches!(
+            reason,
+            DaemonTickReason::UserActivity | DaemonTickReason::KeepAwake
+        ) {
             if let Some(fallback) = scalar_webapi_device_activity_fallback_target(
                 config,
                 &list.devices,
@@ -445,7 +451,11 @@ struct RecoverHdmiVolumeContext<'a> {
 fn recover_hdmi_displayport_volume_control_for_daemon_target(
     ctx: RecoverHdmiVolumeContext<'_>,
 ) -> Result<Option<ApplyResult>, RustyJackError> {
-    if ctx.reason != DaemonTickReason::Startup {
+    let should_recover = matches!(
+        ctx.reason,
+        DaemonTickReason::Startup | DaemonTickReason::UserActivity
+    );
+    if !should_recover {
         ensure_hdmi_displayport_volume_control_for_daemon_target(
             &ctx.list.devices,
             ctx.hdmi_uid,
@@ -665,6 +675,7 @@ pub fn run_forever(
             let idle_threshold = Duration::from_millis(config.activity_idle_threshold_ms);
             match activity.idle_duration() {
                 Ok(idle_duration) => {
+                    let is_idle = idle_duration >= idle_threshold;
                     let became_active = state.observe_idle_duration(idle_duration, idle_threshold);
                     if let Err(err) = crate::activity::record_activity_poll(
                         idle_duration,
@@ -677,25 +688,44 @@ pub fn run_forever(
                             "[activity] could not persist activity snapshot: {err}"
                         );
                     }
-                    if became_active {
-                        match load_config(config_path) {
-                            Ok(updated) => config = updated,
-                            Err(err) => {
-                                tracing::warn!(target: "daemon", "[config] could not reload config: {err}")
+                    if should_attempt_scalar_wake(is_idle, became_active) {
+                        let network_change = if became_active {
+                            match load_config(config_path) {
+                                Ok(updated) => config = updated,
+                                Err(err) => {
+                                    tracing::warn!(target: "daemon", "[config] could not reload config: {err}")
+                                }
                             }
-                        }
-                        let network_change = observe_current_network_access(&mut state);
-                        if network_change == NetworkAccessChange::Changed {
-                            state.reset_scalar_webapi_device_wake_cooldown();
-                        }
+                            let network_change = observe_current_network_access(&mut state);
+                            if network_change == NetworkAccessChange::Changed {
+                                state.reset_scalar_webapi_device_wake_cooldown();
+                            }
+                            network_change
+                        } else {
+                            NetworkAccessChange::Unchanged
+                        };
                         let cooldown = scalar_webapi_device_wake_cooldown(&config);
-                        if state.allow_scalar_webapi_device_wake(Instant::now(), cooldown) {
-                            let scalar_webapi_device_fallback =
-                                scalar_webapi_device_fallback_permission(network_change);
+                        let keep_awake_due = !became_active
+                            && state.allow_scalar_webapi_device_wake(Instant::now(), cooldown);
+                        if became_active || keep_awake_due {
+                            if became_active {
+                                let _ =
+                                    state.allow_scalar_webapi_device_wake(Instant::now(), cooldown);
+                            }
+                            let tick_reason = if became_active {
+                                DaemonTickReason::UserActivity
+                            } else {
+                                DaemonTickReason::KeepAwake
+                            };
+                            let scalar_webapi_device_fallback = if became_active {
+                                scalar_webapi_device_fallback_permission(network_change)
+                            } else {
+                                ScalarWebApiDeviceFallbackPermission::Suppressed
+                            };
                             run_tick_logged(
                                 hal,
                                 &config,
-                                DaemonTickReason::UserActivity,
+                                tick_reason,
                                 scalar_webapi_device_fallback,
                             );
                             sync_passthrough_logged(hal, &mut passthrough, &config);
@@ -804,6 +834,13 @@ fn seed_network_state(state: &mut DaemonState) {
 
 fn observe_current_network_access(state: &mut DaemonState) -> NetworkAccessChange {
     state.observe_network_access(current_network_access_snapshot().ok().flatten())
+}
+
+/// Wake on idle→active transitions and keep trying while the Mac stays active so
+/// network speakers that drift into standby during use are re-woken.
+#[must_use]
+fn should_attempt_scalar_wake(is_idle: bool, became_active: bool) -> bool {
+    became_active || !is_idle
 }
 
 fn scalar_webapi_device_fallback_permission(
@@ -1382,15 +1419,55 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_user_activity_ensures_eqmac_without_restart() {
+    fn test_daemon_keep_awake_ensures_eqmac_without_restart() {
         let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
         hdmi.is_active = true;
         let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
         let ensure_calls = std::sync::Mutex::new(Vec::<String>::new());
         let recover_volume_control =
-            |_: &[OutputDevice], _: &str| panic!("user-activity ticks should not restart eqMac");
+            |_: &[OutputDevice], _: &str| panic!("keep-awake ticks should not restart eqMac");
         let ensure_volume_control = |_: &[OutputDevice], target_uid: &str| {
             ensure_calls.lock().unwrap().push(target_uid.to_string());
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacAlreadyRunning,
+            })
+        };
+
+        let (result, _list) = daemon_tick_with_hooks(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::KeepAwake,
+            &daemon_hooks_with_hdmi_displayport_volume_control(
+                &ensure_volume_control,
+                &recover_volume_control,
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert_eq!(ensure_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert!(hal.set_calls().is_empty());
+        assert!(hal.volume_calls().is_empty());
+        assert_eq!(
+            hal.default_output_uid().unwrap().as_deref(),
+            Some("EQMOutputCapture")
+        );
+    }
+
+    #[test]
+    fn test_daemon_user_activity_restarts_eqmac_and_reapplies_route() {
+        let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
+        hdmi.is_active = true;
+        let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
+        let recover_calls = std::sync::Mutex::new(Vec::<String>::new());
+        let recover_volume_control = |devices: &[OutputDevice], target_uid: &str| {
+            assert!(devices.iter().any(|device| device.uid == target_uid));
+            recover_calls.lock().unwrap().push(target_uid.to_string());
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted,
+            })
+        };
+        let ensure_volume_control = |_: &[OutputDevice], _: &str| {
             Ok(HdmiDisplayPortVolumeControlEnsureResult {
                 action: HdmiDisplayPortVolumeControlEnsureAction::EqMacAlreadyRunning,
             })
@@ -1407,14 +1484,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(result, DaemonTickResult::NoChange(_)));
-        assert_eq!(ensure_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
-        assert!(hal.set_calls().is_empty());
-        assert!(hal.volume_calls().is_empty());
-        assert_eq!(
-            hal.default_output_uid().unwrap().as_deref(),
-            Some("EQMOutputCapture")
-        );
+        assert!(matches!(result, DaemonTickResult::Switched(_)));
+        assert_eq!(recover_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
     }
 
     #[test]
@@ -1559,6 +1631,14 @@ mod tests {
         assert!(!state.observe_idle_duration(Duration::from_secs(90), threshold));
         assert!(state.observe_idle_duration(Duration::from_secs(1), threshold));
         assert!(!state.observe_idle_duration(Duration::from_secs(1), threshold));
+    }
+
+    #[test]
+    fn test_should_attempt_scalar_wake_while_active_or_on_transition() {
+        assert!(should_attempt_scalar_wake(false, true));
+        assert!(should_attempt_scalar_wake(false, false));
+        assert!(!should_attempt_scalar_wake(true, false));
+        assert!(should_attempt_scalar_wake(true, true));
     }
 
     #[test]
