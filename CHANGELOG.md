@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.7.0...rusty-jack-v0.8.0) (2026-06-09)
+
+
+### Features
+
+* log purge, signed driver prompts, and ScalarWebAPI refinements ([#117](https://github.com/the-hcma/rusty-jack/issues/117)) ([303f2a2](https://github.com/the-hcma/rusty-jack/commit/303f2a275a9800ae80010621d25d0a92819bc506))
+
+
+### Bug Fixes
+
+* include tap PR URL in publish-release wait message ([#113](https://github.com/the-hcma/rusty-jack/issues/113)) ([180c949](https://github.com/the-hcma/rusty-jack/commit/180c949a3cb7a35863339a8ad34d256b2fa884c7))
+
 ## [0.7.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.6.3...rusty-jack-v0.7.0) (2026-06-08)
 
 
