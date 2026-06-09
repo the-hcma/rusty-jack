@@ -19,8 +19,10 @@ This document mixes shipped architecture and roadmap notes. For the exact user-f
 | Config volume | Implemented on real switches with retry/readback |
 | Daemon | Implemented as a polling loop with config reload and idle-to-active activity sampling |
 | LaunchAgent controls | Implemented: `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, status reporting |
-| ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers |
-| Native HDMI/DP software volume without eqMac | Implemented in code: packaged AudioServerPlugIn, shared ring, daemon passthrough engine, and virtual-default routing; **release builds ship ad-hoc-signed drivers** that macOS usually rejects (AMFI `-67050`) until **Developer ID signing + notarization** — see [docs/DRIVER_SIGNING.md](./docs/DRIVER_SIGNING.md); **eqMac** remains the practical HDMI/DP volume-key path in releases today |
+| ScalarWebAPI wake | Implemented: SSDP/UPnP discovery, WebSocket/HTTP ScalarWebAPI calls, output-selected and idle-to-active triggers; optional `wake_on_lan` + `mac_address`; `scalar-webapi-device discover` |
+| Daemon activity monitor | Implemented: `activity_monitor: "idle"` (default) or `"event_tap"` (CoreGraphics tap; falls back to idle) |
+| Uninstall / purge | Implemented: `uninstall --purge` / `--purge-logs`; Homebrew `uninstall` calls `rusty-jack disable` |
+| Native HDMI/DP software volume without eqMac | Implemented in code: packaged AudioServerPlugIn, shared ring, daemon passthrough engine, and virtual-default routing; **install prompts auto-enable when bundled driver is Developer ID–signed**; ad-hoc release bundles still need **eqMac** today — see [docs/DRIVER_SIGNING.md](./docs/DRIVER_SIGNING.md) |
 
 ---
 
@@ -91,7 +93,7 @@ A Mac’s **headphone / line-out jack** may be cabled to a **ScalarWebAPI device
 1. User configures rusty-jack with:
    - **`preferred_device_uid`** (or equivalent) = the Mac **Built-in Output / line-out** CoreAudio device that feeds the ScalarWebAPI device.
    - **`scalar_webapi_device`** block = ScalarWebAPI endpoint + model hint for the ScalarWebAPI device on the LAN.
-2. Daemon samples macOS HID idle time and treats idle-to-active transitions as user activity. Native event taps remain a possible refinement.
+2. Daemon samples macOS HID idle time (or optional `activity_monitor: "event_tap"`) and treats idle-to-active transitions as user activity.
 3. When **both** are true:
    - active or preferred output is the configured line-out UID (or policy has just switched to it), **and**
    - a configured input-activity event occurred (keyboard and/or mouse, per `triggers`),
@@ -112,7 +114,7 @@ rusty-jack speaks ScalarWebAPI directly and does not depend on Python, pip, or a
 | **Wake** | `system.setPowerStatus` with `params: [{"status":"active"}]` |
 | **Status** | `system.getPowerStatus` is used for picker notes and wake messages |
 | WebSocket | Implemented for ScalarWebAPI calls, with HTTP POST fallback |
-| Power on | The device network standby/wake option must be enabled for network wake from standby; cold power-off may need **Wake-on-LAN** (future; MAC from `getSystemInformation`) |
+| Power on | **Network standby** (e.g. Sony BLUETOOTH/Network standby) + `setPowerStatus` is the primary path; optional **`wake_on_lan`** sends a magic packet using configured **`mac_address`** (populated at install/discover) before `setPowerStatus` — experimental on speakers like SRS-ZR5 |
 | Rust deps | `tungstenite` for WebSocket plus standard TCP/UDP networking and `serde_json` |
 | Isolation | Unit tests cover parsing, filtering, and formatting; LAN I/O is skipped unless a configured ScalarWebAPI device is actually targeted |
 
@@ -171,7 +173,7 @@ flowchart LR
 | `output_selected` | `apply`, `picker`, or daemon route switch to configured UID | Wake when output switches to line-out even without input yet |
 | `debounce` | Timer in daemon | Avoid spamming the device API (e.g. 30–60 s cooldown while already awake) |
 
-**Permissions:** Current idle-time polling does not require Accessibility permission. If a future native event tap is added, it should observe event types only for wake gating — not keystroke logging or screen recording.
+**Permissions:** `activity_monitor: "idle"` does not require Accessibility permission. `event_tap` may require Accessibility; it observes event types only for wake gating — not keystroke logging or screen recording.
 
 #### Configuration sketch (see `config.example.scalar-webapi-device.json`)
 
@@ -202,7 +204,7 @@ flowchart LR
 
 #### Status
 
-Implemented with daemon idle polling and output-selection hooks. Native event taps and a dedicated `scalar-webapi-device discover` helper remain optional refinements.
+Implemented with daemon idle polling (or optional `activity_monitor: "event_tap"`), output-selection hooks, `scalar-webapi-device discover`, and optional Wake-on-LAN when `mac_address` is configured.
 
 ### Non-goals (for v1)
 
@@ -514,6 +516,9 @@ This directly addresses eqMac-style missed events after wake/dock hot-plug.
 | `scalar_webapi_device.wake_debounce_ms` | Minimum interval between wake commands |
 | `scalar_webapi_device.request_timeout_ms` | HTTP timeout for ScalarWebAPI POST calls |
 | `scalar_webapi_device.require_quick_start` | Documents that the device network standby/wake option should be enabled |
+| `scalar_webapi_device.wake_on_lan` | When true, send Wake-on-LAN before `setPowerStatus` (needs `mac_address` when API is down) |
+| `scalar_webapi_device.mac_address` | Wired MAC for WoL (`aa:bb:cc:dd:ee:ff`); filled at install/discover or via `discover --update-config` |
+| `activity_monitor` | `idle` (default) or `event_tap` for ScalarWebAPI keyboard/mouse wake sampling |
 
 ### 4.3 Config discovery
 
@@ -547,8 +552,9 @@ Binary name: **`rusty-jack`** (crate `rusty-jack`, `RUSTY_JACK_CONFIG` env overr
 | `pause` | Stop and disable the LaunchAgent while keeping the plist |
 | `picker` | Interactive picker or scripted `--index N` route switch |
 | `resume` | Re-enable and bootstrap an installed LaunchAgent |
+| `scalar-webapi-device discover` | LAN scan for ScalarWebAPI speakers; `--update-config` writes `mac_address` |
 | `status` | Default output, virtual default, policy match, volume, HDMI/DP volume-control state, LaunchAgent |
-| `uninstall` | Remove LaunchAgent; optional driver removal, config purge, audio restore |
+| `uninstall` | Remove LaunchAgent; `--purge` / `--remove-config` / `--purge-logs`; driver removal; audio restore |
 | `upgrade` | Rewrite the plist for the current binary path and restart the LaunchAgent |
 
 **Global flags:** `--config PATH` (overrides `RUSTY_JACK_CONFIG` and default file). Subcommands with JSON support expose `--json`.
@@ -560,8 +566,9 @@ Binary name: **`rusty-jack`** (crate `rusty-jack`, `RUSTY_JACK_CONFIG` env overr
 | Helper | Purpose | Status |
 |--------|---------|--------|
 | LaunchAgent status | Report loaded state without manual `launchctl` commands | Shipped via `rusty-jack status` (`daemon` block) |
-| Full uninstall/purge | Optional log removal and Homebrew formula hook | Partial: `uninstall --remove-config`, audio restore, and driver removal; log purge and Brew `uninstall` hook remain future work |
-| ScalarWebAPI discover | Dedicated discover subcommand | Partial: `list --discover` and interactive `install` scan today |
+| Full uninstall/purge | Config + log removal | Shipped: `uninstall --purge`, `--purge-logs`, `--remove-config` (includes logs) |
+| Homebrew uninstall hook | Stop LaunchAgent on `brew uninstall` | Shipped: formula `uninstall` runs `rusty-jack disable` |
+| ScalarWebAPI discover | Dedicated discover subcommand | Shipped: `scalar-webapi-device discover` (`list --discover` also available) |
 
 ### Example session
 
@@ -713,7 +720,7 @@ def uninstall
 end
 ```
 
-Current `uninstall` / `disable` removes only the per-user plist and leaves config/logs behind. Future purge support can remove config/state/logs explicitly.
+`rusty-jack uninstall --purge` removes config and logs; `--purge-logs` removes rotated daemon logs only. `brew uninstall` runs `rusty-jack disable` automatically.
 
 Optional: print caveats on `brew install` reminding users to run `rusty-jack install` after install.
 
@@ -725,19 +732,19 @@ Not required for typical Homebrew installs. Notarize only if you also ship a sta
 
 ## 9. Clean uninstall (current + design)
 
-Uninstall must leave the Mac in a predictable state — no orphaned launchd job, no stale plists, no silent background process. Shipped behavior is `rusty-jack uninstall` / `disable`, which stops/disables the per-user job and removes the plist; `uninstall` can also remove the native driver, restore the saved default output, and optionally purge config. Log purge and Homebrew formula `uninstall` hooks are follow-up packaging work.
+Uninstall must leave the Mac in a predictable state — no orphaned launchd job, no stale plists, no silent background process. Shipped behavior is `rusty-jack uninstall` / `disable`, which stops/disables the per-user job and removes the plist; `uninstall` can also remove the native driver, restore the saved default output, purge config/logs (`--purge`, `--remove-config`, `--purge-logs`), and Homebrew `uninstall` calls `rusty-jack disable`.
 
 ### What gets removed
 
-| Component | `uninstall` / `disable` today | future full uninstall | future purge |
-|-----------|-----------------|-----------------------|--------------|
+| Component | `disable` | `uninstall` (default) | `uninstall --purge` / `--remove-config` |
+|-----------|-----------|------------------------|----------------------------------------|
 | `launchctl bootout` + stop daemon | yes | yes | yes |
 | `~/Library/LaunchAgents/com.*.rusty-jack.plist` | yes | yes | yes |
-| Native HAL driver (`RustyJack.driver`) | optional (`uninstall`, not `disable`) | yes | yes |
-| `~/.config/rusty-jack/` | optional (`--remove-config`) | optional | yes |
-| `~/.local/state/rusty-jack/` (saved default UID, install metadata) | cleared on restore | yes | yes |
-| `~/Library/Logs/rusty-jack*.log` | no | no | yes |
-| Restore previous default output | yes (best effort) | yes (if state exists) | optional (`--no-restore-audio`) |
+| Native HAL driver (`RustyJack.driver`) | no | optional (prompt) | optional (prompt) |
+| `~/.config/rusty-jack/` | no | optional (`--remove-config` / prompt) | yes |
+| `~/.local/state/rusty-jack/` (saved default UID, install metadata) | no | cleared on audio restore | cleared on audio restore |
+| `~/Library/Logs/rusty-jack*.log` (+ rotated) | no | yes with `--purge-logs` or `--remove-config` | yes |
+| Restore previous default output | no | yes (best effort) | yes (unless `--no-restore-audio`) |
 
 ### State file (for restore)
 
@@ -760,8 +767,8 @@ On **first successful switch** away from the pre-Rusty-Jack default, write once:
 uninstall(opts):
   1. agent_uninstall()           # bootout, delete plist, SIGTERM if PID known
   2. if opts.restore_audio: restore_from_state()
-  3. if opts.purge: remove config, state, logs
-     else if not opts.keep_config: remove state only (keep config by default)
+  3. if opts.purge or opts.remove_config: remove config; purge logs when opts.purge, opts.purge_logs, or opts.remove_config
+     else if opts.purge_logs only: remove logs
   4. print summary of removed paths
 ```
 
@@ -950,7 +957,7 @@ Keep FFI in `coreaudio/sys.rs`; document safety invariants for listener callback
 
 - [x] Plist template + `install` / `pause` / `resume` / `disable` / `uninstall` / `upgrade`
 - [x] LaunchAgent status helper (via `rusty-jack status`)
-- [ ] Full purge flow for config/log removal (config optional today; logs not purged)
+- [x] Full purge flow for config/log removal (`--purge`, `--purge-logs`, `--remove-config`)
 - [x] State file `pre_install_default.json` on first switch
 - [x] Homebrew formula lifecycle hooks (`def uninstall` in formula template and release workflows)
 - [x] README/usage/troubleshooting: install / uninstall / upgrade flow
@@ -971,6 +978,7 @@ Delivers the eqMac-class fix for keyboard volume on HDMI/DP:
 
 - [x] **AudioServerPlugIn** virtual output device skeleton with stereo stream and basic volume/mute controls
 - [x] Driver lifecycle via `install`, `upgrade`, `uninstall`, and `driver swap-in` / `swap-out` / `restore-eqmac` (dev/test)
+- [x] Auto-enable native driver install prompts when bundled driver is Developer ID–signed (`RUSTY_JACK_OFFER_NATIVE_DRIVER=1` for local ad-hoc testing)
 - [ ] **Developer ID signing + notarization** for release `RustyJack.driver` bundles — see [docs/DRIVER_SIGNING.md](./docs/DRIVER_SIGNING.md); releases ship ad-hoc-signed drivers today
 - [x] Daemon **passthrough loop**: capture on virtual `WriteMix` ring, apply **software volume**, render to configured physical UID via CoreAudio IO proc
 - [x] Set virtual device as **default output** + **default system output** when driver is active and passthrough is armed
@@ -992,14 +1000,15 @@ Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and th
 - [x] Hook into `apply`, `picker`, and daemon output-selected flow
 - [x] Idle-to-active daemon trigger with `wake_debounce_ms`
 - [x] **Tests:** parsing, endpoint construction, trigger matching, selection filtering, wake message formatting
-- [ ] Native event tap refinement for lower-latency keyboard/mouse event detection
-- [ ] Optional dedicated `scalar-webapi-device discover` subcommand (`list --discover` covers LAN scan today)
+- [x] Optional `activity_monitor: "event_tap"` (falls back to idle when tap unavailable; Accessibility permission may be required)
+- [x] `scalar-webapi-device discover` subcommand (`--update-config` writes `mac_address`)
+- [x] Optional Wake-on-LAN via `wake_on_lan` + persisted `mac_address` (experimental on SRS-class speakers; network standby + `setPowerStatus` remains primary)
 
 **Current definition of done:** Line-out configured as preferred; daemon observes idle-to-active transition while ScalarWebAPI device is in standby → Rust client calls `setPowerStatus` → device wakes; no Python installed; no wake when output is not the configured ScalarWebAPI output; network standby/wake documented.
 
-**Future:** Wake-on-LAN from `getSystemInformation` MAC; input select on ScalarWebAPI device if needed; native event tap if idle polling proves too coarse.
+**Future:** Per-subnet WoL unicast; input select on ScalarWebAPI device if needed; dedicated CFRunLoop thread for CoreAudio property listeners.
 
-**Remaining estimate:** Developer ID driver signing/notarization, hardware validation on signed builds, packaging polish (Homebrew uninstall hook, release driver prompts), and optional ScalarWebAPI / listener refinements.
+**Remaining estimate:** Developer ID driver signing/notarization, hardware validation on signed builds, and macOS 12/13+ QA matrix.
 
 **Definition of done (every phase):** feature code + unit tests for touched modules + green `cargo test`.
 
@@ -1009,7 +1018,7 @@ Wake a **ScalarWebAPI device** when Mac **line-out** is the target output and th
 
 | Feature | Complexity | Approach |
 |---------|------------|----------|
-| Native event tap activity monitor | **Medium** | Optional refinement over the current daemon idle polling trigger |
+| Native event tap activity monitor | **Medium** | Shipped as `activity_monitor: "event_tap"`; idle polling remains default |
 | EQ / “bass boost” | **Medium** | Extend passthrough pipeline (Phase 7) with DSP — eqMac uses `AVAudioEngine` for this |
 | Per-app routing | **High** | Prism-style virtual bus or Background Music fork |
 | Notarization / automated driver signing | **Medium** | Required for wide distribution of the virtual driver outside Homebrew |
@@ -1140,12 +1149,12 @@ Record device UIDs from `list --json` into `tests/fixtures/` when adding regress
 6. **`clippy -D warnings`** — keep codebase clean from day one.
 7. **macOS 12.0 minimum** — supports older Intel Macs (e.g. Monterey 12.7); no macOS 11 in v1.
 8. **Dual-target releases** — always ship `aarch64` + `x86_64` artifacts; optional universal via `lipo`.
-9. **Clean uninstall is first-class** — current `uninstall` / `disable` removes the per-user LaunchAgent plist; future purge/audio-restore helpers can build on this.
+9. **Clean uninstall is first-class** — `uninstall` / `disable` removes the per-user LaunchAgent plist; `--purge` / `--purge-logs` remove config and rotated logs with audio restore.
 10. **Unit tests per component** — no module merges without colocated tests; CoreAudio behind `AudioHal` mock.
 11. **ScalarWebAPI device wake is config-driven** — map line-out UID → ScalarWebAPI endpoint; wake on output selection or daemon idle-to-active activity via native Rust ScalarWebAPI calls (`system.setPowerStatus`).
 
 ---
 
-*Document version: 2.1 — synced with AGENTS.md config env, shipped CLI (`config`, `driver`, `list --discover`), crate layout, non-macOS stubs, and Phase 7 exit gates: Developer ID driver signing/notarization plus hardware validation; eqMac remains the practical HDMI/DP volume path in current releases.*
+*Document version: 2.2 — synced with PR #117: log purge, Homebrew uninstall hook, signed-driver install prompts, `scalar-webapi-device discover`, `wake_on_lan` + `mac_address`, and `activity_monitor: event_tap`. Phase 7 exit gates remain Developer ID signing/notarization plus hardware validation.*
 
 Copyright (c) 2026 Henrique Andrade / thehcma.

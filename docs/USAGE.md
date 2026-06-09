@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, an explicit eqMac/Rusty Jack driver swap test workflow, eqMac compatibility fallback when eqMac is already installed, daemon polling, LaunchAgent install/pause/resume/uninstall/upgrade controls, and ScalarWebAPI-compatible device wake support.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, an explicit eqMac/Rusty Jack driver swap test workflow, eqMac compatibility fallback when eqMac is already installed, daemon polling (idle or optional event-tap activity sampling), LaunchAgent install/pause/resume/uninstall/upgrade controls (including config and log purge), ScalarWebAPI-compatible device wake (`scalar-webapi-device discover`, optional Wake-on-LAN), and Homebrew uninstall hooks that call `rusty-jack disable`.
 
 ## Global options
 
@@ -73,7 +73,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup/resume and idle-to-active ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi_device.wake_debounce_ms`.
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup/resume and idle-to-active ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an extra activity-triggered tick; if the configured ScalarWebAPI output is already selected, it sends a wake command subject to `scalar_webapi_device.wake_debounce_ms`. Activity sampling uses `activity_monitor`: `idle` (default, macOS idle time) or `event_tap` (CoreGraphics keyboard/mouse tap; falls back to idle when unavailable — Accessibility permission may be required).
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -82,6 +82,7 @@ The daemon reloads config before each scheduled poll, resolves the preferred/fal
 | `switch_delay_ms` | `500` | Delay after a daemon switch before wake hooks |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that counts as away |
 | `activity_poll_interval_ms` | `1000` | How often the daemon samples macOS idle time |
+| `activity_monitor` | `idle` | `idle` or `event_tap` for keyboard/mouse wake sampling |
 
 ---
 
@@ -117,7 +118,7 @@ rusty-jack disable [--json]
 rusty-jack install [--json]
 rusty-jack pause [--json]
 rusty-jack resume [--json]
-rusty-jack uninstall [--json] [--only-driver] [--no-restore-audio]
+rusty-jack uninstall [--json] [--only-driver] [--no-restore-audio] [--purge] [--purge-logs] [--remove-config] [--keep-config]
 rusty-jack upgrade [--json] [--force]
 ```
 
@@ -174,7 +175,7 @@ At runtime, wake traffic still uses SSDP/UPnP to resolve the JSON-RPC base URL f
 
 > **Not yet usable from Homebrew/releases.** Packages include `RustyJack.driver`, but it is ad-hoc signed. macOS AMFI typically rejects it (`signature not valid: -67050`) until the bundle is signed with a **Developer ID Application** identity (and notarized for other Macs). For HDMI/DP volume keys today, use **eqMac** if already installed. Developers: [DRIVER_SIGNING.md](./DRIVER_SIGNING.md).
 
-When a **signed** native driver is available in a future release, it will be the preferred volume-key path for connected HDMI/DisplayPort outputs. **Current releases do not prompt to install the native driver** during `install`, `picker`, or `upgrade`; use **eqMac** for HDMI/DP volume keys today. Developers can still test with `rusty-jack driver swap-in` or set `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` to re-enable install prompts locally.
+When the bundled `RustyJack.driver` is signed with a **Developer ID Application** identity, `install`, `picker`, and `upgrade` automatically offer native driver install for connected HDMI/DisplayPort outputs. **Ad-hoc release bundles** still need **eqMac** for HDMI/DP volume keys today. Developers testing unsigned bundles can use `rusty-jack driver swap-in` or set `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` to force install prompts locally.
 
 When user install is enabled, Rusty Jack offers install only when a live HDMI/DP output is present; USB microphones, built-in outputs, Bluetooth, and virtual devices do not trigger the offer. Rusty Jack looks for `RustyJack.driver` in this order:
 
@@ -218,10 +219,12 @@ rusty-jack pause      # stop auto-routing; keep plist installed
 rusty-jack resume     # re-enable and start the plist
 rusty-jack uninstall  # stop, disable, remove plist, offer driver/config cleanup
 rusty-jack uninstall --only-driver  # remove only the native audio driver
-rusty-jack uninstall --remove-config  # also remove default config without prompting
+rusty-jack uninstall --remove-config  # remove config and purge logs without prompting
+rusty-jack uninstall --purge-logs  # remove rotated daemon logs only
+rusty-jack uninstall --purge  # config + logs + audio restore (full cleanup)
 ```
 
-`resume` applies the configured route and volume synchronously, then starts the daemon. If the daemon was paused because `picker` selected a non-preferred output, interactive `resume` first asks whether to return to the configured output; declining leaves the daemon paused. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json`. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--only-driver` removes only the native driver and leaves the LaunchAgent, binary, config, and logs alone. `--keep-config` keeps config without prompting. Neither command deletes log files.
+`resume` applies the configured route and volume synchronously, then starts the daemon. If the daemon was paused because `picker` selected a non-preferred output, interactive `resume` first asks whether to return to the configured output; declining leaves the daemon paused. `disable` remains available for daemon-only removal and always keeps `~/.config/rusty-jack/config.json` and log files. `uninstall` prompts before removing the native driver when it is installed, then prompts before removing the default config in interactive mode; `--only-driver` removes only the native driver and leaves the LaunchAgent, binary, config, and logs alone. `--keep-config` keeps config without prompting. `--purge-logs` removes `~/Library/Logs/rusty-jack.log` and rotated `*.log.*` files (also included with `--remove-config` or `--purge`). `--purge` is shorthand for `--remove-config --purge-logs` plus audio restore. `brew uninstall rusty-jack` runs `rusty-jack disable` automatically.
 
 ### Update
 
@@ -260,6 +263,31 @@ Table columns: **IDX**, **ACT** (`>` = active route), **ALIVE**, **TRANSPORT**, 
 Non-selectable devices (aggregates, some virtual apps) may appear dimmed when color is enabled.
 
 `--discover` prints a short footer with LAN discovery count and configured-host cache refresh status. In `--json` mode it adds `scalar_webapi_discovered`.
+
+---
+
+## `scalar-webapi-device`
+
+ScalarWebAPI speaker helpers (subcommands are alphabetical under `scalar-webapi-device`).
+
+### `discover`
+
+Scan the LAN for ScalarWebAPI-compatible speakers and optionally refresh the configured device's MAC address.
+
+```bash
+rusty-jack scalar-webapi-device discover
+rusty-jack scalar-webapi-device discover --json
+rusty-jack scalar-webapi-device discover --timeout-ms 5000
+rusty-jack scalar-webapi-device discover --update-config
+```
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Discovery results as JSON |
+| `--timeout-ms N` | SSDP scan timeout (default ~3s) |
+| `--update-config` | When the configured `host` is reachable, fetch `mac_address` from `getSystemInformation` and write it to the config file |
+
+Use this after a speaker firmware change, DHCP reassignment, or when enabling `wake_on_lan` and the HTTP API is unreachable from standby.
 
 ---
 
@@ -377,6 +405,7 @@ Array of UIDs tried in order when preferred is missing or not alive. Leave it em
 | `switch_delay_ms` | `500` | Delay after daemon-initiated route switches before wake hooks run. |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that must be reached before the next active sample counts as an idle-to-active transition. Must be greater than zero. |
 | `activity_poll_interval_ms` | `1000` | How often `daemon` samples macOS idle time between scheduled route checks. Must be greater than zero. |
+| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (keyboard/mouse tap; falls back to idle) |
 
 ### `volume`
 
@@ -397,7 +426,9 @@ Optional block for waking a ScalarWebAPI-compatible **network speaker** attached
 | `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or daemon idle-to-active activity. |
 | `wake_debounce_ms` | `30000` | Minimum time between activity-triggered wake attempts. |
 | `request_timeout_ms` | `3000` | Network timeout for device requests. |
-| `require_quick_start` | `true` | Documents the expectation that the device has its network standby/wake option enabled. |
+| `require_quick_start` | `true` | Documents the expectation that the device has its network standby/wake option enabled (e.g. Sony BLUETOOTH/Network standby). |
+| `wake_on_lan` | `false` | When true, send a Wake-on-LAN magic packet before `setPowerStatus` (experimental on some speakers; network standby + API wake remains primary). |
+| `mac_address` | none | Wired MAC (`aa:bb:cc:dd:ee:ff`) for WoL when the HTTP API is down; populated at install/discover or via `scalar-webapi-device discover --update-config`. |
 
 Other ScalarWebAPI-compatible speakers should work if they expose the same service and advertise an endpoint on your LAN. Example models exercised with Rusty Jack include `SRS-ZR5`, `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`.
 
