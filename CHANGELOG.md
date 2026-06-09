@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.8.0...rusty-jack-v0.9.0) (2026-06-09)
+
+
+### Features
+
+* keep ScalarWebAPI speakers and eqMac alive while Mac is active ([#120](https://github.com/the-hcma/rusty-jack/issues/120)) ([9535153](https://github.com/the-hcma/rusty-jack/commit/9535153220f73a1719a008c6a5d7da95c0486fcf))
+
 ## [0.8.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.7.0...rusty-jack-v0.8.0) (2026-06-09)
 
 
