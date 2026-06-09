@@ -1,6 +1,7 @@
 //! Rusty Jack — macOS HDMI output router.
 
 pub mod activity;
+pub mod activity_event_tap;
 pub mod apply;
 pub mod cli;
 pub mod commands;
@@ -32,6 +33,7 @@ pub mod transport;
 pub mod version;
 pub mod volume_memory;
 pub mod volume_result;
+pub mod wake_on_lan;
 
 pub use error::RustyJackError;
 
@@ -91,6 +93,15 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             let hal = coreaudio::platform_hal()?;
             commands::resume::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
+        cli::Commands::ScalarWebapiDevice(args) => match args.command {
+            cli::ScalarWebapiDeviceCommand::Discover(args) => {
+                commands::scalar_webapi_device::discover(
+                    args.json,
+                    args.timeout_ms,
+                    cli.config.as_deref(),
+                )?;
+            }
+        },
         cli::Commands::Status(args) => {
             let hal = coreaudio::platform_hal()?;
             commands::status::run(hal.as_ref(), args.json, cli.config.as_deref())?;
@@ -101,6 +112,9 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             args.keep_config,
             args.only_driver,
             args.no_restore_audio,
+            args.purge_logs,
+            args.purge,
+            cli.config.as_deref(),
         )?,
         cli::Commands::Upgrade(args) => commands::upgrade::run(args.json, args.force)?,
     }

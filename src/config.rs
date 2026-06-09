@@ -54,6 +54,9 @@ pub struct ScalarWebApiDeviceConfig {
     pub request_timeout_ms: u64,
     #[serde(default = "default_require_quick_start")]
     pub require_quick_start: bool,
+    /// When true, send a Wake-on-LAN packet before/alongside ScalarWebAPI `setPowerStatus`.
+    #[serde(default)]
+    pub wake_on_lan: bool,
 }
 
 fn default_scalar_webapi_device_model() -> String {
@@ -141,6 +144,9 @@ pub struct Config {
     pub activity_idle_threshold_ms: u64,
     #[serde(default = "default_activity_poll_interval_ms")]
     pub activity_poll_interval_ms: u64,
+    /// Activity source for ScalarWebAPI wake triggers: `idle` (default) or `event_tap`.
+    #[serde(default = "default_activity_monitor")]
+    pub activity_monitor: String,
     #[serde(default)]
     pub preferred_device: DeviceSelectorConfig,
     /// Legacy field; use `preferred_device.uid` instead.
@@ -179,6 +185,10 @@ fn default_activity_idle_threshold_ms() -> u64 {
     60_000
 }
 
+fn default_activity_monitor() -> String {
+    "idle".into()
+}
+
 fn default_activity_poll_interval_ms() -> u64 {
     1_000
 }
@@ -192,6 +202,7 @@ impl Default for Config {
             switch_delay_ms: default_switch_delay_ms(),
             activity_idle_threshold_ms: default_activity_idle_threshold_ms(),
             activity_poll_interval_ms: default_activity_poll_interval_ms(),
+            activity_monitor: default_activity_monitor(),
             preferred_device: DeviceSelectorConfig::default(),
             preferred_device_uid: None,
             fallback_uids: Vec::new(),
@@ -413,6 +424,11 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
             "activity_idle_threshold_ms must be greater than 0".into(),
         ));
     }
+    if !matches!(config.activity_monitor.as_str(), "idle" | "event_tap") {
+        return Err(RustyJackError::Config(
+            "activity_monitor must be \"idle\" or \"event_tap\"".into(),
+        ));
+    }
 
     Ok(())
 }
@@ -487,6 +503,7 @@ mod tests {
             wake_debounce_ms: 30_000,
             request_timeout_ms: 3_000,
             require_quick_start: true,
+            wake_on_lan: false,
         };
         let expected_url = format!("http://scalarwebapi-device.local:10000/{protocol_path}");
         assert_eq!(api.endpoint_url().as_deref(), Some(expected_url.as_str()));

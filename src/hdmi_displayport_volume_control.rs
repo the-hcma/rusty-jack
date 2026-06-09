@@ -18,13 +18,20 @@ pub const NATIVE_DRIVER_USER_INSTALL_UNAVAILABLE_REASON: &str =
 
 /// Whether install/upgrade prompts may offer the Rusty Jack HAL driver in normal CLI flows.
 ///
-/// `rusty-jack driver swap-in` remains available for development. Set
-/// `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` to re-enable install offers locally.
+/// Enabled when the bundled driver is signed with a Developer ID Application certificate,
+/// or when `RUSTY_JACK_OFFER_NATIVE_DRIVER=1` is set for local development.
+/// `rusty-jack driver swap-in` remains available regardless.
 #[must_use]
 pub fn native_driver_user_install_offered() -> bool {
-    std::env::var("RUSTY_JACK_OFFER_NATIVE_DRIVER")
+    if std::env::var("RUSTY_JACK_OFFER_NATIVE_DRIVER")
         .ok()
         .is_some_and(|value| !matches!(value.as_str(), "" | "0" | "false" | "no"))
+    {
+        return true;
+    }
+
+    crate::native_driver::bundled_native_driver_path()
+        .is_some_and(|path| crate::hal_plugin::driver_bundle_has_developer_id_signature(&path))
 }
 
 /// What HDMI/DisplayPort volume-control support did for a selected route.

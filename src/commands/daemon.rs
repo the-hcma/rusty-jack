@@ -1,6 +1,6 @@
 //! `rusty-jack daemon` — background supervisor loop.
 
-use crate::activity::PlatformActivityMonitor;
+use crate::activity_event_tap::daemon_activity_monitor;
 use crate::config::{load_config, resolve_config_path};
 use crate::coreaudio::AudioHal;
 use crate::device_select::resolve_device_selector;
@@ -68,6 +68,6 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
         config.activity_poll_interval_ms
     );
 
-    let activity = PlatformActivityMonitor;
-    crate::daemon::run_forever(hal, &path, &activity).map_err(anyhow::Error::new)
+    let activity = daemon_activity_monitor(&config);
+    crate::daemon::run_forever(hal, &path, activity.as_ref()).map_err(anyhow::Error::new)
 }

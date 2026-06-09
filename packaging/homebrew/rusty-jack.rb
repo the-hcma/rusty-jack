@@ -39,11 +39,10 @@ class RustyJack < Formula
       Check routing and daemon state (including log paths):
         rusty-jack status
 
-      Before uninstalling the formula, stop and remove the LaunchAgent:
-        rusty-jack uninstall --keep-config
+      `brew uninstall` runs `rusty-jack disable` automatically.
 
-      To remove the default config too:
-        rusty-jack uninstall --remove-config
+      Full per-user cleanup (config + logs):
+        rusty-jack uninstall --purge
     EOS
   end
 

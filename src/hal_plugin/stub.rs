@@ -1,7 +1,18 @@
 //! Non-macOS stub for HAL plugin scanning.
 
+use crate::hal_plugin::DriverBundleSignature;
 use crate::system_default::HalDriverInfo;
 use std::path::Path;
+
+#[must_use]
+pub fn driver_bundle_signature(_path: &Path) -> DriverBundleSignature {
+    DriverBundleSignature::Unsigned
+}
+
+#[must_use]
+pub fn driver_bundle_has_developer_id_signature(_path: &Path) -> bool {
+    false
+}
 
 #[must_use]
 pub fn driver_bundle_info(_path: &Path) -> Option<HalDriverInfo> {

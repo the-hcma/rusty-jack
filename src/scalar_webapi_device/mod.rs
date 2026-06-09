@@ -466,10 +466,87 @@ fn try_wake_scalar_webapi_device(
         return Ok(None);
     }
 
+    maybe_send_wake_on_lan(api, &endpoint)?;
     let mut result = send_wake_command_to(api, &endpoint)?;
     result.previous_status = previous_status;
     result.trigger = trigger.into();
     Ok(Some(result))
+}
+
+fn maybe_send_wake_on_lan(
+    api: &ScalarWebApiDeviceConfig,
+    endpoint: &ScalarWebApiDeviceEndpoint,
+) -> Result<(), RustyJackError> {
+    if !api.wake_on_lan {
+        return Ok(());
+    }
+    let Some(mac) = fetch_system_mac_address(api, endpoint)? else {
+        tracing::debug!(
+            target: "daemon",
+            "[scalar] Wake-on-LAN enabled but getSystemInformation did not return a MAC"
+        );
+        return Ok(());
+    };
+    match crate::wake_on_lan::send_wake_on_lan(&mac) {
+        Ok(()) => tracing::info!(
+            target: "daemon",
+            "[scalar] sent Wake-on-LAN packet for {mac}"
+        ),
+        Err(err) => tracing::debug!(
+            target: "daemon",
+            "[scalar] Wake-on-LAN failed for {mac}: {err}"
+        ),
+    }
+    Ok(())
+}
+
+fn fetch_system_mac_address(
+    api: &ScalarWebApiDeviceConfig,
+    endpoint: &ScalarWebApiDeviceEndpoint,
+) -> Result<Option<String>, RustyJackError> {
+    let payload = serde_json::json!({
+        "method": "getSystemInformation",
+        "params": [{}],
+        "id": 1,
+        "version": "1.1"
+    })
+    .to_string();
+    let response = websocket_json(
+        &endpoint.host,
+        endpoint.port,
+        &endpoint.service_path(SYSTEM_SERVICE),
+        &payload,
+        api.request_timeout_ms,
+    )
+    .or_else(|_| {
+        post_json(
+            &endpoint.host,
+            endpoint.port,
+            &endpoint.service_path(SYSTEM_SERVICE),
+            &payload,
+            api.request_timeout_ms,
+        )
+    })?;
+    Ok(parse_mac_address_from_system_information(&response))
+}
+
+fn parse_mac_address_from_system_information(response: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(response).ok()?;
+    let result = value.get("result")?;
+    let object = if let Some(items) = result.as_array() {
+        items.first()?
+    } else {
+        result
+    };
+    for key in ["macAddress", "wiredMac", "wirelessMac", "mac"] {
+        if let Some(mac) = object.get(key).and_then(|entry| entry.as_str()) {
+            let mac = mac.trim();
+            if !mac.is_empty() {
+                return Some(mac.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Log activity-triggered ScalarWebAPI wake failures as warnings so daemon routing still succeeds.
@@ -1264,6 +1341,7 @@ mod tests {
             switch_delay_ms: 500,
             activity_idle_threshold_ms: 60_000,
             activity_poll_interval_ms: 1_000,
+            activity_monitor: "idle".into(),
             preferred_device: DeviceSelectorConfig {
                 name: None,
                 uid: Some(uid.into()),
@@ -1286,6 +1364,7 @@ mod tests {
                 wake_debounce_ms: 30_000,
                 request_timeout_ms: 3_000,
                 require_quick_start: true,
+                wake_on_lan: false,
             }),
             ..Default::default()
         }
@@ -1498,6 +1577,15 @@ mod tests {
     fn test_is_transient_network_error() {
         let err = std::io::Error::from_raw_os_error(65);
         assert!(is_transient_network_error(&err));
+    }
+
+    #[test]
+    fn test_parse_mac_address_from_system_information() {
+        let response = r#"{"result":[{"macAddress":"aa:bb:cc:dd:ee:ff"}]}"#;
+        assert_eq!(
+            parse_mac_address_from_system_information(response).as_deref(),
+            Some("aa:bb:cc:dd:ee:ff")
+        );
     }
 
     #[test]
