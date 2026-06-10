@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.9.1...rusty-jack-v0.9.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* stop restarting eqMac on idle-to-active daemon ticks ([#124](https://github.com/the-hcma/rusty-jack/issues/124)) ([6b7d7e8](https://github.com/the-hcma/rusty-jack/commit/6b7d7e8786d71e9c185835a32f8935491f946297))
+
 ## [0.9.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.9.0...rusty-jack-v0.9.1) (2026-06-10)
 
 
