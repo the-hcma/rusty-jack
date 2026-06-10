@@ -53,7 +53,6 @@ pub enum DaemonTickResult {
 #[derive(Debug, Default)]
 pub struct DaemonState {
     was_idle: Option<bool>,
-    last_scalar_webapi_device_activity_wake: Option<Instant>,
     network_access_observed: bool,
     network_access: Option<NetworkAccessSnapshot>,
 }
@@ -75,23 +74,6 @@ impl DaemonState {
         let became_active = matches!(self.was_idle, Some(true)) && !is_idle;
         self.was_idle = Some(is_idle);
         became_active
-    }
-
-    #[must_use]
-    pub fn allow_scalar_webapi_device_wake(&mut self, now: Instant, cooldown: Duration) -> bool {
-        if self
-            .last_scalar_webapi_device_activity_wake
-            .is_some_and(|last| now.duration_since(last) < cooldown)
-        {
-            return false;
-        }
-        self.last_scalar_webapi_device_activity_wake = Some(now);
-        true
-    }
-
-    /// Allow an immediate ScalarWebAPI activity wake after network recovery.
-    pub fn reset_scalar_webapi_device_wake_cooldown(&mut self) {
-        self.last_scalar_webapi_device_activity_wake = None;
     }
 
     pub fn observe_network_access(
@@ -653,7 +635,7 @@ pub fn run_forever(
                             }
                             let network_change = observe_current_network_access(&mut state);
                             if network_change == NetworkAccessChange::Changed {
-                                state.reset_scalar_webapi_device_wake_cooldown();
+                                crate::scalar_webapi_device::reset_wake_debounce();
                             }
                             run_tick_logged(
                                 hal,
@@ -698,20 +680,13 @@ pub fn run_forever(
                             }
                             let network_change = observe_current_network_access(&mut state);
                             if network_change == NetworkAccessChange::Changed {
-                                state.reset_scalar_webapi_device_wake_cooldown();
+                                crate::scalar_webapi_device::reset_wake_debounce();
                             }
                             network_change
                         } else {
                             NetworkAccessChange::Unchanged
                         };
-                        let cooldown = scalar_webapi_device_wake_cooldown(&config);
-                        let keep_awake_due = !became_active
-                            && state.allow_scalar_webapi_device_wake(Instant::now(), cooldown);
-                        if became_active || keep_awake_due {
-                            if became_active {
-                                let _ =
-                                    state.allow_scalar_webapi_device_wake(Instant::now(), cooldown);
-                            }
+                        if crate::scalar_webapi_device::wake_attempt_allowed(&config) {
                             let tick_reason = if became_active {
                                 DaemonTickReason::UserActivity
                             } else {
@@ -744,7 +719,7 @@ pub fn run_forever(
         }
         let network_change = observe_current_network_access(&mut state);
         if network_change == NetworkAccessChange::Changed {
-            state.reset_scalar_webapi_device_wake_cooldown();
+            crate::scalar_webapi_device::reset_wake_debounce();
         }
         let reason = if startup_grace_started.elapsed()
             < scalar_webapi_device_startup_fallback_grace(&config)
@@ -1026,11 +1001,9 @@ mod tests {
                 uid: Some(uid.into()),
             },
             triggers: vec!["output_selected".into(), "keyboard".into(), "mouse".into()],
-            wake_debounce_ms: 30_000,
+            wake_debounce_ms: 5_000,
             request_timeout_ms: 3_000,
             require_quick_start: true,
-            wake_on_lan: false,
-            mac_address: None,
         });
         config
     }
@@ -1639,22 +1612,6 @@ mod tests {
         assert!(should_attempt_scalar_wake(false, false));
         assert!(!should_attempt_scalar_wake(true, false));
         assert!(should_attempt_scalar_wake(true, true));
-    }
-
-    #[test]
-    fn test_activity_wake_cooldown() {
-        let mut state = DaemonState::new();
-        let now = Instant::now();
-
-        assert!(state.allow_scalar_webapi_device_wake(now, Duration::from_secs(30)));
-        assert!(!state.allow_scalar_webapi_device_wake(
-            now + Duration::from_secs(1),
-            Duration::from_secs(30)
-        ));
-        assert!(state.allow_scalar_webapi_device_wake(
-            now + Duration::from_secs(31),
-            Duration::from_secs(30)
-        ));
     }
 
     #[test]

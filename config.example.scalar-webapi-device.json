@@ -18,9 +18,7 @@
     "request_timeout_ms": 3000,
     "require_quick_start": true,
     "triggers": ["keyboard", "mouse", "output_selected"],
-    "wake_debounce_ms": 30000,
-    "wake_on_lan": false,
-    "mac_address": "aa:bb:cc:dd:ee:ff"
+    "wake_debounce_ms": 5000
   },
   "switch_delay_ms": 500,
   "version": 1
