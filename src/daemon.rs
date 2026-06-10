@@ -433,10 +433,7 @@ struct RecoverHdmiVolumeContext<'a> {
 fn recover_hdmi_displayport_volume_control_for_daemon_target(
     ctx: RecoverHdmiVolumeContext<'_>,
 ) -> Result<Option<ApplyResult>, RustyJackError> {
-    let should_recover = matches!(
-        ctx.reason,
-        DaemonTickReason::Startup | DaemonTickReason::UserActivity
-    );
+    let should_recover = matches!(ctx.reason, DaemonTickReason::Startup);
     if !should_recover {
         ensure_hdmi_displayport_volume_control_for_daemon_target(
             &ctx.list.devices,
@@ -1428,19 +1425,15 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_user_activity_restarts_eqmac_and_reapplies_route() {
+    fn test_daemon_user_activity_ensures_eqmac_without_restart() {
         let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
         hdmi.is_active = true;
         let hal = MockHal::new(vec![hdmi]).with_default("EQMOutputCapture");
-        let recover_calls = std::sync::Mutex::new(Vec::<String>::new());
-        let recover_volume_control = |devices: &[OutputDevice], target_uid: &str| {
-            assert!(devices.iter().any(|device| device.uid == target_uid));
-            recover_calls.lock().unwrap().push(target_uid.to_string());
-            Ok(HdmiDisplayPortVolumeControlEnsureResult {
-                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted,
-            })
-        };
-        let ensure_volume_control = |_: &[OutputDevice], _: &str| {
+        let ensure_calls = std::sync::Mutex::new(Vec::<String>::new());
+        let recover_volume_control =
+            |_: &[OutputDevice], _: &str| panic!("user-activity ticks should not restart eqMac");
+        let ensure_volume_control = |_: &[OutputDevice], target_uid: &str| {
+            ensure_calls.lock().unwrap().push(target_uid.to_string());
             Ok(HdmiDisplayPortVolumeControlEnsureResult {
                 action: HdmiDisplayPortVolumeControlEnsureAction::EqMacAlreadyRunning,
             })
@@ -1457,9 +1450,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(result, DaemonTickResult::Switched(_)));
-        assert_eq!(recover_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
-        assert_eq!(hal.default_output_uid().unwrap().as_deref(), Some("hdmi-1"));
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert_eq!(ensure_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert!(hal.set_calls().is_empty());
+        assert!(hal.volume_calls().is_empty());
+        assert_eq!(
+            hal.default_output_uid().unwrap().as_deref(),
+            Some("EQMOutputCapture")
+        );
     }
 
     #[test]
