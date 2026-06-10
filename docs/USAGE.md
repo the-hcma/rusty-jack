@@ -1,6 +1,6 @@
 # Rusty Jack — usage reference
 
-Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, an explicit eqMac/Rusty Jack driver swap test workflow, eqMac compatibility fallback when eqMac is already installed, daemon polling (idle or optional event-tap activity sampling), LaunchAgent install/pause/resume/uninstall/upgrade controls (including config and log purge), ScalarWebAPI-compatible device wake (`scalar-webapi-device discover`, optional Wake-on-LAN), and Homebrew uninstall hooks that call `rusty-jack disable`.
+Command-line reference for the current release. Rusty Jack currently ships routing, picker, status, HDMI/DisplayPort volume-control detection, native driver lifecycle hooks, an explicit eqMac/Rusty Jack driver swap test workflow, eqMac compatibility fallback when eqMac is already installed, daemon polling (idle or optional event-tap activity sampling), LaunchAgent install/pause/resume/uninstall/upgrade controls (including config and log purge), ScalarWebAPI-compatible device wake (`scalar-webapi-device discover`), and Homebrew uninstall hooks that call `rusty-jack disable`.
 
 ## Global options
 
@@ -73,7 +73,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup/resume and idle-to-active ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent; while the Mac stays active, keep-awake ticks ensure eqMac is still running without restarting it every poll. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. While the Mac is active (idle below `activity_idle_threshold_ms`), the daemon periodically re-checks ScalarWebAPI power status on the configured output and sends a wake command when the device is not active, subject to `scalar_webapi_device.wake_debounce_ms`. When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an immediate activity-triggered wake attempt with the same debounce. Activity sampling uses `activity_monitor`: `idle` (default, macOS idle time) or `event_tap` (CoreGraphics keyboard/mouse tap; falls back to idle when unavailable — Accessibility permission may be required).
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup/resume and idle-to-active ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent; while the Mac stays active, keep-awake ticks ensure eqMac is still running without restarting it every poll. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. While the Mac is active (idle below `activity_idle_threshold_ms`), the daemon periodically re-checks ScalarWebAPI power status on the configured output and sends a wake command when the device is not active. After a successful `setPowerStatus`, it waits `scalar_webapi_device.wake_debounce_ms` before sending another wake command (failed sends are not debounced). When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an immediate activity-triggered wake attempt subject to the same post-success debounce. Activity sampling uses `activity_monitor`: `idle` (default, macOS idle time) or `event_tap` (CoreGraphics keyboard/mouse tap; falls back to idle when unavailable — Accessibility permission may be required).
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -272,22 +272,20 @@ ScalarWebAPI speaker helpers (subcommands are alphabetical under `scalar-webapi-
 
 ### `discover`
 
-Scan the LAN for ScalarWebAPI-compatible speakers and optionally refresh the configured device's MAC address.
+Scan the LAN for ScalarWebAPI-compatible speakers.
 
 ```bash
 rusty-jack scalar-webapi-device discover
 rusty-jack scalar-webapi-device discover --json
 rusty-jack scalar-webapi-device discover --timeout-ms 5000
-rusty-jack scalar-webapi-device discover --update-config
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--json` | Discovery results as JSON |
 | `--timeout-ms N` | SSDP scan timeout (default ~3s) |
-| `--update-config` | When the configured `host` is reachable, fetch `mac_address` from `getSystemInformation` and write it to the config file |
 
-Use this after a speaker firmware change, DHCP reassignment, or when enabling `wake_on_lan` and the HTTP API is unreachable from standby.
+Use this after a speaker firmware change or DHCP reassignment to confirm the device is visible on the LAN.
 
 ---
 
@@ -424,11 +422,9 @@ Optional block for waking a ScalarWebAPI-compatible **network speaker** attached
 | `path` | protocol default | ScalarWebAPI base path. Usually omit this unless discovery is unavailable and your device needs an override. |
 | `mac_output` | none | Device selector for the Mac output connected to the device. Required when enabled. |
 | `triggers` | `["keyboard", "mouse", "output_selected"]` | Wake on explicit output selection and/or while the Mac is active / on idle-to-active transitions. |
-| `wake_debounce_ms` | `30000` | Minimum time between activity-triggered wake attempts. |
+| `wake_debounce_ms` | `5000` | Minimum time after a successful `setPowerStatus` before sending another wake command. Failed sends are retried on the next eligible poll. |
 | `request_timeout_ms` | `3000` | Network timeout for device requests. |
 | `require_quick_start` | `true` | Documents the expectation that the device has its network standby/wake option enabled (e.g. Sony BLUETOOTH/Network standby). |
-| `wake_on_lan` | `false` | When true, send a Wake-on-LAN magic packet before `setPowerStatus` (experimental on some speakers; network standby + API wake remains primary). |
-| `mac_address` | none | Wired MAC (`aa:bb:cc:dd:ee:ff`) for WoL when the HTTP API is down; populated at install/discover or via `scalar-webapi-device discover --update-config`. |
 
 Other ScalarWebAPI-compatible speakers should work if they expose the same service and advertise an endpoint on your LAN. Example models exercised with Rusty Jack include `SRS-ZR5`, `SRS-ZR7`, `HT-NT5`, `HT-ST5000`, and `STR-DN1080`.
 

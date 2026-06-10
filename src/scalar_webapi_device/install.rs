@@ -35,7 +35,6 @@ pub struct ScalarWebApiInstallSelection {
     pub mac_output_uid: String,
     pub mac_output_name: String,
     pub triggers: Vec<String>,
-    pub mac_address: Option<String>,
 }
 
 /// Ask whether to configure ScalarWebAPI speaker wake during install.
@@ -50,32 +49,12 @@ pub fn prompt_add_scalar_webapi_device(
     let mac_output = prompt_mac_output_for_scalar_webapi(devices, default_mac_output)?;
     let triggers = prompt_wake_triggers()?;
 
-    let mut api = ScalarWebApiDeviceConfig {
-        enabled: true,
-        model: model.clone(),
-        host: Some(host.clone()),
-        port: 10_000,
-        path: concat!("so", "ny").to_string(),
-        mac_output: crate::config::DeviceSelectorConfig {
-            name: Some(mac_output.name.clone()),
-            uid: Some(mac_output.uid.clone()),
-        },
-        triggers: triggers.clone(),
-        wake_debounce_ms: 30_000,
-        request_timeout_ms: 3_000,
-        require_quick_start: true,
-        wake_on_lan: false,
-        mac_address: None,
-    };
-    let _ = crate::scalar_webapi_device::enrich_scalar_webapi_mac_address(&mut api);
-
     Ok(Some(ScalarWebApiInstallSelection {
         host,
         model,
         mac_output_uid: mac_output.uid.clone(),
         mac_output_name: mac_output.name.clone(),
         triggers,
-        mac_address: api.mac_address,
     }))
 }
 
@@ -451,11 +430,9 @@ pub fn scalar_webapi_install_to_config(
             uid: Some(selection.mac_output_uid.clone()),
         },
         triggers: selection.triggers.clone(),
-        wake_debounce_ms: 30_000,
+        wake_debounce_ms: 5_000,
         request_timeout_ms: 3_000,
         require_quick_start: true,
-        wake_on_lan: false,
-        mac_address: selection.mac_address.clone(),
     }
 }
 
@@ -476,7 +453,6 @@ pub fn append_scalar_webapi_to_config_json(
         "wake_debounce_ms": api.wake_debounce_ms,
         "request_timeout_ms": api.request_timeout_ms,
         "require_quick_start": api.require_quick_start,
-        "mac_address": api.mac_address,
     });
 }
 

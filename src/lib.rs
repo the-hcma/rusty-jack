@@ -33,7 +33,6 @@ pub mod transport;
 pub mod version;
 pub mod volume_memory;
 pub mod volume_result;
-pub mod wake_on_lan;
 
 pub use error::RustyJackError;
 
@@ -98,7 +97,6 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
                 commands::scalar_webapi_device::discover(
                     args.json,
                     args.timeout_ms,
-                    args.update_config,
                     cli.config.as_deref(),
                 )?;
             }

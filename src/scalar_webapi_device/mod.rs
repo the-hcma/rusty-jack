@@ -27,6 +27,44 @@ use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+static LAST_SUCCESSFUL_WAKE_SENT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Return true when enough time has passed since the last successful `setPowerStatus`.
+#[must_use]
+pub fn wake_attempt_allowed(config: &Config) -> bool {
+    let Some(api) = config.scalar_webapi_device.as_ref() else {
+        return true;
+    };
+    wake_attempt_allowed_for_api(api)
+}
+
+fn wake_attempt_allowed_for_api(api: &ScalarWebApiDeviceConfig) -> bool {
+    let cooldown = Duration::from_millis(api.wake_debounce_ms);
+    LAST_SUCCESSFUL_WAKE_SENT
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+        .is_none_or(|last| last.elapsed() >= cooldown)
+}
+
+fn record_successful_wake_sent() {
+    if let Ok(mut guard) = LAST_SUCCESSFUL_WAKE_SENT.lock() {
+        *guard = Some(Instant::now());
+    }
+}
+
+/// Clear the post-wake debounce (for example after network recovery).
+pub fn reset_wake_debounce() {
+    if let Ok(mut guard) = LAST_SUCCESSFUL_WAKE_SENT.lock() {
+        *guard = None;
+    }
+}
+
+#[cfg(test)]
+fn clear_wake_debounce_for_tests() {
+    reset_wake_debounce();
+}
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::Message;
 
@@ -466,163 +504,20 @@ fn try_wake_scalar_webapi_device(
         return Ok(None);
     }
 
-    maybe_send_wake_on_lan(api, &endpoint)?;
+    if !wake_attempt_allowed_for_api(api) {
+        tracing::debug!(
+            target: "daemon",
+            "[scalar] skipping wake on {trigger}; setPowerStatus sent within last {} ms",
+            api.wake_debounce_ms
+        );
+        return Ok(None);
+    }
+
     let mut result = send_wake_command_to(api, &endpoint)?;
+    record_successful_wake_sent();
     result.previous_status = previous_status;
     result.trigger = trigger.into();
     Ok(Some(result))
-}
-
-/// Return the configured MAC or fetch one from `getSystemInformation` when reachable.
-fn resolve_wake_mac_address(
-    api: &ScalarWebApiDeviceConfig,
-    endpoint: Option<&ScalarWebApiDeviceEndpoint>,
-) -> Result<Option<String>, RustyJackError> {
-    if let Some(mac) = api.mac_address.as_deref() {
-        if let Ok(normalized) = crate::wake_on_lan::normalize_mac_address(mac) {
-            return Ok(Some(normalized));
-        }
-    }
-
-    let Some(endpoint) = endpoint else {
-        return Ok(None);
-    };
-    fetch_system_mac_address(api, endpoint)
-}
-
-/// Query `getSystemInformation` using SSDP-resolved or configured endpoint details.
-pub fn fetch_system_mac_address_for_api(
-    api: &ScalarWebApiDeviceConfig,
-) -> Result<Option<String>, RustyJackError> {
-    let endpoint = match resolve_scalar_webapi_device_endpoint(api)? {
-        Some(endpoint) => endpoint,
-        None => endpoint_from_config(api)?,
-    };
-    fetch_system_mac_address(api, &endpoint)
-}
-
-/// Fill `mac_address` from the device when missing and the API is reachable.
-///
-/// Returns `true` when a new MAC was stored on `api`.
-pub fn enrich_scalar_webapi_mac_address(
-    api: &mut ScalarWebApiDeviceConfig,
-) -> Result<bool, RustyJackError> {
-    if api
-        .mac_address
-        .as_deref()
-        .is_some_and(|mac| !mac.trim().is_empty())
-    {
-        return Ok(false);
-    }
-    let Some(mac) = fetch_system_mac_address_for_api(api)? else {
-        return Ok(false);
-    };
-    api.mac_address = Some(mac);
-    Ok(true)
-}
-
-fn maybe_send_wake_on_lan(
-    api: &ScalarWebApiDeviceConfig,
-    endpoint: &ScalarWebApiDeviceEndpoint,
-) -> Result<(), RustyJackError> {
-    if !api.wake_on_lan {
-        return Ok(());
-    }
-    let Some(mac) = resolve_wake_mac_address(api, Some(endpoint))? else {
-        tracing::debug!(
-            target: "daemon",
-            "[scalar] Wake-on-LAN enabled but no mac_address is configured and getSystemInformation did not return a MAC"
-        );
-        return Ok(());
-    };
-    match crate::wake_on_lan::send_wake_on_lan(&mac) {
-        Ok(()) => tracing::info!(
-            target: "daemon",
-            "[scalar] sent Wake-on-LAN packet for {mac}"
-        ),
-        Err(err) => tracing::debug!(
-            target: "daemon",
-            "[scalar] Wake-on-LAN failed for {mac}: {err}"
-        ),
-    }
-    Ok(())
-}
-
-fn fetch_system_mac_address(
-    api: &ScalarWebApiDeviceConfig,
-    endpoint: &ScalarWebApiDeviceEndpoint,
-) -> Result<Option<String>, RustyJackError> {
-    let payloads = [
-        serde_json::json!({
-            "method": "getSystemInformation",
-            "params": [],
-            "id": 1,
-            "version": "1.4"
-        }),
-        serde_json::json!({
-            "method": "getSystemInformation",
-            "params": [{}],
-            "id": 1,
-            "version": "1.1"
-        }),
-    ];
-
-    for payload in payloads {
-        let payload = payload.to_string();
-        let response = websocket_json(
-            &endpoint.host,
-            endpoint.port,
-            &endpoint.service_path(SYSTEM_SERVICE),
-            &payload,
-            api.request_timeout_ms,
-        )
-        .or_else(|_| {
-            post_json(
-                &endpoint.host,
-                endpoint.port,
-                &endpoint.service_path(SYSTEM_SERVICE),
-                &payload,
-                api.request_timeout_ms,
-            )
-        });
-        let Ok(response) = response else {
-            continue;
-        };
-        if let Some(mac) = parse_mac_address_from_system_information(&response) {
-            return Ok(Some(mac));
-        }
-    }
-
-    Ok(None)
-}
-
-fn parse_mac_address_from_system_information(response: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(response).ok()?;
-    let result = value.get("result")?;
-    let object = if let Some(items) = result.as_array() {
-        items.first()?
-    } else {
-        result
-    };
-    for key in [
-        "macAddr",
-        "macAddress",
-        "wiredMac",
-        "wirelessMacAddr",
-        "wirelessMac",
-        "mac",
-    ] {
-        if let Some(mac) = object.get(key).and_then(|entry| entry.as_str()) {
-            let mac = mac.trim();
-            if mac.is_empty() {
-                continue;
-            }
-            if let Ok(normalized) = crate::wake_on_lan::normalize_mac_address(mac) {
-                return Some(normalized);
-            }
-        }
-    }
-    None
 }
 
 /// Log activity-triggered ScalarWebAPI wake failures as warnings so daemon routing still succeeds.
@@ -1437,11 +1332,9 @@ mod tests {
                     uid: Some(uid.into()),
                 },
                 triggers: vec![OUTPUT_SELECTED_TRIGGER.into()],
-                wake_debounce_ms: 30_000,
+                wake_debounce_ms: 5_000,
                 request_timeout_ms: 3_000,
                 require_quick_start: true,
-                wake_on_lan: false,
-                mac_address: None,
             }),
             ..Default::default()
         }
@@ -1657,25 +1550,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_mac_address_from_system_information() {
-        let response = r#"{"result":[{"macAddress":"aa:bb:cc:dd:ee:ff"}]}"#;
-        assert_eq!(
-            parse_mac_address_from_system_information(response).as_deref(),
-            Some("aa:bb:cc:dd:ee:ff")
-        );
-    }
-
-    #[test]
-    fn test_parse_mac_address_from_sony_mac_addr_field() {
-        let response = r#"{"result":[{"macAddr":"10-4f-a8-f3-01-17"}]}"#;
-        assert_eq!(
-            parse_mac_address_from_system_information(response).as_deref(),
-            Some("10:4f:a8:f3:01:17")
-        );
-    }
-
-    #[test]
-    fn test_resolve_wake_mac_address_prefers_config() {
+    fn test_wake_debounce_blocks_until_cooldown_elapses() {
+        clear_wake_debounce_for_tests();
         let api = ScalarWebApiDeviceConfig {
             enabled: true,
             model: "test".into(),
@@ -1684,16 +1560,36 @@ mod tests {
             path: "/sony".into(),
             mac_output: Default::default(),
             triggers: vec![],
-            wake_debounce_ms: 30_000,
+            wake_debounce_ms: 50,
             request_timeout_ms: 3_000,
             require_quick_start: true,
-            wake_on_lan: true,
-            mac_address: Some("aa:bb:cc:dd:ee:ff".into()),
         };
-        assert_eq!(
-            resolve_wake_mac_address(&api, None).unwrap().as_deref(),
-            Some("aa:bb:cc:dd:ee:ff")
-        );
+        assert!(wake_attempt_allowed_for_api(&api));
+        record_successful_wake_sent();
+        assert!(!wake_attempt_allowed_for_api(&api));
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(wake_attempt_allowed_for_api(&api));
+    }
+
+    #[test]
+    fn test_reset_wake_debounce_allows_immediate_retry() {
+        clear_wake_debounce_for_tests();
+        let api = ScalarWebApiDeviceConfig {
+            enabled: true,
+            model: "test".into(),
+            host: Some("192.168.1.1".into()),
+            port: 10_000,
+            path: "/sony".into(),
+            mac_output: Default::default(),
+            triggers: vec![],
+            wake_debounce_ms: 5_000,
+            request_timeout_ms: 3_000,
+            require_quick_start: true,
+        };
+        record_successful_wake_sent();
+        assert!(!wake_attempt_allowed_for_api(&api));
+        reset_wake_debounce();
+        assert!(wake_attempt_allowed_for_api(&api));
     }
 
     #[test]

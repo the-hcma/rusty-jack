@@ -48,19 +48,13 @@ pub struct ScalarWebApiDeviceConfig {
     pub mac_output: DeviceSelectorConfig,
     #[serde(default = "default_scalar_webapi_device_triggers")]
     pub triggers: Vec<String>,
+    /// Minimum time after a successful `setPowerStatus` before sending another wake command.
     #[serde(default = "default_wake_debounce_ms")]
     pub wake_debounce_ms: u64,
     #[serde(default = "default_request_timeout_ms")]
     pub request_timeout_ms: u64,
     #[serde(default = "default_require_quick_start")]
     pub require_quick_start: bool,
-    /// When true, send a Wake-on-LAN packet before/alongside ScalarWebAPI `setPowerStatus`.
-    #[serde(default)]
-    pub wake_on_lan: bool,
-    /// Wired MAC for Wake-on-LAN (`aa:bb:cc:dd:ee:ff`). Populate via install/discover or
-    /// `getSystemInformation` while the speaker is reachable; required when the API is down.
-    #[serde(default)]
-    pub mac_address: Option<String>,
 }
 
 fn default_scalar_webapi_device_model() -> String {
@@ -80,7 +74,7 @@ fn default_scalar_webapi_device_triggers() -> Vec<String> {
 }
 
 fn default_wake_debounce_ms() -> u64 {
-    30_000
+    5_000
 }
 
 fn default_request_timeout_ms() -> u64 {
@@ -311,10 +305,6 @@ fn rewrite_config_if_needed(path: &Path, raw: &str, value: &Value) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn atomic_write_config(path: &Path, contents: &str) -> Result<(), RustyJackError> {
-    atomic_write(path, contents)
-}
-
 fn atomic_write(path: &Path, contents: &str) -> Result<(), RustyJackError> {
     let parent = path
         .parent()
@@ -508,11 +498,9 @@ mod tests {
             path: protocol_path.clone(),
             mac_output: DeviceSelectorConfig::default(),
             triggers: default_scalar_webapi_device_triggers(),
-            wake_debounce_ms: 30_000,
+            wake_debounce_ms: 5_000,
             request_timeout_ms: 3_000,
             require_quick_start: true,
-            wake_on_lan: false,
-            mac_address: None,
         };
         let expected_url = format!("http://scalarwebapi-device.local:10000/{protocol_path}");
         assert_eq!(api.endpoint_url().as_deref(), Some(expected_url.as_str()));
