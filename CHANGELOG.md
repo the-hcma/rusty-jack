@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.9.0...rusty-jack-v0.9.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* remove WoL and debounce successful Scalar wake sends ([#122](https://github.com/the-hcma/rusty-jack/issues/122)) ([7f4923c](https://github.com/the-hcma/rusty-jack/commit/7f4923cb518dc2cbc3757e310a0140f02a2bd882))
+
 ## [0.9.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.8.0...rusty-jack-v0.9.0) (2026-06-09)
 
 
