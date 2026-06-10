@@ -195,45 +195,7 @@ pub fn orphaned_eqmac_hal_driver_path() -> Option<String> {
 /// True when the eqMac application process is running.
 #[must_use]
 pub fn eqmac_is_running() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use sysinfo::System;
-
-        let mut system = System::new();
-        !eqmac_process_pids(&mut system).is_empty()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn eqmac_process_pids(system: &mut sysinfo::System) -> Vec<sysinfo::Pid> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
-
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        false,
-        ProcessRefreshKind::nothing()
-            .without_tasks()
-            .with_exe(UpdateKind::Always),
-    );
-    system
-        .processes()
-        .iter()
-        .filter(|(_, process)| {
-            process
-                .name()
-                .to_str()
-                .is_some_and(eqmac_process_name_matches)
-        })
-        .map(|(pid, _)| *pid)
-        .collect()
-}
-
-fn eqmac_process_name_matches(name: &str) -> bool {
-    name.eq_ignore_ascii_case(EQMAC_APP_NAME)
+    crate::process_detect::any_process_with_exact_name(EQMAC_APP_NAME)
 }
 
 /// Start eqMac if installed, not running, and the target route needs software volume.
@@ -375,17 +337,7 @@ fn quit_eqmac_app() {
 }
 
 fn kill_eqmac_app() {
-    #[cfg(target_os = "macos")]
-    {
-        use sysinfo::System;
-
-        let mut system = System::new();
-        for pid in eqmac_process_pids(&mut system) {
-            if let Some(process) = system.process(pid) {
-                let _ = process.kill();
-            }
-        }
-    }
+    crate::process_detect::kill_processes_with_exact_name(EQMAC_APP_NAME);
 }
 
 fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
@@ -494,13 +446,5 @@ mod tests {
     fn test_other_eqmac_launch_failure_stays_fatal() {
         let err = classify_eqmac_launch(false, "permission denied").unwrap_err();
         assert!(matches!(err, RustyJackError::AppLaunch(_)));
-    }
-
-    #[test]
-    fn test_eqmac_process_name_matches_exact_name() {
-        assert!(eqmac_process_name_matches("eqMac"));
-        assert!(eqmac_process_name_matches("EQMAC"));
-        assert!(!eqmac_process_name_matches("eqMac Helper"));
-        assert!(!eqmac_process_name_matches("rusty-jack"));
     }
 }

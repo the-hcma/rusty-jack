@@ -499,16 +499,7 @@ fn should_load_after_write(mode: LoadMode, had_plist: bool, was_loaded: bool) ->
 }
 
 fn binary_path_from_pid(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let command = String::from_utf8_lossy(&output.stdout);
-    let binary = command.split_whitespace().next()?;
-    (!binary.is_empty()).then(|| binary.to_string())
+    crate::process_detect::process_exe_path(pid)
 }
 
 fn binary_version_from_path(path: &str) -> Option<BinaryVersion> {
@@ -588,27 +579,8 @@ fn plist_has_daemon_version_stamp(plist: &str) -> bool {
     daemon_version_from_plist(plist).is_some()
 }
 
-#[cfg(target_os = "macos")]
 fn process_environ(pid: u32) -> Option<Vec<std::ffi::OsString>> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-
-    let mut system = System::new();
-    let pid = Pid::from_u32(pid);
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        false,
-        ProcessRefreshKind::nothing()
-            .without_tasks()
-            .with_environ(UpdateKind::Always),
-    );
-    system
-        .process(pid)
-        .map(|process| process.environ().to_vec())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn process_environ(_pid: u32) -> Option<Vec<std::ffi::OsString>> {
-    None
+    crate::process_detect::process_environ(pid)
 }
 
 fn env_var_from_environ(entries: &[std::ffi::OsString], key: &str) -> Option<String> {

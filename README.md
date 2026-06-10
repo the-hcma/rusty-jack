@@ -79,7 +79,7 @@ Rusty Jack detects when a connected HDMI/DisplayPort output needs volume control
 | eqMac installed, not running | `open -a eqMac`, brief startup wait |
 | No signed Rusty Jack driver and no eqMac | Routing works; HDMI/DP volume keys need eqMac or a signed native driver (not yet in releases) |
 
-Detection: Rusty Jack scans connected CoreAudio outputs for HDMI/DisplayPort transports before offering the driver path. It scans installed HAL `.driver` bundles for `com.the-hcma.rusty-jack.driver`, then checks for eqMac via `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.driver` plus `pgrep -x eqMac`. If eqMac is not installed, Rusty Jack recommends its own driver rather than suggesting an eqMac install.
+Detection: Rusty Jack scans connected CoreAudio outputs for HDMI/DisplayPort transports before offering the driver path. It scans installed HAL `.driver` bundles for `com.the-hcma.rusty-jack.driver`, then checks for eqMac via `/Applications/eqMac.app` or `/Library/Audio/Plug-Ins/HAL/eqMac.driver` and whether the eqMac app process is running. If eqMac is not installed, Rusty Jack recommends its own driver rather than suggesting an eqMac install.
 
 ### Config `volume`
 
