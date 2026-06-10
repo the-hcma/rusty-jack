@@ -83,11 +83,8 @@ pub fn virtual_output_listed(devices: &[OutputDevice]) -> bool {
 }
 
 fn missing_virtual_output_hint() -> String {
-    let helper_running = Command::new("pgrep")
-        .args(["-lf", "Core Audio Driver (RustyJack.driver)"])
-        .output()
-        .ok()
-        .is_some_and(|output| output.status.success() && !output.stdout.is_empty());
+    const HELPER_NEEDLE: &str = "Core Audio Driver (RustyJack.driver)";
+    let helper_running = crate::process_detect::any_process_cmdline_contains(HELPER_NEEDLE);
     let mut parts: Vec<String> = vec![
         "Check Console for `amfid: ... RustyJack ... signature not valid: -67050` (adhoc-signed drivers are often rejected)."
             .into(),
