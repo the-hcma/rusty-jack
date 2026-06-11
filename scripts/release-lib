@@ -327,6 +327,30 @@ release_lib_configure_git_identity() {
   git config user.email "${email}"
 }
 
+# Keep README.md static release badge in sync with Formula/rusty-jack.rb (homebrew-tap CI).
+release_lib_update_tap_readme_badge() {
+  local tap_dir="$1"
+  local version="$2"
+  local readme="${tap_dir}/README.md"
+  local needle="rusty--jack-v${version}-blue"
+
+  if [[ ! -f "${readme}" ]]; then
+    echo "error: ${readme} not found in tap repo" >&2
+    return 1
+  fi
+  if grep -qF "${needle}" "${readme}"; then
+    return 0
+  fi
+  if ! grep -qE 'rusty--jack-v[0-9]+\.[0-9]+\.[0-9]+-blue' "${readme}"; then
+    echo "error: ${readme} has no rusty-jack release badge to update" >&2
+    return 1
+  fi
+
+  sed -E "s/rusty--jack-v[0-9]+\.[0-9]+\.[0-9]+-blue/rusty--jack-v${version}-blue/g" "${readme}" \
+    >"${readme}.tmp"
+  mv "${readme}.tmp" "${readme}"
+}
+
 release_lib_find_open_tap_pr_number() {
   local tap_repo="$1"
   local branch="$2"
@@ -371,6 +395,36 @@ release_lib_open_tap_pr() {
   gh pr merge "${pr_number}" --repo "${tap_repo}" --squash --auto --delete-branch
   pr_url="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json url --jq .url)"
   echo "${pr_url}"
+}
+
+# Return 0 when failed/cancelled checks should block waiting for merge.
+release_lib_pr_checks_blocking_merge() {
+  local repo="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local output rc
+
+  set +e
+  output="$(gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
+    --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -ne 0 ]]; then
+    if echo "${output}" | grep -qi "no checks reported"; then
+      return 1
+    fi
+    return 1
+  fi
+
+  if [[ -z "${output}" || "${output}" == "0" ]]; then
+    return 1
+  fi
+
+  echo "error: PR checks failed; auto-merge will not run: ${pr_url}" >&2
+  gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
+    --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | "  \(.name): \(.link)"' >&2
+  return 0
 }
 
 release_lib_wait_for_tap_pr_checks() {
@@ -437,6 +491,58 @@ release_lib_confirm() {
   local reply
   read -r -p "${prompt} [y/N] " reply
   [[ "${reply}" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+# Wait for required PR checks, then squash-merge (used by do-release and tap publish).
+release_lib_merge_pr() {
+  local repo="$1"
+  local pr_url="$2"
+  local label="${3:-PR}"
+  local pr_number state
+
+  if [[ -z "${pr_url}" ]]; then
+    return 0
+  fi
+
+  if ! pr_number="$(gh pr view "${pr_url}" --repo "${repo}" --json number --jq .number 2>/dev/null)"; then
+    echo "error: could not read ${label} number: ${pr_url}" >&2
+    return 1
+  fi
+
+  if ! state="$(gh pr view "${pr_number}" --repo "${repo}" --json state --jq .state 2>/dev/null)"; then
+    echo "error: could not read ${label} state: ${pr_url}" >&2
+    return 1
+  fi
+  if [[ "${state}" == "MERGED" ]]; then
+    echo "${label} already merged."
+    return 0
+  fi
+  if [[ "${state}" != "OPEN" ]]; then
+    echo "error: ${label} is ${state}, expected OPEN (${pr_url})" >&2
+    return 1
+  fi
+
+  if ! release_lib_wait_for_tap_pr_checks "${repo}" "${pr_number}" "${pr_url}"; then
+    return 1
+  fi
+
+  echo "Merging ${label}..."
+  if ! gh pr merge "${pr_number}" --repo "${repo}" --squash --delete-branch; then
+    echo "error: could not merge ${label}: ${pr_url}" >&2
+    return 1
+  fi
+
+  if ! state="$(gh pr view "${pr_number}" --repo "${repo}" --json state --jq .state 2>/dev/null)"; then
+    echo "error: could not verify ${label} merge: ${pr_url}" >&2
+    return 1
+  fi
+  if [[ "${state}" != "MERGED" ]]; then
+    echo "error: ${label} is ${state} after merge attempt (${pr_url})" >&2
+    return 1
+  fi
+
+  echo "${label} merged."
+  return 0
 }
 
 # Block until a GitHub PR merges (polls state; does not enable auto-merge).
@@ -597,11 +703,16 @@ release_lib_wait_for_tap_pr_merge() {
     return 0
   fi
 
-  release_lib_wait_for_tap_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}"
+  if ! release_lib_wait_for_tap_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}"; then
+    return 1
+  fi
 
   echo "Waiting for tap PR to merge: ${pr_url}"
   start="${SECONDS}"
   while (( SECONDS - start < timeout_secs )); do
+    if release_lib_pr_checks_blocking_merge "${tap_repo}" "${pr_number}" "${pr_url}"; then
+      return 1
+    fi
     if ! state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state 2>/dev/null)"; then
       echo "Could not read tap PR state; retrying..." >&2
       sleep "${interval}"
