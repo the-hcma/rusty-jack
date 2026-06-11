@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# End-to-end release: open the Release Please PR, review the diff, wait for merge,
+# publish to GitHub + Homebrew tap, and verify the result.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+# shellcheck source=release-lib
+source "${ROOT}/scripts/release-lib"
+
+REPO="${RUSTY_JACK_REPO:-the-hcma/rusty-jack}"
+TAP_REPO="${RUSTY_JACK_TAP_REPO:-the-hcma/homebrew-tap}"
+DRY_RUN=0
+
+usage() {
+  cat <<'EOF'
+Usage: do-release [--dry-run]
+
+Run the full local release flow interactively:
+
+  1. Sync main and open/update the Release Please PR (make update-release-pr)
+  2. Show the PR diff and ask for approval
+  3. Wait for you to merge the release PR on GitHub
+  4. Publish the GitHub release and Homebrew tap update (make publish-release)
+  5. Verify the release tag and tap formula
+
+Options:
+  --dry-run    Print the steps without changing GitHub or the tap.
+  -h, --help   Show this help.
+
+Environment:
+  YES=1 or RUSTY_JACK_RELEASE_YES=1   Skip interactive approval prompts
+  RUSTY_JACK_RELEASE_PR_MERGE_TIMEOUT_SECS  Max seconds to wait for release PR merge (default: 86400)
+
+Requires: gh, git, curl, make, npx (Node.js). Run from a clean main worktree.
+
+See docs/RELEASING.md for manual steps and troubleshooting.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+release_lib_require_cmd gh
+release_lib_require_cmd git
+release_lib_load_token
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "[dry-run] would sync main and run: make update-release-pr"
+  echo "[dry-run] would show release PR diff and prompt for approval"
+  echo "[dry-run] would wait for release PR merge on GitHub"
+  echo "[dry-run] would run: make publish-release"
+  echo "[dry-run] would verify GitHub release tag and Homebrew tap formula"
+  exit 0
+fi
+
+release_lib_ensure_synced_main 0
+
+echo "=== Step 1/5: open or update the Release Please PR ==="
+"${ROOT}/scripts/update-release-pr"
+
+RELEASE_PR_URL="$(release_lib_resolve_release_pr_url "${REPO}" "${RELEASE_LIB_RELEASE_PLEASE_OUTPUT:-}")"
+if [[ -z "${RELEASE_PR_URL}" ]]; then
+  version="$(release_lib_cargo_version)"
+  if release_lib_resolve_release_tag "${REPO}" "${version}" >/dev/null 2>&1 \
+    && release_lib_verify_published_release "${REPO}" "${TAP_REPO}" "${version}"; then
+    echo "No open release PR; version ${version} is already published."
+    exit 0
+  fi
+  echo "error: no open release-please PR found after update-release-pr" >&2
+  echo "Recent commits may not use releasable prefixes (feat:, fix:, etc.)." >&2
+  echo "See docs/RELEASING.md#troubleshooting" >&2
+  exit 1
+fi
+
+echo ""
+echo "=== Step 2/5: review release PR ==="
+gh pr view "${RELEASE_PR_URL}" --repo "${REPO}"
+echo ""
+release_lib_show_pr_diff "${REPO}" "${RELEASE_PR_URL}"
+
+echo ""
+if ! release_lib_confirm "Approve this release PR and continue?"; then
+  echo "Aborted."
+  exit 1
+fi
+
+echo ""
+echo "=== Step 3/5: wait for release PR merge ==="
+echo "Merge the release PR on GitHub when ready (do not add merge-it)."
+release_lib_wait_for_pr_merge "${REPO}" "${RELEASE_PR_URL}" "Release PR"
+
+echo ""
+echo "=== Step 4/5: publish GitHub release and Homebrew tap ==="
+git fetch origin main
+if git merge-base --is-ancestor HEAD origin/main && [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+  echo "Fast-forwarding main after release PR merge..."
+  git merge --ff-only origin/main
+fi
+
+"${ROOT}/scripts/publish-release"
+
+echo ""
+echo "=== Step 5/5: verify release ==="
+version="$(release_lib_cargo_version)"
+if [[ -z "${version}" ]]; then
+  echo "error: could not read package version from Cargo.toml" >&2
+  exit 1
+fi
+
+release_lib_verify_published_release "${REPO}" "${TAP_REPO}" "${version}"
+tag="$(release_lib_resolve_release_tag "${REPO}" "${version}")"
+echo ""
+echo "Release complete."
+echo "  Version:  ${version}"
+echo "  Tag:      ${tag}"
+echo "  Release:  https://github.com/${REPO}/releases/tag/${tag}"
+echo "  Install:  brew update && brew upgrade the-hcma/tap/rusty-jack"

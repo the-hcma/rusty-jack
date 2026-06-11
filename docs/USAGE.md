@@ -472,6 +472,10 @@ Cross-compilation targets used in CI: `aarch64-apple-darwin`, `x86_64-apple-darw
 
 `MACOSX_DEPLOYMENT_TARGET=12.0` is set in the Makefile.
 
+### Maintainer release
+
+Publishing to GitHub and the Homebrew tap is documented in [RELEASING.md](./RELEASING.md). Routine releases use `make do-release` from clean `main`; lower-level targets are `make update-release-pr` and `make publish-release`.
+
 ---
 
 Copyright (c) 2026 Henrique Andrade / thehcma.

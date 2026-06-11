@@ -81,7 +81,7 @@ rusty-jack upgrade
 
 Hardware-mutating tests are ignored by default. Do not enable them unless you intend to change the Mac's current audio route.
 
-Shell helpers live in `scripts/` **without** a `.sh` extension (for example `scripts/publish-release`, not `scripts/publish-release.sh`). Match existing script style: `#!/usr/bin/env bash`, `set -euo pipefail`, and executable bit set.
+Shell helpers live in `scripts/` **without** a `.sh` extension (for example `scripts/do-release` or `scripts/publish-release`, not `scripts/publish-release.sh`). Match existing script style: `#!/usr/bin/env bash`, `set -euo pipefail`, and executable bit set. Maintainer release flow: [docs/RELEASING.md](./docs/RELEASING.md) (`make do-release`).
 
 ---
 

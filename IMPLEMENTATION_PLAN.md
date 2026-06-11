@@ -74,7 +74,7 @@ Volume keys then adjust eqMac’s **software gain** on the virtual device path, 
 | launchd integration | Shipped LaunchAgent plist template plus `install`, `pause`, `resume`, `disable`, `uninstall`, `upgrade`, and status reporting |
 | Periodic inspection + auto-switch | Shipped polling daemon with config reload; property listeners remain future refinement |
 | JSON configuration | `~/.config/rusty-jack/config.json` (path overridable) |
-| Homebrew distribution | Tap `the-hcma/tap`; `make update-release-pr` + `make publish-release` locally with `gh auth` |
+| Homebrew distribution | Tap `the-hcma/tap`; `make do-release` locally with `gh auth` (or `update-release-pr` + `publish-release` manually) |
 | **Clean uninstall** | `rusty-jack uninstall` / `disable` stops the per-user LaunchAgent, removes the plist, can remove the native driver, and restores the saved default output; optional config purge via `--remove-config` |
 | **Intel + Apple Silicon** | Cross-compile both targets; release **universal** binary + per-arch Homebrew bottles |
 | **macOS 12+ (Monterey)** | Minimum deployment target; CoreAudio HAL for routing; virtual driver when volume phase ships |
@@ -342,7 +342,7 @@ rusty-jack/
 ├── .github/workflows/ci.yml
 ├── .github/workflows/release.yml
 ├── .cargo/config.toml             # MACOSX_DEPLOYMENT_TARGET=12.0
-├── scripts/                       # build-universal, sign-driver-bundle, publish-release
+├── scripts/                       # do-release, update-release-pr, publish-release, build-universal, sign-driver-bundle
 ├── packaging/homebrew/rusty-jack.rb
 ├── launchd/com.example.rusty-jack.plist.template
 ├── driver/                        # RustyJack AudioServerPlugIn (Swift/C)
