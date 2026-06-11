@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.9.2...rusty-jack-v0.10.0) (2026-06-11)
+
+
+### Features
+
+* add do-release script for interactive full release flow ([#131](https://github.com/the-hcma/rusty-jack/issues/131)) ([77c2222](https://github.com/the-hcma/rusty-jack/commit/77c22226f00c25c163b9f250d47ac4edabcb85f4))
+* **ci:** add secret-scan job ([#129](https://github.com/the-hcma/rusty-jack/issues/129)) ([8b7cf9f](https://github.com/the-hcma/rusty-jack/commit/8b7cf9f1d626369b75a798ff7d4fd20fad387813))
+* clarify idle-to-active activity log lines ([#130](https://github.com/the-hcma/rusty-jack/issues/130)) ([24c9fee](https://github.com/the-hcma/rusty-jack/commit/24c9fee4589543a3fbcf9c0cf516ea459767c0cf))
+
+
+### Bug Fixes
+
+* **ci:** sync canonical secret-scan script ([#127](https://github.com/the-hcma/rusty-jack/issues/127)) ([911d72b](https://github.com/the-hcma/rusty-jack/commit/911d72b31cd6896a61dd77be9377dc4f801fe4c2))
+
 ## [0.9.2](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.9.1...rusty-jack-v0.9.2) (2026-06-10)
 
 
