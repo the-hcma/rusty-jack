@@ -95,7 +95,11 @@ pub fn record_activity_poll(
         snapshot.last_became_active_at_unix_seconds = Some(sampled_at_unix_seconds);
         snapshot.last_became_active_console_user = console_user.clone();
         snapshot.last_became_active_daemon_user = Some(daemon_user.clone());
-        tracing::info!(target: "daemon", "{}", format_activity_log_line(&snapshot));
+        tracing::info!(
+            target: "daemon",
+            "{}",
+            format_activity_log_line(&snapshot, ActivityLogEvent::IdleToActiveTransition)
+        );
     } else {
         if let Ok(Some(previous)) = crate::state::load_activity_snapshot() {
             snapshot.last_became_active_at_unix_seconds =
@@ -103,28 +107,47 @@ pub fn record_activity_poll(
             snapshot.last_became_active_console_user = previous.last_became_active_console_user;
             snapshot.last_became_active_daemon_user = previous.last_became_active_daemon_user;
         }
-        tracing::debug!(target: "daemon", "{}", format_activity_log_line(&snapshot));
+        tracing::debug!(
+            target: "daemon",
+            "{}",
+            format_activity_log_line(&snapshot, ActivityLogEvent::Poll)
+        );
     }
 
     save_activity_snapshot(&snapshot)?;
     Ok(snapshot)
 }
 
+/// Why an activity log line is emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityLogEvent {
+    /// Mac was idle at or above the threshold and user input resumed.
+    IdleToActiveTransition,
+    /// Periodic idle-time sample between scheduled route checks.
+    Poll,
+}
+
 #[must_use]
-pub fn format_activity_log_line(snapshot: &ActivitySnapshot) -> String {
+pub fn format_activity_log_line(snapshot: &ActivitySnapshot, event: ActivityLogEvent) -> String {
     let console = snapshot.console_user.as_deref().unwrap_or("(none)");
     let triggers = if snapshot.triggers.is_empty() {
         "(none)".into()
     } else {
         snapshot.triggers.join(",")
     };
-    let became_active = snapshot
-        .last_became_active_at_unix_seconds
-        .is_some_and(|at| at == snapshot.sampled_at_unix_seconds);
-    format!(
-        "[activity] idle={:.1}s threshold={:.1}s console_user={console} daemon_user={} became_active={became_active} triggers={triggers}",
-        snapshot.idle_seconds, snapshot.threshold_seconds, snapshot.daemon_user
-    )
+    match event {
+        ActivityLogEvent::IdleToActiveTransition => format!(
+            "[activity] idle→active transition: user input resumed after ≥{:.1}s without keyboard/mouse; idle_now={:.1}s console_user={console} daemon_user={} scalar_wake_triggers={triggers}",
+            snapshot.threshold_seconds, snapshot.idle_seconds, snapshot.daemon_user
+        ),
+        ActivityLogEvent::Poll => {
+            let state = if snapshot.is_idle { "idle" } else { "active" };
+            format!(
+                "[activity] poll: state={state} idle={:.1}s threshold={:.1}s console_user={console} daemon_user={}",
+                snapshot.idle_seconds, snapshot.threshold_seconds, snapshot.daemon_user
+            )
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -247,10 +270,10 @@ mod tests {
     }
 
     #[test]
-    fn test_format_activity_log_line() {
+    fn test_format_activity_log_line_idle_to_active_transition() {
         let snapshot = ActivitySnapshot {
             sampled_at_unix_seconds: 1,
-            idle_seconds: 12.4,
+            idle_seconds: 0.1,
             threshold_seconds: 60.0,
             is_idle: false,
             console_user: Some("hcma".into()),
@@ -261,8 +284,28 @@ mod tests {
             last_became_active_daemon_user: Some("hcma".into()),
         };
         assert_eq!(
-            format_activity_log_line(&snapshot),
-            "[activity] idle=12.4s threshold=60.0s console_user=hcma daemon_user=hcma became_active=true triggers=keyboard,mouse"
+            format_activity_log_line(&snapshot, ActivityLogEvent::IdleToActiveTransition),
+            "[activity] idle→active transition: user input resumed after ≥60.0s without keyboard/mouse; idle_now=0.1s console_user=hcma daemon_user=hcma scalar_wake_triggers=keyboard,mouse"
+        );
+    }
+
+    #[test]
+    fn test_format_activity_log_line_poll() {
+        let snapshot = ActivitySnapshot {
+            sampled_at_unix_seconds: 1,
+            idle_seconds: 12.4,
+            threshold_seconds: 60.0,
+            is_idle: false,
+            console_user: Some("hcma".into()),
+            daemon_user: "hcma".into(),
+            triggers: vec!["keyboard".into(), "mouse".into()],
+            last_became_active_at_unix_seconds: None,
+            last_became_active_console_user: None,
+            last_became_active_daemon_user: None,
+        };
+        assert_eq!(
+            format_activity_log_line(&snapshot, ActivityLogEvent::Poll),
+            "[activity] poll: state=active idle=12.4s threshold=60.0s console_user=hcma daemon_user=hcma"
         );
     }
 }
