@@ -3,7 +3,7 @@
 | Document | Description |
 |----------|-------------|
 | [USAGE.md](./USAGE.md) | Current commands, flags, config fields, install-time ScalarWebAPI discovery, daemon lifecycle, build |
-| [RELEASING.md](./RELEASING.md) | Local Release Please flow (`make update-release-pr`, `make publish-release`) and Homebrew tap |
+| [RELEASING.md](./RELEASING.md) | Maintainer releases: `make do-release` (recommended), `update-release-pr`, `publish-release`, Homebrew tap |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Volume, eqMac, picker, launchd, daemon, ScalarWebAPI install discovery and wake issues |
 | [DRIVER_SIGNING.md](./DRIVER_SIGNING.md) | Why release drivers are not end-user ready yet; Developer ID signing and notarization |
 | [../README.md](../README.md) | Project overview, quick start, current capabilities |

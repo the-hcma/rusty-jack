@@ -332,7 +332,7 @@ Confirm `--help` commit matches `git rev-parse --short HEAD`.
 
 ### Makefile targets
 
-`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `upgrade`, `uninstall`, `update-release-pr`, `publish-release`, `clean` — see [Makefile](Makefile) and [docs/RELEASING.md](./docs/RELEASING.md).
+`build`, `release`, `test`, `fmt`, `clippy`, `universal`, `install`, `upgrade`, `uninstall`, `do-release`, `update-release-pr`, `publish-release`, `clean` — see [Makefile](Makefile) and [docs/RELEASING.md](./docs/RELEASING.md).
 
 ---
 
@@ -371,7 +371,8 @@ brew install rusty-jack
 ```
 
 The formula source lives at [`packaging/homebrew/rusty-jack.rb`](./packaging/homebrew/rusty-jack.rb).
-Release steps are in [docs/RELEASING.md](./docs/RELEASING.md).
+
+**Maintainers:** ship a new version from clean `main` with `make do-release` (interactive: release PR → diff review → merge wait → publish → verify). Manual steps and repair flows are in [docs/RELEASING.md](./docs/RELEASING.md).
 
 ---
 

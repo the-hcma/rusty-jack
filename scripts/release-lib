@@ -423,6 +423,138 @@ release_lib_wait_for_tap_pr_checks() {
   return 1
 }
 
+release_lib_confirm() {
+  local prompt="$1"
+
+  if [[ "${YES:-0}" == "1" || "${RUSTY_JACK_RELEASE_YES:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "error: ${prompt} (not a TTY; set YES=1 to confirm)" >&2
+    return 1
+  fi
+
+  local reply
+  read -r -p "${prompt} [y/N] " reply
+  [[ "${reply}" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+# Block until a GitHub PR merges (polls state; does not enable auto-merge).
+release_lib_wait_for_pr_merge() {
+  local repo="$1"
+  local pr_url="$2"
+  local label="${3:-PR}"
+  local timeout_secs="${4:-${RUSTY_JACK_RELEASE_PR_MERGE_TIMEOUT_SECS:-86400}}"
+  local interval=15
+  local start state pr_number view_attempts=3 view_attempt
+
+  if [[ -z "${pr_url}" ]]; then
+    return 0
+  fi
+
+  for ((view_attempt = 1; view_attempt <= view_attempts; view_attempt++)); do
+    if pr_number="$(gh pr view "${pr_url}" --repo "${repo}" --json number --jq .number 2>/dev/null)"; then
+      break
+    fi
+    if (( view_attempt < view_attempts )); then
+      echo "Could not read ${label} metadata; retrying (${view_attempt}/${view_attempts})..." >&2
+      sleep 5
+    else
+      echo "error: could not read ${label} metadata: ${pr_url}" >&2
+      return 1
+    fi
+  done
+
+  for ((view_attempt = 1; view_attempt <= view_attempts; view_attempt++)); do
+    if state="$(gh pr view "${pr_number}" --repo "${repo}" --json state --jq .state 2>/dev/null)"; then
+      break
+    fi
+    if (( view_attempt < view_attempts )); then
+      echo "Could not read ${label} state; retrying (${view_attempt}/${view_attempts})..." >&2
+      sleep 5
+    else
+      echo "error: could not read ${label} state: ${pr_url}" >&2
+      return 1
+    fi
+  done
+
+  if [[ "${state}" == "MERGED" ]]; then
+    echo "${label} already merged."
+    return 0
+  fi
+  if [[ "${state}" != "OPEN" ]]; then
+    echo "error: ${label} is ${state}, expected OPEN or MERGED (${pr_url})" >&2
+    return 1
+  fi
+
+  echo "Waiting for ${label} to merge on GitHub:"
+  echo "  ${pr_url}"
+  start="${SECONDS}"
+  while (( SECONDS - start < timeout_secs )); do
+    if ! state="$(gh pr view "${pr_number}" --repo "${repo}" --json state --jq .state 2>/dev/null)"; then
+      echo "Could not read ${label} state; retrying..." >&2
+      sleep "${interval}"
+      continue
+    fi
+    if [[ "${state}" == "MERGED" ]]; then
+      echo "${label} merged."
+      return 0
+    fi
+    if [[ "${state}" != "OPEN" ]]; then
+      echo "error: ${label} is ${state}, expected MERGED (${pr_url})" >&2
+      return 1
+    fi
+    sleep "${interval}"
+  done
+
+  echo "error: timed out after ${timeout_secs}s waiting for ${label} merge: ${pr_url}" >&2
+  return 1
+}
+
+release_lib_show_pr_diff() {
+  local repo="$1"
+  local pr_url="$2"
+
+  echo "=== Release PR diff ==="
+  if [[ -t 1 ]]; then
+    gh pr diff "${pr_url}" --repo "${repo}" --color=always | "${PAGER:-less}" -R
+  else
+    gh pr diff "${pr_url}" --repo "${repo}"
+  fi
+}
+
+release_lib_verify_published_release() {
+  local repo="$1"
+  local tap_repo="$2"
+  local version="$3"
+  local tag formula tag_fragment
+
+  if ! tag="$(release_lib_resolve_release_tag "${repo}" "${version}")"; then
+    echo "error: GitHub release missing for version ${version}" >&2
+    return 1
+  fi
+  if ! gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
+    echo "error: could not read GitHub release ${tag}" >&2
+    return 1
+  fi
+  echo "Verified GitHub release: ${tag}"
+
+  if ! formula="$(gh api "repos/${tap_repo}/contents/Formula/rusty-jack.rb?ref=main" --jq -r .content 2>/dev/null)"; then
+    echo "error: could not read Homebrew formula from ${tap_repo}" >&2
+    return 1
+  fi
+  formula="$(printf '%s' "${formula}" | base64 -d)"
+  tag_fragment="${tag}"
+  if ! grep -Fq "${tag_fragment}" <<<"${formula}"; then
+    tag_fragment="refs/tags/${tag}"
+    if ! grep -Fq "${tag_fragment}" <<<"${formula}"; then
+      echo "error: tap formula on ${tap_repo} main does not reference ${tag}" >&2
+      return 1
+    fi
+  fi
+  echo "Verified Homebrew tap formula references ${tag}"
+}
+
 # Block until the tap PR merges (after CI passes and auto-merge runs).
 release_lib_wait_for_tap_pr_merge() {
   local tap_repo="$1"

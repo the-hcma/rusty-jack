@@ -7,7 +7,7 @@
 # If the active rustup toolchain is incomplete, check-cargo offers to repair it.
 # Non-interactive builds can pass REPAIR_RUST=1 to repair without prompting.
 
-.PHONY: all build build-release check-cargo clean clippy driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal update-release-pr upgrade validate-driver-bundle
+.PHONY: all build build-release check-cargo clean clippy do-release driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal update-release-pr upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -153,6 +153,10 @@ publish-release:
 update-release-pr:
 	@chmod +x scripts/update-release-pr scripts/release-lib
 	@./scripts/update-release-pr
+
+do-release:
+	@chmod +x scripts/do-release scripts/update-release-pr scripts/publish-release scripts/release-lib
+	@./scripts/do-release
 
 test: check-cargo
 	$(CARGO) test --all-targets
