@@ -397,6 +397,36 @@ release_lib_open_tap_pr() {
   echo "${pr_url}"
 }
 
+# Return 0 when failed/cancelled checks should block waiting for merge.
+release_lib_pr_checks_blocking_merge() {
+  local repo="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local output rc
+
+  set +e
+  output="$(gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
+    --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' 2>&1)"
+  rc=$?
+  set -e
+
+  if [[ "${rc}" -ne 0 ]]; then
+    if echo "${output}" | grep -qi "no checks reported"; then
+      return 1
+    fi
+    return 1
+  fi
+
+  if [[ -z "${output}" || "${output}" == "0" ]]; then
+    return 1
+  fi
+
+  echo "error: PR checks failed; auto-merge will not run: ${pr_url}" >&2
+  gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
+    --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | "  \(.name): \(.link)"' >&2
+  return 0
+}
+
 release_lib_wait_for_tap_pr_checks() {
   local tap_repo="$1"
   local pr_number="$2"
@@ -673,11 +703,16 @@ release_lib_wait_for_tap_pr_merge() {
     return 0
   fi
 
-  release_lib_wait_for_tap_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}"
+  if ! release_lib_wait_for_tap_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}"; then
+    return 1
+  fi
 
   echo "Waiting for tap PR to merge: ${pr_url}"
   start="${SECONDS}"
   while (( SECONDS - start < timeout_secs )); do
+    if release_lib_pr_checks_blocking_merge "${tap_repo}" "${pr_number}" "${pr_url}"; then
+      return 1
+    fi
     if ! state="$(gh pr view "${pr_number}" --repo "${tap_repo}" --json state --jq .state 2>/dev/null)"; then
       echo "Could not read tap PR state; retrying..." >&2
       sleep "${interval}"

@@ -181,6 +181,8 @@ brew info the-hcma/tap/rusty-jack
 
 **`publish-release` fails on tap checks with `no checks reported`:** the tap has no CI configured. The script now skips check watch in that case and waits for auto-merge instead. Transient `gh` failures retry automatically (`RUSTY_JACK_TAP_CHECKS_ATTEMPTS`, `RUSTY_JACK_TAP_PR_LOOKUP_ATTEMPTS`).
 
+**`publish-release` exits while waiting for tap PR merge:** a CI check failed after the initial watch; fix the tap PR and re-run `make publish-release -- --tap-only`.
+
 **`untagged, merged release PRs outstanding` from release-please:** the release PR merged but the GitHub tag was never created. `make update-release-pr` now detects this and runs `make publish-release` first. You can also publish manually:
 
 ```bash
