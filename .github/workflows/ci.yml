@@ -112,3 +112,18 @@ jobs:
 
       - name: build release
         run: cargo build --release --target x86_64-apple-darwin --jobs "$(sysctl -n hw.logicalcpu)"
+  secret-scan:
+    name: Secret Scan
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Secret Scan
+        env:
+          GITLEAKS_BASE: ${{ github.event.pull_request.base.sha || '' }}
+          GITLEAKS_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash .github/ci/secret-scan
