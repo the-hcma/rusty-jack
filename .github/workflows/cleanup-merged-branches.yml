@@ -2,7 +2,7 @@ name: Cleanup Merged Branches
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -13,56 +13,62 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Cleanup all merged branches
+      - name: Delete merged and stale closed PR branches
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
-          echo "Finding all branches..."
-          BRANCHES=$(gh api repos/${{ github.repository }}/branches --paginate --jq '.[].name' | grep -v '^main$' || true)
+          is_graphite_mq_branch() {
+            case "${1}" in
+              gtmq_batch_*|gtmq_merge_*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
 
-          if [ -z "$BRANCHES" ]; then
-            echo "No branches found besides main"
+          branches="$(gh api "repos/${REPOSITORY}/branches" --paginate --jq '.[].name' | grep -v '^main$' || true)"
+          if [[ -z "${branches}" ]]; then
+            echo "No branches found besides main."
             exit 0
           fi
 
-          THIRTY_DAYS_AGO=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-30d +%Y-%m-%dT%H:%M:%SZ)
-          DELETED=0
-          KEPT=0
+          cutoff="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          deleted=0
+          kept=0
 
-          for BRANCH in $BRANCHES; do
-            echo "Checking branch: ${BRANCH}..."
-            PR_NUMBER=$(gh api "repos/${{ github.repository }}/pulls?state=closed&head=${{ github.repository_owner }}:${BRANCH}" --jq '.[0].number' 2>/dev/null || echo "")
-
-            if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
-              echo "  No closed PR found for this branch, keeping"
-              KEPT=$((KEPT + 1))
+          for branch in ${branches}; do
+            pr_number="$(
+              gh api "repos/${REPOSITORY}/pulls?state=closed&head=${REPOSITORY_OWNER}:${branch}" \
+                --jq '.[0].number // empty' 2>/dev/null || true
+            )"
+            if [[ -z "${pr_number}" ]]; then
+              kept=$(( kept + 1 ))
               continue
             fi
 
-            PR_DATA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{merged, closed_at}' 2>/dev/null || echo "")
-            PR_MERGED=$(echo "$PR_DATA" | jq -r '.merged')
-            PR_CLOSED_AT=$(echo "$PR_DATA" | jq -r '.closed_at')
+            pr_data="$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" --jq '{merged, closed_at}')"
+            pr_merged="$(jq -r '.merged' <<<"${pr_data}")"
+            pr_closed_at="$(jq -r '.closed_at' <<<"${pr_data}")"
 
-            if [ "$PR_MERGED" = "true" ]; then
-              echo "  Branch was merged via PR #${PR_NUMBER}, deleting..."
-              if gh api "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" -X DELETE 2>/dev/null; then
-                echo "  Deleted ${BRANCH}"
-                DELETED=$((DELETED + 1))
+            delete_branch=0
+            if [[ "${pr_merged}" == "true" ]]; then
+              delete_branch=1
+            elif is_graphite_mq_branch "${branch}"; then
+              # Graphite MQ staging branches are ephemeral once their PR closes.
+              delete_branch=1
+            elif [[ "${pr_closed_at}" < "${cutoff}" ]]; then
+              delete_branch=1
+            fi
+
+            if [[ "${delete_branch}" -eq 1 ]]; then
+              if gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${branch}" >/dev/null 2>&1; then
+                deleted=$(( deleted + 1 ))
               else
-                echo "  Failed to delete ${BRANCH}"
-              fi
-            elif [[ "$PR_CLOSED_AT" < "$THIRTY_DAYS_AGO" ]]; then
-              echo "  PR #${PR_NUMBER} was closed without merge on ${PR_CLOSED_AT} (>30 days), deleting..."
-              if gh api "repos/${{ github.repository }}/git/refs/heads/${BRANCH}" -X DELETE 2>/dev/null; then
-                echo "  Deleted ${BRANCH}"
-                DELETED=$((DELETED + 1))
-              else
-                echo "  Failed to delete ${BRANCH}"
+                kept=$(( kept + 1 ))
               fi
             else
-              echo "  PR #${PR_NUMBER} was closed without merge on ${PR_CLOSED_AT} (<30 days), keeping branch"
-              KEPT=$((KEPT + 1))
+              kept=$(( kept + 1 ))
             fi
           done
 
-          echo "Summary: Deleted ${DELETED} branches, kept ${KEPT} branches"
+          echo "Deleted ${deleted} branches; kept ${kept} branches."
