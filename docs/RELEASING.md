@@ -60,7 +60,7 @@ make do-release
 |------|--------|
 | 1 | Sync `main` with `origin/main` and run `update-release-pr` (open/update the Release Please PR) |
 | 2 | Print the release PR summary, show the full diff (paged through `less` when stdout is a TTY), and prompt for approval |
-| 3 | Poll GitHub until you merge the release PR (merge manually on GitHub; do **not** add `merge-it`) |
+| 3 | Offer to squash-merge the release PR after CI passes (or poll until you merge manually; do **not** add `merge-it`) |
 | 4 | Fast-forward local `main`, then run `publish-release` (GitHub tag/release, Homebrew tap PR, tap CI wait, tap auto-merge wait) |
 | 5 | Verify the GitHub release tag exists and `the-hcma/homebrew-tap` `main` references that tag in `Formula/rusty-jack.rb` |
 
@@ -205,4 +205,4 @@ GH_TOKEN="$(gh auth token)" gh api repos/the-hcma/homebrew-tap --jq .full_name
 - Release Please PRs are the content review gate.
 - Publishing requires your explicit local action with `gh auth` credentials.
 - Dependabot auto-merge skips PRs labeled `release-please`.
-- Do **not** add `merge-it` to Release Please PRs; merge manually after review.
+- Do **not** add `merge-it` to Release Please PRs; merge via `make do-release` or manually on GitHub after review.
