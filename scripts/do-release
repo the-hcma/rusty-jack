@@ -21,7 +21,7 @@ Run the full local release flow interactively:
 
   1. Sync main and open/update the Release Please PR (make update-release-pr)
   2. Show the PR diff and ask for approval
-  3. Wait for you to merge the release PR on GitHub
+  3. Offer to merge the release PR (or wait for a manual merge on GitHub)
   4. Publish the GitHub release and Homebrew tap update (make publish-release)
   5. Verify the release tag and tap formula
 
@@ -64,7 +64,7 @@ release_lib_load_token
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] would sync main and run: make update-release-pr"
   echo "[dry-run] would show release PR diff and prompt for approval"
-  echo "[dry-run] would wait for release PR merge on GitHub"
+  echo "[dry-run] would offer to merge the release PR (or wait for manual merge)"
   echo "[dry-run] would run: make publish-release"
   echo "[dry-run] would verify GitHub release tag and Homebrew tap formula"
   exit 0
@@ -102,9 +102,16 @@ if ! release_lib_confirm "Approve this release PR and continue?"; then
 fi
 
 echo ""
-echo "=== Step 3/5: wait for release PR merge ==="
-echo "Merge the release PR on GitHub when ready (do not add merge-it)."
-release_lib_wait_for_pr_merge "${REPO}" "${RELEASE_PR_URL}" "Release PR"
+echo "=== Step 3/5: merge release PR ==="
+if release_lib_confirm "Merge this release PR now?"; then
+  if ! release_lib_merge_pr "${REPO}" "${RELEASE_PR_URL}" "Release PR"; then
+    echo "Automatic merge failed; waiting for manual merge on GitHub (do not add merge-it)."
+    release_lib_wait_for_pr_merge "${REPO}" "${RELEASE_PR_URL}" "Release PR"
+  fi
+else
+  echo "Merge the release PR on GitHub when ready (do not add merge-it)."
+  release_lib_wait_for_pr_merge "${REPO}" "${RELEASE_PR_URL}" "Release PR"
+fi
 
 echo ""
 echo "=== Step 4/5: publish GitHub release and Homebrew tap ==="

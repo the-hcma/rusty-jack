@@ -155,7 +155,7 @@ update_homebrew_tap() {
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "[dry-run] would download archive for rusty-jack-v${VERSION} or v${VERSION}"
-    echo "[dry-run] would render Formula/rusty-jack.rb and open tap PR ${TAP_BRANCH}"
+    echo "[dry-run] would render Formula/rusty-jack.rb, sync README release badge, and open tap PR ${TAP_BRANCH}"
     echo "[dry-run] would wait for tap PR checks and merge, then print PR merged: <URL>"
     return 0
   fi
@@ -186,13 +186,14 @@ update_homebrew_tap() {
     head -n5 "${tap_dir}/Formula/rusty-jack.rb" >&2
     exit 1
   fi
+  release_lib_update_tap_readme_badge "${tap_dir}" "${VERSION}"
 
   local unchanged_marker="${tap_dir}/.formula-unchanged"
   (
     cd "${tap_dir}"
     release_lib_configure_git_identity
     git checkout -B "${TAP_BRANCH}"
-    git add Formula/rusty-jack.rb
+    git add Formula/rusty-jack.rb README.md
     if git diff --cached --quiet; then
       touch "${unchanged_marker}"
       exit 0
@@ -212,9 +213,10 @@ update_homebrew_tap() {
   body="$(cat <<EOF
 ## Summary
 - Update the Rusty Jack formula for ${TAG}.
+- Sync the README release badge to ${VERSION}.
 
 ## Test plan
-- \`make publish-release\` generated formula
+- \`make publish-release\` generated formula and README badge
 EOF
 )"
 
