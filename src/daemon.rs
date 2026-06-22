@@ -253,6 +253,7 @@ fn daemon_tick_with_hooks(
             return Ok((DaemonTickResult::Switched(result), list));
         }
         ensure_startup_volume(hal, config, reason, &target, &physical, &preferred_uid)?;
+        enforce_scalar_webapi_speaker_input_for_daemon(config, &list.devices, &target.uid, reason);
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
@@ -289,6 +290,7 @@ fn daemon_tick_with_hooks(
             return Ok((DaemonTickResult::Switched(result), list));
         }
         ensure_startup_volume(hal, config, reason, &target, &physical, &preferred_uid)?;
+        enforce_scalar_webapi_speaker_input_for_daemon(config, &list.devices, &target.uid, reason);
         let result = no_change_result(&target);
         return Ok((DaemonTickResult::NoChange(result), list));
     }
@@ -312,6 +314,33 @@ fn no_change_result(target: &RoutingTarget) -> ApplyResult {
         device_name: target.name.clone(),
         reason: "active output already on target".into(),
     }
+}
+
+fn enforce_scalar_webapi_speaker_input_for_daemon(
+    config: &Config,
+    devices: &[crate::output_device::OutputDevice],
+    active_uid: &str,
+    reason: DaemonTickReason,
+) {
+    if !matches!(
+        reason,
+        DaemonTickReason::Scheduled
+            | DaemonTickReason::Startup
+            | DaemonTickReason::StartupRetry
+            | DaemonTickReason::UserActivity
+            | DaemonTickReason::KeepAwake
+    ) {
+        return;
+    }
+    let trigger = match reason {
+        DaemonTickReason::Scheduled => "scheduled",
+        DaemonTickReason::Startup | DaemonTickReason::StartupRetry => "startup",
+        DaemonTickReason::UserActivity => "keyboard",
+        DaemonTickReason::KeepAwake => "mouse",
+    };
+    crate::scalar_webapi_device::warn_on_speaker_input_enforcement(
+        config, devices, active_uid, trigger,
+    );
 }
 
 fn current_routed_output_uid(list: &DeviceList, default_uid: Option<&str>) -> Option<String> {
@@ -1001,6 +1030,7 @@ mod tests {
             wake_debounce_ms: 5_000,
             request_timeout_ms: 3_000,
             require_quick_start: true,
+            speaker_input: None,
         });
         config
     }

@@ -13,6 +13,9 @@ const ENV_CONFIG_LEGACY: &str = "HDMI_SOUND_CONTROLLER_CONFIG";
 const DEFAULT_SCALAR_WEBAPI_DEVICE_PORT: u16 = 10000;
 const DEFAULT_SCALAR_WEBAPI_DEVICE_PATH: &str = concat!("so", "ny");
 
+/// Default speaker input when `scalar_webapi_device.speaker_input` is omitted.
+pub const DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT: &str = "Audio in";
+
 /// Pick a device by CoreAudio UID, with an optional human-readable device name.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 pub struct DeviceSelectorConfig {
@@ -55,6 +58,10 @@ pub struct ScalarWebApiDeviceConfig {
     pub request_timeout_ms: u64,
     #[serde(default = "default_require_quick_start")]
     pub require_quick_start: bool,
+    /// Human-readable speaker input label from the device (for example `Audio in`).
+    /// Must match a title reported by `getCurrentExternalTerminalsStatus`.
+    #[serde(default, alias = "speaker_input_title")]
+    pub speaker_input: Option<String>,
 }
 
 fn default_scalar_webapi_device_model() -> String {
@@ -404,6 +411,15 @@ fn validate_config(config: &Config) -> Result<(), RustyJackError> {
                     "scalar_webapi_device.enabled is true but mac_output is not set".into(),
                 ));
             }
+            if api
+                .speaker_input
+                .as_deref()
+                .is_some_and(|name| name.trim().is_empty())
+            {
+                return Err(RustyJackError::Config(
+                    "scalar_webapi_device.speaker_input cannot be empty".into(),
+                ));
+            }
         }
     }
 
@@ -501,6 +517,7 @@ mod tests {
             wake_debounce_ms: 5_000,
             request_timeout_ms: 3_000,
             require_quick_start: true,
+            speaker_input: None,
         };
         let expected_url = format!("http://scalarwebapi-device.local:10000/{protocol_path}");
         assert_eq!(api.endpoint_url().as_deref(), Some(expected_url.as_str()));
