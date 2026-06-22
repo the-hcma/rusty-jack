@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.10.0...rusty-jack-v0.10.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* **ci:** delete Graphite MQ staging branches when PR closes ([#132](https://github.com/the-hcma/rusty-jack/issues/132)) ([7b54b34](https://github.com/the-hcma/rusty-jack/commit/7b54b342b1b8e40ff62d244100082c4ebd08d06e))
+* **ci:** harden Graphite restack guard push dedup ([#145](https://github.com/the-hcma/rusty-jack/issues/145)) ([4bed8cf](https://github.com/the-hcma/rusty-jack/commit/4bed8cf20cd83ee147f1ac62f8775796c1b4ab0e))
+* **ci:** key CI concurrency on head SHA ([#135](https://github.com/the-hcma/rusty-jack/issues/135)) ([5798a8b](https://github.com/the-hcma/rusty-jack/commit/5798a8bf5364c0e27e0547b2375e7eb8c44221aa))
+* **ci:** run CI on Graphite restack (push fallback + guard dedup) ([#139](https://github.com/the-hcma/rusty-jack/issues/139)) ([ee1e26f](https://github.com/the-hcma/rusty-jack/commit/ee1e26f6d2ed8c8982ef076cfe19423ea432e903))
+* **ci:** skip duplicate push CI when open PR exists ([#144](https://github.com/the-hcma/rusty-jack/issues/144)) ([97a3819](https://github.com/the-hcma/rusty-jack/commit/97a3819c6a44463ef4d6589c3ee3226cb8838ced))
+* improve do-release tap publish and release PR merge ([#134](https://github.com/the-hcma/rusty-jack/issues/134)) ([2799c63](https://github.com/the-hcma/rusty-jack/commit/2799c638c2fe3486c1d03005554825903070bd83))
+
 ## [0.10.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.9.2...rusty-jack-v0.10.0) (2026-06-11)
 
 
