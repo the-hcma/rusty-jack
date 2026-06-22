@@ -115,7 +115,7 @@ fi
 echo ""
 echo "=== Step 3/5: merge release PR ==="
 if release_lib_confirm "Merge this release PR now?"; then
-  if ! release_lib_merge_pr "${REPO}" "${RELEASE_PR_URL}" "Release PR"; then
+  if ! release_lib_merge_pr "${REPO}" "${RELEASE_PR_URL}" "Release PR" 1; then
     echo "Automatic merge failed; waiting for manual merge on GitHub (do not add merge-it)."
     release_lib_wait_for_pr_merge "${REPO}" "${RELEASE_PR_URL}" "Release PR"
   fi
