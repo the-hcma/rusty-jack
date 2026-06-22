@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.0...rusty-jack-v0.11.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* harden ScalarWebAPI SSDP discovery with progress feedback ([#153](https://github.com/the-hcma/rusty-jack/issues/153)) ([a0ba210](https://github.com/the-hcma/rusty-jack/commit/a0ba210b7c3afd2d40837d23527cff44611e0d9d))
+* show spinner during all user-visible ScalarWebAPI probing ([#156](https://github.com/the-hcma/rusty-jack/issues/156)) ([3fa7245](https://github.com/the-hcma/rusty-jack/commit/3fa72450152e54e6f9af1bbedfc5750b5a1a06ec))
+* skip duplicate release CI wait and fix tap formula verify ([#152](https://github.com/the-hcma/rusty-jack/issues/152)) ([5eb69d5](https://github.com/the-hcma/rusty-jack/commit/5eb69d55bff10702cafe89c4bb191e67a822acf0))
+
 ## [0.11.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.10.1...rusty-jack-v0.11.0) (2026-06-22)
 
 
