@@ -59,7 +59,7 @@ make do-release
 | Step | Action |
 |------|--------|
 | 1 | Sync `main` with `origin/main` and run `update-release-pr` (open/update the Release Please PR) |
-| 2 | Print the release PR summary, show the full diff (paged through `less` when stdout is a TTY), and prompt for approval |
+| 2 | Print the release PR summary, show the full diff (paged through `less` when stdout is a TTY), **wait for Release PR CI to pass**, then prompt for approval |
 | 3 | Offer to squash-merge the release PR after CI passes (or poll until you merge manually; do **not** add `merge-it`) |
 | 4 | Fast-forward local `main`, then run `publish-release` (GitHub tag/release, Homebrew tap PR, tap CI wait, tap auto-merge wait) |
 | 5 | Verify the GitHub release tag exists and `the-hcma/homebrew-tap` `main` references that tag in `Formula/rusty-jack.rb` |

@@ -402,6 +402,7 @@ release_lib_pr_checks_blocking_merge() {
   local repo="$1"
   local pr_number="$2"
   local pr_url="$3"
+  local label="${4:-PR}"
   local output rc
 
   set +e
@@ -414,67 +415,136 @@ release_lib_pr_checks_blocking_merge() {
     if echo "${output}" | grep -qi "no checks reported"; then
       return 1
     fi
-    return 1
+    echo "error: could not read ${label} check status: ${pr_url}" >&2
+    echo "${output}" >&2
+    return 0
   fi
 
   if [[ -z "${output}" || "${output}" == "0" ]]; then
     return 1
   fi
 
-  echo "error: PR checks failed; auto-merge will not run: ${pr_url}" >&2
-  gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
-    --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | "  \(.name): \(.link)"' >&2
+  release_lib_print_failed_pr_checks "${repo}" "${pr_number}" "${pr_url}" "${label}"
   return 0
+}
+
+release_lib_print_failed_pr_checks() {
+  local repo="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local label="${4:-PR}"
+
+  echo "error: ${label} checks failed; auto-merge will not run: ${pr_url}" >&2
+  gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
+    --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | "  \(.name) (\(.bucket)): \(.link)"' >&2
+}
+
+release_lib_print_pending_pr_checks() {
+  local repo="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local label="${4:-PR}"
+
+  echo "error: timed out waiting for ${label} checks to finish: ${pr_url}" >&2
+  gh pr checks "${pr_number}" --repo "${repo}" --json name,bucket,link \
+    --jq '.[] | select(.bucket == "pending" or .bucket == "skipping") | "  \(.name) (\(.bucket)): \(.link)"' >&2
+}
+
+# Wait until required PR checks are registered, pass, and report success.
+release_lib_wait_for_pr_checks() {
+  local repo="$1"
+  local pr_number="$2"
+  local pr_url="$3"
+  local label="${4:-PR}"
+  local readiness_attempts="${5:-${RUSTY_JACK_PR_CHECKS_READY_ATTEMPTS:-12}}"
+  local readiness_interval="${6:-${RUSTY_JACK_PR_CHECKS_READY_INTERVAL_SECS:-15}}"
+  local watch_attempts="${7:-${RUSTY_JACK_PR_CHECKS_ATTEMPTS:-3}}"
+  local watch_interval="${8:-10}"
+  local attempt output rc checks_ready=0
+
+  for ((attempt = 1; attempt <= readiness_attempts; attempt++)); do
+    set +e
+    output="$(gh pr checks "${pr_number}" --repo "${repo}" 2>&1)"
+    rc=$?
+    set -e
+
+    if [[ "${rc}" -eq 0 || "${rc}" -eq 1 || "${rc}" -eq 8 ]]; then
+      if [[ -z "${output}" ]]; then
+        echo "No ${label} checks configured; skipping check watch."
+        return 0
+      fi
+      checks_ready=1
+      break
+    fi
+
+    if echo "${output}" | grep -qi "no checks reported"; then
+      echo "No ${label} checks configured; skipping check watch."
+      return 0
+    fi
+
+    if (( attempt < readiness_attempts )); then
+      echo "Waiting for ${label} checks to appear (${attempt}/${readiness_attempts})..." >&2
+      sleep "${readiness_interval}"
+    else
+      echo "error: ${label} checks never appeared: ${pr_url}" >&2
+      echo "${output}" >&2
+      return 1
+    fi
+  done
+
+  if [[ "${checks_ready}" -ne 1 ]]; then
+    return 1
+  fi
+
+  for ((attempt = 1; attempt <= watch_attempts; attempt++)); do
+    echo "Waiting for ${label} CI checks to pass (${pr_url})..."
+    set +e
+    output="$(gh pr checks "${pr_number}" --repo "${repo}" --watch 2>&1)"
+    rc=$?
+    set -e
+    if [[ "${rc}" -eq 0 ]]; then
+      if release_lib_pr_checks_blocking_merge "${repo}" "${pr_number}" "${pr_url}" "${label}"; then
+        if (( attempt < watch_attempts )); then
+          echo "${label} checks still failing; retrying (${attempt}/${watch_attempts})..." >&2
+          sleep "${watch_interval}"
+          continue
+        fi
+        return 1
+      fi
+      echo "${label} CI checks passed."
+      return 0
+    fi
+
+    if echo "${output}" | grep -qi "no checks reported"; then
+      echo "No ${label} checks configured; skipping check watch."
+      return 0
+    fi
+
+    if (( attempt < watch_attempts )); then
+      echo "${label} check watch failed; retrying (${attempt}/${watch_attempts})..." >&2
+      echo "${output}" >&2
+      sleep "${watch_interval}"
+    else
+      if release_lib_pr_checks_blocking_merge "${repo}" "${pr_number}" "${pr_url}" "${label}"; then
+        return 1
+      fi
+      release_lib_print_pending_pr_checks "${repo}" "${pr_number}" "${pr_url}" "${label}"
+      return 1
+    fi
+  done
+
+  return 1
 }
 
 release_lib_wait_for_tap_pr_checks() {
   local tap_repo="$1"
   local pr_number="$2"
   local pr_url="$3"
-  local attempts="${4:-${RUSTY_JACK_TAP_CHECKS_ATTEMPTS:-3}}"
-  local interval="${5:-10}"
-  local attempt output rc
-
-  for ((attempt = 1; attempt <= attempts; attempt++)); do
-    set +e
-    output="$(gh pr checks "${pr_number}" --repo "${tap_repo}" 2>&1)"
-    rc=$?
-    set -e
-
-    if [[ "${rc}" -eq 0 ]]; then
-      if [[ -z "${output}" ]]; then
-        echo "No tap PR checks configured; skipping check watch."
-        return 0
-      fi
-      echo "Watching tap PR checks (${pr_url})..."
-      if gh pr checks "${pr_number}" --repo "${tap_repo}" --watch --fail-fast; then
-        return 0
-      fi
-      if (( attempt < attempts )); then
-        echo "Tap PR checks failed; retrying (${attempt}/${attempts})..." >&2
-        sleep "${interval}"
-        continue
-      fi
-      echo "error: tap PR checks failed: ${pr_url}" >&2
-      return 1
-    fi
-
-    if echo "${output}" | grep -qi "no checks reported"; then
-      echo "No tap PR checks configured; skipping check watch."
-      return 0
-    fi
-
-    if (( attempt < attempts )); then
-      echo "Could not read tap PR checks; retrying (${attempt}/${attempts})..." >&2
-      sleep "${interval}"
-    else
-      echo "${output}" >&2
-      echo "error: tap PR checks failed: ${pr_url}" >&2
-      return 1
-    fi
-  done
-
-  return 1
+  local watch_attempts="${RUSTY_JACK_TAP_CHECKS_ATTEMPTS:-${RUSTY_JACK_PR_CHECKS_ATTEMPTS:-3}}"
+  release_lib_wait_for_pr_checks "${tap_repo}" "${pr_number}" "${pr_url}" "Tap PR" \
+    "${RUSTY_JACK_PR_CHECKS_READY_ATTEMPTS:-12}" \
+    "${RUSTY_JACK_PR_CHECKS_READY_INTERVAL_SECS:-15}" \
+    "${watch_attempts}"
 }
 
 release_lib_confirm() {
@@ -522,7 +592,7 @@ release_lib_merge_pr() {
     return 1
   fi
 
-  if ! release_lib_wait_for_tap_pr_checks "${repo}" "${pr_number}" "${pr_url}"; then
+  if ! release_lib_wait_for_pr_checks "${repo}" "${pr_number}" "${pr_url}" "${label}"; then
     return 1
   fi
 
