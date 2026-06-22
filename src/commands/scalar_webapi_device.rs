@@ -3,8 +3,8 @@
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::list_fmt;
 use crate::scalar_webapi_device::{
-    discover_scalar_webapi_devices_on_lan, refresh_scalar_webapi_discovery_cache,
-    DiscoveredScalarWebApiDevice,
+    discover_scalar_webapi_devices_on_lan_with_feedback, refresh_scalar_webapi_discovery_cache,
+    DiscoveredScalarWebApiDevice, ScalarDiscoveryFeedback,
 };
 use anyhow::Result;
 use serde::Serialize;
@@ -35,7 +35,12 @@ pub fn discover(json: bool, timeout_ms: Option<u64>, config_path: Option<&Path>)
         eprintln!("Discovering ScalarWebAPI speakers on your local network...");
     }
 
-    let mut discovered = discover_scalar_webapi_devices_on_lan(timeout_ms)?;
+    let feedback = if json {
+        ScalarDiscoveryFeedback::Silent
+    } else {
+        ScalarDiscoveryFeedback::Interactive
+    };
+    let mut discovered = discover_scalar_webapi_devices_on_lan_with_feedback(timeout_ms, feedback)?;
     let mut configured_host = None;
     let mut configured_model = None;
     let mut configured_discovery = None;

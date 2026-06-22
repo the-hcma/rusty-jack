@@ -5,9 +5,9 @@ use crate::coreaudio::AudioHal;
 use crate::list_fmt;
 use crate::output_device::filter_hdmi_devices;
 use crate::scalar_webapi_device::{
-    attach_scalar_webapi_mac_output, discover_scalar_webapi_devices_on_lan,
+    attach_scalar_webapi_mac_output, discover_scalar_webapi_devices_on_lan_with_feedback,
     refresh_scalar_webapi_discovery_cache, should_show_distinct_speaker_model,
-    DiscoveredScalarWebApiDevice,
+    DiscoveredScalarWebApiDevice, ScalarDiscoveryFeedback,
 };
 use anyhow::Result;
 use serde::Serialize;
@@ -47,7 +47,13 @@ pub fn run(
             .and_then(|cfg| cfg.scalar_webapi_device.as_ref())
             .map(|api| api.request_timeout_ms)
             .unwrap_or(3_000);
-        let mut discovered = discover_scalar_webapi_devices_on_lan(timeout_ms)?;
+        let feedback = if json {
+            ScalarDiscoveryFeedback::Silent
+        } else {
+            ScalarDiscoveryFeedback::Interactive
+        };
+        let mut discovered =
+            discover_scalar_webapi_devices_on_lan_with_feedback(timeout_ms, feedback)?;
         if let Some(api) = config
             .as_ref()
             .and_then(|cfg| cfg.scalar_webapi_device.as_ref())

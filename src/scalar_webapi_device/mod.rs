@@ -36,7 +36,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static LAST_SUCCESSFUL_WAKE_SENT: Mutex<Option<Instant>> = Mutex::new(None);
@@ -209,6 +211,9 @@ const SYSTEM_SERVICE: &str = "system";
 pub(crate) const AV_CONTENT_SERVICE: &str = "avContent";
 const SSDP_ADDR: &str = "239.255.255.250:1900";
 const SCALAR_WEBAPI_ST: &str = concat!("urn:schemas-", "so", "ny", "-com:service:ScalarWebAPI:1");
+const SSDP_PROBE_COUNT: u32 = 3;
+const SSDP_PROBE_INTERVAL_MS: u64 = 400;
+const SSDP_RECV_SLICE_MS: u64 = 250;
 const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(300);
 pub const DISPLAY_POWER_TIMEOUT_MS: u64 = 750;
 const SCALAR_DISCOVERY_CACHE_FILE: &str = "scalar-discovery-cache.json";
@@ -912,23 +917,32 @@ fn endpoint_from_config(
     })
 }
 
+/// Whether interactive discovery shows a live progress indicator on stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScalarDiscoveryFeedback {
+    #[default]
+    Silent,
+    Interactive,
+}
+
 /// Scan the local network for ScalarWebAPI devices via SSDP/UPnP.
 pub fn discover_scalar_webapi_devices_on_lan(
     request_timeout_ms: u64,
 ) -> Result<Vec<DiscoveredScalarWebApiDevice>, RustyJackError> {
-    if !crate::network::lan_connectivity_ready() {
-        return Ok(Vec::new());
-    }
+    discover_scalar_webapi_devices_on_lan_with_feedback(
+        request_timeout_ms,
+        ScalarDiscoveryFeedback::Silent,
+    )
+}
 
-    let timeout = Duration::from_millis(request_timeout_ms.max(1));
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(RustyJackError::Io)?;
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(RustyJackError::Io)?;
-    if send_scalar_webapi_msearch(&socket, "lan")?.is_none() {
-        return Ok(Vec::new());
-    }
-    let hits = collect_scalar_webapi_ssdp_hits(&socket, timeout, None, "lan")?;
+/// Like [`discover_scalar_webapi_devices_on_lan`], with optional interactive progress output.
+pub fn discover_scalar_webapi_devices_on_lan_with_feedback(
+    request_timeout_ms: u64,
+    feedback: ScalarDiscoveryFeedback,
+) -> Result<Vec<DiscoveredScalarWebApiDevice>, RustyJackError> {
+    let timeout = Duration::from_millis(request_timeout_ms.max(1_000));
+    let _progress = DiscoveryProgressGuard::start(feedback, "  probing local network");
+    let hits = run_scalar_webapi_ssdp_discovery(timeout, None, "lan")?;
     Ok(hits
         .into_iter()
         .filter(|hit| {
@@ -970,16 +984,8 @@ fn discover_scalar_webapi_device_ssdp_hit(
         return Ok(None);
     }
 
-    let timeout = Duration::from_millis(api.request_timeout_ms.max(1));
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(RustyJackError::Io)?;
-    socket
-        .set_read_timeout(Some(timeout))
-        .map_err(RustyJackError::Io)?;
-    if send_scalar_webapi_msearch(&socket, host)?.is_none() {
-        return Ok(None);
-    }
-
-    let hits = collect_scalar_webapi_ssdp_hits(&socket, timeout, Some(&target_ips), host)?;
+    let timeout = Duration::from_millis(api.request_timeout_ms.max(1_000));
+    let hits = run_scalar_webapi_ssdp_discovery(timeout, Some(&target_ips), host)?;
     Ok(hits.into_iter().next())
 }
 
@@ -989,6 +995,109 @@ struct ScalarWebApiSsdpHit {
     model: Option<String>,
     location: String,
     xml: String,
+}
+
+fn run_scalar_webapi_ssdp_discovery(
+    total_timeout: Duration,
+    target_ips: Option<&[IpAddr]>,
+    host_context: &str,
+) -> Result<Vec<ScalarWebApiSsdpHit>, RustyJackError> {
+    if !crate::network::lan_connectivity_ready() {
+        return Ok(Vec::new());
+    }
+
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(RustyJackError::Io)?;
+    let deadline = Instant::now() + total_timeout;
+    let http_timeout = Duration::from_millis(total_timeout.as_millis().clamp(500, 3_000) as u64);
+
+    for probe in 0..SSDP_PROBE_COUNT {
+        if Instant::now() >= deadline {
+            break;
+        }
+        send_scalar_webapi_msearch_retry(&socket, host_context)?;
+        if probe + 1 < SSDP_PROBE_COUNT {
+            let remaining_ms = (deadline - Instant::now()).as_millis() as u64;
+            let sleep_ms = SSDP_PROBE_INTERVAL_MS.min(remaining_ms);
+            if sleep_ms > 0 {
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+        }
+    }
+
+    collect_scalar_webapi_ssdp_hits_until(&socket, deadline, target_ips, host_context, http_timeout)
+}
+
+struct DiscoveryProgressGuard(Option<DiscoveryProgress>);
+
+impl DiscoveryProgressGuard {
+    fn start(feedback: ScalarDiscoveryFeedback, message: &str) -> Self {
+        if feedback == ScalarDiscoveryFeedback::Interactive {
+            Self(Some(DiscoveryProgress::start(message)))
+        } else {
+            Self(None)
+        }
+    }
+}
+
+impl Drop for DiscoveryProgressGuard {
+    fn drop(&mut self) {
+        if let Some(progress) = self.0.take() {
+            progress.stop();
+        }
+    }
+}
+
+struct DiscoveryProgress {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl DiscoveryProgress {
+    fn start(message: &str) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let message = message.to_string();
+        let join = thread::spawn(move || {
+            let frames = ['-', '\\', '|', '/'];
+            let mut frame_index = 0usize;
+            let mut stderr = std::io::stderr();
+            while !stop_flag.load(Ordering::Relaxed) {
+                let frame = frames[frame_index % frames.len()];
+                frame_index = frame_index.wrapping_add(1);
+                let _ = write!(stderr, "\r{message} {frame}");
+                let _ = stderr.flush();
+                thread::sleep(Duration::from_millis(120));
+            }
+        });
+        Self {
+            stop,
+            join: Some(join),
+        }
+    }
+
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+        let mut stderr = std::io::stderr();
+        let _ = write!(stderr, "\r\x1b[K");
+        let _ = stderr.flush();
+    }
+}
+
+fn send_scalar_webapi_msearch_retry(
+    socket: &UdpSocket,
+    host_context: &str,
+) -> Result<(), RustyJackError> {
+    for attempt in 0..2 {
+        match send_scalar_webapi_msearch(socket, host_context)? {
+            Some(()) => return Ok(()),
+            None if attempt == 0 => std::thread::sleep(Duration::from_millis(100)),
+            None => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 fn scalar_webapi_msearch_request() -> String {
@@ -1026,15 +1135,25 @@ fn send_scalar_webapi_msearch(
     }
 }
 
-fn collect_scalar_webapi_ssdp_hits(
+fn collect_scalar_webapi_ssdp_hits_until(
     socket: &UdpSocket,
-    timeout: Duration,
+    deadline: Instant,
     target_ips: Option<&[IpAddr]>,
     host_context: &str,
+    http_timeout: Duration,
 ) -> Result<Vec<ScalarWebApiSsdpHit>, RustyJackError> {
     let mut hits = Vec::new();
     let mut buf = [0_u8; 4096];
     loop {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let remaining = deadline - now;
+        let read_timeout = remaining.min(Duration::from_millis(SSDP_RECV_SLICE_MS));
+        socket
+            .set_read_timeout(Some(read_timeout))
+            .map_err(RustyJackError::Io)?;
         match socket.recv_from(&mut buf) {
             Ok((len, addr)) => {
                 if target_ips.is_some_and(|ips| !ips.contains(&addr.ip())) {
@@ -1044,7 +1163,7 @@ fn collect_scalar_webapi_ssdp_hits(
                 let Some(location) = http_header(&response, "location") else {
                     continue;
                 };
-                let Ok(xml) = http_get(location, timeout) else {
+                let Ok(xml) = http_get(location, http_timeout) else {
                     continue;
                 };
                 let Some(base_url) = extract_xml_text(&xml, "X_ScalarWebAPI_BaseURL") else {
@@ -1072,7 +1191,7 @@ fn collect_scalar_webapi_ssdp_hits(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                break;
+                continue;
             }
             Err(err) => {
                 let ssdp_url = scalar_ssdp_url();
