@@ -7,9 +7,10 @@ pub use input::{
     configured_speaker_input_label, configured_speaker_input_validation_error,
     current_scalar_webapi_speaker_input, ensure_scalar_webapi_speaker_input,
     format_speaker_input_ensure_message, list_scalar_webapi_speaker_inputs,
-    speaker_input_uses_default, validate_configured_speaker_input, validate_speaker_input_name,
-    validate_speaker_input_name_in_list, ScalarWebApiSpeakerInput,
-    ScalarWebApiSpeakerInputEnsureResult,
+    list_scalar_webapi_speaker_inputs_with_feedback, speaker_input_uses_default,
+    validate_configured_speaker_input, validate_speaker_input_name,
+    validate_speaker_input_name_in_list, validate_speaker_input_name_with_feedback,
+    ScalarWebApiSpeakerInput, ScalarWebApiSpeakerInputEnsureResult,
 };
 pub use install::{
     append_scalar_webapi_to_config_json, maybe_prompt_scalar_webapi_speaker_input,
@@ -644,30 +645,36 @@ pub fn picker_power_notes(config: &Config, devices: &[OutputDevice]) -> Vec<(Str
             return vec![];
         }
     };
-    let note = match (
-        current_power_status_for_display(api),
-        configured_speaker_input_label(api),
-        current_scalar_webapi_speaker_input(api),
-    ) {
-        (Some(power), Some(configured_input), Some(active_input)) => {
-            if active_input.eq_ignore_ascii_case(&configured_input) {
-                format!("ScalarWebAPI: {power}; input {configured_input}")
-            } else {
-                format!("ScalarWebAPI: {power}; input {active_input} (expected {configured_input})")
+    let note = with_scalar_probing_feedback(
+        ScalarDiscoveryFeedback::Interactive,
+        "  probing ScalarWebAPI speaker",
+        || match (
+            current_power_status_for_display(api),
+            configured_speaker_input_label(api),
+            current_scalar_webapi_speaker_input(api),
+        ) {
+            (Some(power), Some(configured_input), Some(active_input)) => {
+                if active_input.eq_ignore_ascii_case(&configured_input) {
+                    format!("ScalarWebAPI: {power}; input {configured_input}")
+                } else {
+                    format!(
+                        "ScalarWebAPI: {power}; input {active_input} (expected {configured_input})"
+                    )
+                }
             }
-        }
-        (Some(power), Some(configured_input), None) => {
-            format!("ScalarWebAPI: {power}; expected input {configured_input}")
-        }
-        (Some(power), None, Some(active_input)) => {
-            format!("ScalarWebAPI: {power}; input {active_input}")
-        }
-        (Some(power), None, None) => format!("ScalarWebAPI: {power}"),
-        (None, Some(configured_input), _) => {
-            format!("ScalarWebAPI: unknown; expected input {configured_input}")
-        }
-        (None, None, _) => "ScalarWebAPI: unknown".into(),
-    };
+            (Some(power), Some(configured_input), None) => {
+                format!("ScalarWebAPI: {power}; expected input {configured_input}")
+            }
+            (Some(power), None, Some(active_input)) => {
+                format!("ScalarWebAPI: {power}; input {active_input}")
+            }
+            (Some(power), None, None) => format!("ScalarWebAPI: {power}"),
+            (None, Some(configured_input), _) => {
+                format!("ScalarWebAPI: unknown; expected input {configured_input}")
+            }
+            (None, None, _) => "ScalarWebAPI: unknown".into(),
+        },
+    );
 
     vec![(uid, note)]
 }
@@ -917,7 +924,10 @@ fn endpoint_from_config(
     })
 }
 
-/// Whether interactive discovery shows a live progress indicator on stderr.
+/// Whether user-visible ScalarWebAPI probing shows a live progress indicator on stderr.
+///
+/// Covers SSDP/LAN discovery, configured-speaker SSDP refresh, and HTTP speaker probes
+/// (power, inputs) in interactive CLI paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScalarDiscoveryFeedback {
     #[default]
@@ -941,7 +951,7 @@ pub fn discover_scalar_webapi_devices_on_lan_with_feedback(
     feedback: ScalarDiscoveryFeedback,
 ) -> Result<Vec<DiscoveredScalarWebApiDevice>, RustyJackError> {
     let timeout = Duration::from_millis(request_timeout_ms.max(1_000));
-    let _progress = DiscoveryProgressGuard::start(feedback, "  probing local network");
+    let _progress = ScalarProbingProgressGuard::start(feedback, "  probing local network");
     let hits = run_scalar_webapi_ssdp_discovery(timeout, None, "lan")?;
     Ok(hits
         .into_iter()
@@ -962,17 +972,27 @@ pub fn discover_scalar_webapi_devices_on_lan_with_feedback(
 pub fn refresh_scalar_webapi_discovery_cache(
     api: &ScalarWebApiDeviceConfig,
 ) -> Result<Option<DiscoveredScalarWebApiDevice>, RustyJackError> {
-    let host_key = scalar_webapi_device_host(api)?.to_string();
-    let hit = discover_scalar_webapi_device_ssdp_hit(api)?;
-    if let Some(hit) = hit {
-        let discovered = DiscoveredScalarWebApiDevice {
-            host: hit.endpoint.host.clone(),
-            model: hit.model.clone(),
-        };
-        persist_scalar_endpoint_cache(&host_key, &hit.endpoint, hit.model);
-        return Ok(Some(discovered));
-    }
-    Ok(None)
+    refresh_scalar_webapi_discovery_cache_with_feedback(api, ScalarDiscoveryFeedback::Silent)
+}
+
+/// Like [`refresh_scalar_webapi_discovery_cache`], with optional interactive progress output.
+pub fn refresh_scalar_webapi_discovery_cache_with_feedback(
+    api: &ScalarWebApiDeviceConfig,
+    feedback: ScalarDiscoveryFeedback,
+) -> Result<Option<DiscoveredScalarWebApiDevice>, RustyJackError> {
+    with_scalar_probing_feedback(feedback, "  probing configured speaker", || {
+        let host_key = scalar_webapi_device_host(api)?.to_string();
+        let hit = discover_scalar_webapi_device_ssdp_hit(api)?;
+        if let Some(hit) = hit {
+            let discovered = DiscoveredScalarWebApiDevice {
+                host: hit.endpoint.host.clone(),
+                model: hit.model.clone(),
+            };
+            persist_scalar_endpoint_cache(&host_key, &hit.endpoint, hit.model);
+            return Ok(Some(discovered));
+        }
+        Ok(None)
+    })
 }
 
 fn discover_scalar_webapi_device_ssdp_hit(
@@ -1027,9 +1047,18 @@ fn run_scalar_webapi_ssdp_discovery(
     collect_scalar_webapi_ssdp_hits_until(&socket, deadline, target_ips, host_context, http_timeout)
 }
 
-struct DiscoveryProgressGuard(Option<DiscoveryProgress>);
+pub(crate) fn with_scalar_probing_feedback<T>(
+    feedback: ScalarDiscoveryFeedback,
+    message: &str,
+    probe: impl FnOnce() -> T,
+) -> T {
+    let _progress = ScalarProbingProgressGuard::start(feedback, message);
+    probe()
+}
 
-impl DiscoveryProgressGuard {
+pub(crate) struct ScalarProbingProgressGuard(Option<DiscoveryProgress>);
+
+impl ScalarProbingProgressGuard {
     fn start(feedback: ScalarDiscoveryFeedback, message: &str) -> Self {
         if feedback == ScalarDiscoveryFeedback::Interactive {
             Self(Some(DiscoveryProgress::start(message)))
@@ -1039,7 +1068,7 @@ impl DiscoveryProgressGuard {
     }
 }
 
-impl Drop for DiscoveryProgressGuard {
+impl Drop for ScalarProbingProgressGuard {
     fn drop(&mut self) {
         if let Some(progress) = self.0.take() {
             progress.stop();

@@ -3,8 +3,9 @@
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::list_fmt;
 use crate::scalar_webapi_device::{
-    discover_scalar_webapi_devices_on_lan_with_feedback, refresh_scalar_webapi_discovery_cache,
-    DiscoveredScalarWebApiDevice, ScalarDiscoveryFeedback,
+    discover_scalar_webapi_devices_on_lan_with_feedback,
+    refresh_scalar_webapi_discovery_cache_with_feedback, DiscoveredScalarWebApiDevice,
+    ScalarDiscoveryFeedback,
 };
 use anyhow::Result;
 use serde::Serialize;
@@ -52,7 +53,7 @@ pub fn discover(json: bool, timeout_ms: Option<u64>, config_path: Option<&Path>)
     {
         configured_model = Some(api.model.clone());
         configured_host = api.host.clone();
-        configured_discovery = refresh_scalar_webapi_discovery_cache(api)?;
+        configured_discovery = refresh_scalar_webapi_discovery_cache_with_feedback(api, feedback)?;
         if let Some(configured_hit) = configured_discovery.as_ref() {
             if !discovered.iter().any(|hit| hit.host == configured_hit.host) {
                 discovered.push(configured_hit.clone());

@@ -4,10 +4,10 @@ use crate::config::{ScalarWebApiDeviceConfig, DEFAULT_SCALAR_WEBAPI_SPEAKER_INPU
 use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
     discover_scalar_webapi_devices_on_lan_with_feedback, has_all_default_wake_triggers,
-    list_scalar_webapi_speaker_inputs, validate_speaker_input_name,
-    validate_speaker_input_name_in_list, DiscoveredScalarWebApiDevice, ScalarDiscoveryFeedback,
-    ScalarWebApiSpeakerInput, DEFAULT_WAKE_TRIGGERS, KEYBOARD_TRIGGER, MOUSE_TRIGGER,
-    OUTPUT_SELECTED_TRIGGER,
+    list_scalar_webapi_speaker_inputs_with_feedback, validate_speaker_input_name_in_list,
+    validate_speaker_input_name_with_feedback, DiscoveredScalarWebApiDevice,
+    ScalarDiscoveryFeedback, ScalarWebApiSpeakerInput, DEFAULT_WAKE_TRIGGERS, KEYBOARD_TRIGGER,
+    MOUSE_TRIGGER, OUTPUT_SELECTED_TRIGGER,
 };
 use crate::transport::TransportKind;
 use crate::RustyJackError;
@@ -602,7 +602,10 @@ pub fn prompt_scalar_webapi_speaker_input(
     println!("{}", style("ScalarWebAPI speaker input").cyan());
     let api = temp_scalar_webapi_api_for_install(host, mac_output);
 
-    let inputs = match list_scalar_webapi_speaker_inputs(&api) {
+    let inputs = match list_scalar_webapi_speaker_inputs_with_feedback(
+        &api,
+        ScalarDiscoveryFeedback::Interactive,
+    ) {
         Ok(inputs) => inputs,
         Err(err) => {
             println!(
@@ -707,15 +710,25 @@ fn prompt_manual_scalar_webapi_speaker_input(
             RustyJackError::Config(format!("ScalarWebAPI speaker input prompt failed: {err}"))
         })?;
     if !configure {
-        let inputs = list_scalar_webapi_speaker_inputs(api).unwrap_or_default();
+        let inputs = list_scalar_webapi_speaker_inputs_with_feedback(
+            api,
+            ScalarDiscoveryFeedback::Interactive,
+        )
+        .unwrap_or_default();
         if inputs.is_empty() {
-            return validate_speaker_input_name(api, DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT)
-                .map(|input| input.title);
+            return validate_speaker_input_name_with_feedback(
+                api,
+                DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT,
+                ScalarDiscoveryFeedback::Interactive,
+            )
+            .map(|input| input.title);
         }
         return default_speaker_input_choice("manual entry skipped", &inputs);
     }
 
-    let available = list_scalar_webapi_speaker_inputs(api).ok();
+    let available =
+        list_scalar_webapi_speaker_inputs_with_feedback(api, ScalarDiscoveryFeedback::Interactive)
+            .ok();
     loop {
         let name: String = Input::new()
             .with_prompt("Speaker input name (must match the device label)")
@@ -727,7 +740,11 @@ fn prompt_manual_scalar_webapi_speaker_input(
         if name.is_empty() {
             continue;
         }
-        match validate_speaker_input_name(api, &name) {
+        match validate_speaker_input_name_with_feedback(
+            api,
+            &name,
+            ScalarDiscoveryFeedback::Interactive,
+        ) {
             Ok(input) => return Ok(input.title),
             Err(err) => {
                 println!("{}", style(err.to_string()).yellow());

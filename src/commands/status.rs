@@ -2,6 +2,7 @@
 
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
+use crate::scalar_webapi_device::ScalarDiscoveryFeedback;
 use crate::status::{build_status, print_json, print_text, StatusDaemonContext};
 use anyhow::Result;
 use std::path::Path;
@@ -31,6 +32,11 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     let daemon_version = crate::launchd::daemon_version_check(running_pid).ok();
     let daemon_logs = crate::launchd::daemon_log_paths().ok();
     let activity = crate::state::load_activity_snapshot().ok().flatten();
+    let scalar_probing_feedback = if json {
+        ScalarDiscoveryFeedback::Silent
+    } else {
+        ScalarDiscoveryFeedback::Interactive
+    };
     let snapshot = build_status(
         list,
         config.as_ref(),
@@ -42,6 +48,7 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
             daemon_logs,
         },
         activity,
+        scalar_probing_feedback,
     );
 
     if json {
