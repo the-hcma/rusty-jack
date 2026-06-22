@@ -95,6 +95,17 @@ gh pr view "${RELEASE_PR_URL}" --repo "${REPO}"
 echo ""
 release_lib_show_pr_diff "${REPO}" "${RELEASE_PR_URL}"
 
+if ! RELEASE_PR_NUMBER="$(gh pr view "${RELEASE_PR_URL}" --repo "${REPO}" --json number --jq .number 2>/dev/null)"; then
+  echo "error: could not read Release PR number: ${RELEASE_PR_URL}" >&2
+  exit 1
+fi
+echo ""
+echo "=== Waiting for Release PR CI ==="
+if ! release_lib_wait_for_pr_checks "${REPO}" "${RELEASE_PR_NUMBER}" "${RELEASE_PR_URL}" "Release PR"; then
+  echo "Fix the failing checks on the release PR, then re-run make do-release." >&2
+  exit 1
+fi
+
 echo ""
 if ! release_lib_confirm "Approve this release PR and continue?"; then
   echo "Aborted."

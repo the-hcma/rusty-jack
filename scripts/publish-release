@@ -33,7 +33,10 @@ Environment:
   RUSTY_JACK_REPO                  Source repository (default: the-hcma/rusty-jack)
   RUSTY_JACK_TAP_REPO              Homebrew tap repository (default: the-hcma/homebrew-tap)
   RUSTY_JACK_TAP_MERGE_TIMEOUT_SECS     Max seconds to wait for tap PR merge (default: 1800)
-  RUSTY_JACK_TAP_CHECKS_ATTEMPTS        Retries for tap PR check watch (default: 3)
+  RUSTY_JACK_PR_CHECKS_READY_ATTEMPTS   Retries until PR checks appear (default: 12)
+  RUSTY_JACK_PR_CHECKS_READY_INTERVAL_SECS Seconds between check-appearance polls (default: 15)
+  RUSTY_JACK_PR_CHECKS_ATTEMPTS           Retries for PR check watch (default: 3)
+  RUSTY_JACK_TAP_CHECKS_ATTEMPTS        Alias for RUSTY_JACK_PR_CHECKS_ATTEMPTS
   RUSTY_JACK_TAP_PR_LOOKUP_ATTEMPTS     Retries finding tap PR after create (default: 6)
   RUSTY_JACK_TAP_PR_LOOKUP_INTERVAL_SECS Seconds between tap PR lookups (default: 5)
 
