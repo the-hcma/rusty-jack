@@ -2,8 +2,8 @@
 
 use super::{
     display_endpoint_for_api, endpoint_from_config, post_json,
-    resolve_scalar_webapi_device_endpoint, scalar_speaker_err, ScalarWebApiDeviceEndpoint,
-    AV_CONTENT_SERVICE,
+    resolve_scalar_webapi_device_endpoint, scalar_speaker_err, with_scalar_probing_feedback,
+    ScalarDiscoveryFeedback, ScalarWebApiDeviceEndpoint, AV_CONTENT_SERVICE,
 };
 use crate::config::{ScalarWebApiDeviceConfig, DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT};
 use crate::RustyJackError;
@@ -33,8 +33,18 @@ pub struct ScalarWebApiSpeakerInputEnsureResult {
 pub fn list_scalar_webapi_speaker_inputs(
     api: &ScalarWebApiDeviceConfig,
 ) -> Result<Vec<ScalarWebApiSpeakerInput>, RustyJackError> {
-    let endpoint = resolve_scalar_webapi_input_endpoint(api)?;
-    list_scalar_webapi_speaker_inputs_at_endpoint(api, &endpoint)
+    list_scalar_webapi_speaker_inputs_with_feedback(api, ScalarDiscoveryFeedback::Silent)
+}
+
+/// Like [`list_scalar_webapi_speaker_inputs`], with optional interactive progress output.
+pub fn list_scalar_webapi_speaker_inputs_with_feedback(
+    api: &ScalarWebApiDeviceConfig,
+    feedback: ScalarDiscoveryFeedback,
+) -> Result<Vec<ScalarWebApiSpeakerInput>, RustyJackError> {
+    with_scalar_probing_feedback(feedback, "  probing speaker inputs", || {
+        let endpoint = resolve_scalar_webapi_input_endpoint(api)?;
+        list_scalar_webapi_speaker_inputs_at_endpoint(api, &endpoint)
+    })
 }
 
 fn list_scalar_webapi_speaker_inputs_at_endpoint(
@@ -110,7 +120,16 @@ pub fn validate_speaker_input_name(
     api: &ScalarWebApiDeviceConfig,
     name: &str,
 ) -> Result<ScalarWebApiSpeakerInput, RustyJackError> {
-    let inputs = list_scalar_webapi_speaker_inputs(api)?;
+    validate_speaker_input_name_with_feedback(api, name, ScalarDiscoveryFeedback::Silent)
+}
+
+/// Like [`validate_speaker_input_name`], with optional interactive progress output.
+pub fn validate_speaker_input_name_with_feedback(
+    api: &ScalarWebApiDeviceConfig,
+    name: &str,
+    feedback: ScalarDiscoveryFeedback,
+) -> Result<ScalarWebApiSpeakerInput, RustyJackError> {
+    let inputs = list_scalar_webapi_speaker_inputs_with_feedback(api, feedback)?;
     validate_speaker_input_name_in_list(name, &inputs)
 }
 

@@ -6,7 +6,7 @@ use crate::list_fmt;
 use crate::output_device::filter_hdmi_devices;
 use crate::scalar_webapi_device::{
     attach_scalar_webapi_mac_output, discover_scalar_webapi_devices_on_lan_with_feedback,
-    refresh_scalar_webapi_discovery_cache, should_show_distinct_speaker_model,
+    refresh_scalar_webapi_discovery_cache_with_feedback, should_show_distinct_speaker_model,
     DiscoveredScalarWebApiDevice, ScalarDiscoveryFeedback,
 };
 use anyhow::Result;
@@ -61,7 +61,8 @@ pub fn run(
         {
             configured_model = Some(api.model.clone());
             configured_host = api.host.clone();
-            configured_discovery = refresh_scalar_webapi_discovery_cache(api)?;
+            configured_discovery =
+                refresh_scalar_webapi_discovery_cache_with_feedback(api, feedback)?;
             if let Some(configured_hit) = configured_discovery.as_ref() {
                 if !discovered.iter().any(|hit| hit.host == configured_hit.host) {
                     discovered.push(configured_hit.clone());

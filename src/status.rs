@@ -7,7 +7,7 @@ use crate::hdmi_displayport_volume_control::{
 use crate::launchd::{DaemonLogPaths, DaemonStatus, DaemonVersionCheck};
 use crate::list_fmt::{self, format_labeled_section};
 use crate::policy::evaluate_policy;
-use crate::scalar_webapi_device::{self, ScalarWebApiMacOutputLink};
+use crate::scalar_webapi_device::{self, ScalarDiscoveryFeedback, ScalarWebApiMacOutputLink};
 use crate::state::ActivitySnapshot;
 use crate::system_default::DeviceList;
 use crate::version::BinaryVersion;
@@ -119,6 +119,7 @@ pub fn build_status(
     volume_percent: Option<u8>,
     daemon_context: StatusDaemonContext,
     activity: Option<ActivitySnapshot>,
+    scalar_probing_feedback: ScalarDiscoveryFeedback,
 ) -> StatusSnapshot {
     let policy = evaluate_policy(
         &DeviceList {
@@ -139,7 +140,11 @@ pub fn build_status(
     let scalar_webapi_mac_output = config.and_then(|config| {
         scalar_webapi_device::scalar_webapi_mac_output_link(config, &list.devices)
     });
-    let scalar_webapi = build_scalar_webapi_status(config, scalar_webapi_mac_output.as_ref());
+    let scalar_webapi = build_scalar_webapi_status(
+        config,
+        scalar_webapi_mac_output.as_ref(),
+        scalar_probing_feedback,
+    );
 
     StatusSnapshot {
         devices: list.devices,
@@ -160,31 +165,44 @@ pub fn build_status(
 fn build_scalar_webapi_status(
     config: Option<&Config>,
     link: Option<&ScalarWebApiMacOutputLink>,
+    feedback: ScalarDiscoveryFeedback,
 ) -> Option<ScalarWebApiStatus> {
     let api = config
         .and_then(|c| c.scalar_webapi_device.as_ref())
         .filter(|api| api.enabled)?;
-    Some(ScalarWebApiStatus {
-        enabled: api.enabled,
-        host: api.host.clone(),
-        model: Some(api.model.clone()),
-        speaker_model: scalar_webapi_device::cached_speaker_model_for_display(api).and_then(
-            |hardware| {
-                scalar_webapi_device::should_show_distinct_speaker_model(&api.model, &hardware)
-                    .then_some(hardware)
-            },
-        ),
-        mac_output_uid: link
-            .map(|link| link.mac_output_uid.clone())
-            .or_else(|| api.mac_output.uid.clone()),
-        mac_output_label: link.and_then(|link| link.mac_output_label.clone()),
-        power_status: scalar_webapi_device::current_power_status_for_display(api),
-        speaker_input: scalar_webapi_device::configured_speaker_input_label(api),
-        speaker_input_uses_default: Some(scalar_webapi_device::speaker_input_uses_default(api)),
-        active_speaker_input: scalar_webapi_device::current_scalar_webapi_speaker_input(api),
-        speaker_input_matches: scalar_webapi_device::speaker_input_matches_config(api),
-        speaker_input_error: scalar_webapi_device::configured_speaker_input_validation_error(api),
-    })
+    scalar_webapi_device::with_scalar_probing_feedback(
+        feedback,
+        "  probing ScalarWebAPI speaker",
+        || {
+            Some(ScalarWebApiStatus {
+                enabled: api.enabled,
+                host: api.host.clone(),
+                model: Some(api.model.clone()),
+                speaker_model: scalar_webapi_device::cached_speaker_model_for_display(api)
+                    .and_then(|hardware| {
+                        scalar_webapi_device::should_show_distinct_speaker_model(
+                            &api.model, &hardware,
+                        )
+                        .then_some(hardware)
+                    }),
+                mac_output_uid: link
+                    .map(|link| link.mac_output_uid.clone())
+                    .or_else(|| api.mac_output.uid.clone()),
+                mac_output_label: link.and_then(|link| link.mac_output_label.clone()),
+                power_status: scalar_webapi_device::current_power_status_for_display(api),
+                speaker_input: scalar_webapi_device::configured_speaker_input_label(api),
+                speaker_input_uses_default: Some(scalar_webapi_device::speaker_input_uses_default(
+                    api,
+                )),
+                active_speaker_input: scalar_webapi_device::current_scalar_webapi_speaker_input(
+                    api,
+                ),
+                speaker_input_matches: scalar_webapi_device::speaker_input_matches_config(api),
+                speaker_input_error:
+                    scalar_webapi_device::configured_speaker_input_validation_error(api),
+            })
+        },
+    )
 }
 
 fn format_scalar_webapi_block(status: &ScalarWebApiStatus) -> String {
@@ -748,6 +766,7 @@ mod tests {
             Some(42),
             empty_daemon_context(),
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         assert!(!snapshot.policy.configured);
         assert_eq!(snapshot.volume_percent, Some(42));
@@ -788,6 +807,7 @@ mod tests {
             Some(13),
             empty_daemon_context(),
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         assert!(snapshot.policy.configured);
         assert_eq!(snapshot.policy.matches_preferred, Some(true));
@@ -824,6 +844,7 @@ mod tests {
             None,
             empty_daemon_context(),
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         assert!(snapshot.system_default.is_some());
     }
@@ -900,6 +921,7 @@ mod tests {
             None,
             empty_daemon_context(),
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         assert!(!snapshot.binary_version.version.is_empty());
         assert!(!snapshot.binary_version.commit.is_empty());
@@ -986,6 +1008,7 @@ mod tests {
             None,
             empty_daemon_context(),
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         assert_eq!(
             snapshot
@@ -1262,6 +1285,7 @@ mod tests {
             None,
             empty_daemon_context(),
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"active_device_uid\""));
@@ -1292,6 +1316,7 @@ mod tests {
                 }),
             },
             None,
+            ScalarDiscoveryFeedback::Silent,
         );
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"volume_percent\":13"));
