@@ -1,0 +1,14 @@
+---
+description: Keep Makefile top-level targets in lexicographic order
+globs: Makefile
+alwaysApply: false
+---
+
+# Makefile target order
+
+When editing `Makefile`:
+
+- Keep the `.PHONY` target list in lexicographic order by target name.
+- Keep top-level target rule blocks (including pattern rules like `$(VAR):`) in lexicographic order by target name.
+- When adding or renaming a target, insert it in the correct sorted position in both places.
+- Do not add CI scripts or make targets to enforce ordering; the comment in the Makefile and this rule are sufficient.
