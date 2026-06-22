@@ -3,10 +3,11 @@
 use crate::config::{ScalarWebApiDeviceConfig, DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT};
 use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
-    discover_scalar_webapi_devices_on_lan, has_all_default_wake_triggers,
+    discover_scalar_webapi_devices_on_lan_with_feedback, has_all_default_wake_triggers,
     list_scalar_webapi_speaker_inputs, validate_speaker_input_name,
-    validate_speaker_input_name_in_list, DiscoveredScalarWebApiDevice, ScalarWebApiSpeakerInput,
-    DEFAULT_WAKE_TRIGGERS, KEYBOARD_TRIGGER, MOUSE_TRIGGER, OUTPUT_SELECTED_TRIGGER,
+    validate_speaker_input_name_in_list, DiscoveredScalarWebApiDevice, ScalarDiscoveryFeedback,
+    ScalarWebApiSpeakerInput, DEFAULT_WAKE_TRIGGERS, KEYBOARD_TRIGGER, MOUSE_TRIGGER,
+    OUTPUT_SELECTED_TRIGGER,
 };
 use crate::transport::TransportKind;
 use crate::RustyJackError;
@@ -26,7 +27,7 @@ const TRIGGER_LABELS: &[(&str, &str)] = &[
     ),
 ];
 
-const INSTALL_DISCOVERY_TIMEOUT_MS: u64 = 3_000;
+const INSTALL_DISCOVERY_TIMEOUT_MS: u64 = 5_000;
 
 /// ScalarWebAPI block written during install.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,36 +78,53 @@ pub fn prompt_scalar_webapi_host_selection(
 
 fn discover_scalar_webapi_devices_for_install(
 ) -> Result<Vec<DiscoveredScalarWebApiDevice>, RustyJackError> {
-    println!(
-        "{}",
-        style("Searching the local network for ScalarWebAPI devices...").dim()
-    );
-    let discovered = discover_scalar_webapi_devices_on_lan(INSTALL_DISCOVERY_TIMEOUT_MS)?;
-    match discovered.len() {
-        0 => println!(
+    loop {
+        println!(
             "{}",
-            style("No ScalarWebAPI devices found on the local network.").dim()
-        ),
-        1 => {
-            let device = &discovered[0];
-            println!(
-                "  {} {}",
-                style("found:").dim(),
-                style(format_discovered_device(device)).green()
-            );
-        }
-        count => {
-            println!(
-                "  {} {}",
-                style("found:").dim(),
-                style(format!("{count} ScalarWebAPI devices")).green()
-            );
-            for device in &discovered {
-                println!("    {}", style(format_discovered_device(device)).green());
+            style("Searching the local network for ScalarWebAPI devices...").dim()
+        );
+        let discovered = discover_scalar_webapi_devices_on_lan_with_feedback(
+            INSTALL_DISCOVERY_TIMEOUT_MS,
+            ScalarDiscoveryFeedback::Interactive,
+        )?;
+        match discovered.len() {
+            0 => println!(
+                "{}",
+                style("No ScalarWebAPI devices found on the local network.").dim()
+            ),
+            1 => {
+                let device = &discovered[0];
+                println!(
+                    "  {} {}",
+                    style("found:").dim(),
+                    style(format_discovered_device(device)).green()
+                );
+            }
+            count => {
+                println!(
+                    "  {} {}",
+                    style("found:").dim(),
+                    style(format!("{count} ScalarWebAPI devices")).green()
+                );
+                for device in &discovered {
+                    println!("    {}", style(format_discovered_device(device)).green());
+                }
             }
         }
+        if !discovered.is_empty() {
+            return Ok(discovered);
+        }
+        let retry = Confirm::new()
+            .with_prompt("Search the local network again?")
+            .default(true)
+            .interact()
+            .map_err(|err| {
+                RustyJackError::Config(format!("ScalarWebAPI discovery prompt failed: {err}"))
+            })?;
+        if !retry {
+            return Ok(discovered);
+        }
     }
-    Ok(discovered)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
