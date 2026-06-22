@@ -5,8 +5,9 @@ use crate::coreaudio::AudioHal;
 use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
     append_scalar_webapi_to_config_json, format_scalar_webapi_triggers_for_display,
-    maybe_prompt_scalar_webapi_wake_triggers, prompt_add_scalar_webapi_device,
-    prompt_scalar_webapi_host_selection,
+    maybe_prompt_scalar_webapi_speaker_input, maybe_prompt_scalar_webapi_wake_triggers,
+    prompt_add_scalar_webapi_device, prompt_scalar_webapi_host_selection,
+    prompt_scalar_webapi_speaker_input,
 };
 use crate::RustyJackError;
 use dialoguer::console::style;
@@ -323,7 +324,7 @@ fn reconfigure_existing_config(
             && scalar_webapi_enabled
             && Confirm::new()
                 .with_prompt(q(
-                    "Reconfigure ScalarWebAPI settings (host, Mac output, triggers)?",
+                    "Reconfigure ScalarWebAPI settings (host, Mac output, speaker input, triggers)?",
                 ))
                 .default(false)
                 .interact()
@@ -410,6 +411,15 @@ fn reconfigure_existing_config(
                 crate::scalar_webapi_device::prompt_scalar_webapi_wake_triggers(&current_triggers)?;
             updated["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
             changes.push("updated ScalarWebAPI wake triggers".into());
+
+            let mac_output = devices
+                .iter()
+                .find(|device| device.uid == mac_output_uid)
+                .cloned()
+                .unwrap_or_else(|| preferred.clone());
+            let speaker_input = prompt_scalar_webapi_speaker_input(&host, &mac_output)?;
+            updated["scalar_webapi_device"]["speaker_input"] = serde_json::json!(speaker_input);
+            changes.push("updated ScalarWebAPI speaker input".into());
         } else if !scalar_webapi_enabled
             && reconfigure_scalar
             && Confirm::new()
@@ -766,6 +776,10 @@ fn update_existing_config_value(
         if let Some(triggers) = maybe_prompt_scalar_webapi_wake_triggers(value)? {
             value["scalar_webapi_device"]["triggers"] = serde_json::json!(triggers);
             changes.push("updated ScalarWebAPI wake triggers".into());
+        }
+        if let Some(speaker_input) = maybe_prompt_scalar_webapi_speaker_input(value, devices)? {
+            value["scalar_webapi_device"]["speaker_input"] = serde_json::json!(speaker_input);
+            changes.push("configured ScalarWebAPI speaker input".into());
         }
     }
 

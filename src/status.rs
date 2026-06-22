@@ -98,6 +98,16 @@ pub struct ScalarWebApiStatus {
     pub mac_output_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub power_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_input_uses_default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_speaker_input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_input_matches: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_input_error: Option<String>,
 }
 
 /// Build a status snapshot from a device list and optional config.
@@ -169,6 +179,11 @@ fn build_scalar_webapi_status(
             .or_else(|| api.mac_output.uid.clone()),
         mac_output_label: link.and_then(|link| link.mac_output_label.clone()),
         power_status: scalar_webapi_device::current_power_status_for_display(api),
+        speaker_input: scalar_webapi_device::configured_speaker_input_label(api),
+        speaker_input_uses_default: Some(scalar_webapi_device::speaker_input_uses_default(api)),
+        active_speaker_input: scalar_webapi_device::current_scalar_webapi_speaker_input(api),
+        speaker_input_matches: scalar_webapi_device::speaker_input_matches_config(api),
+        speaker_input_error: scalar_webapi_device::configured_speaker_input_validation_error(api),
     })
 }
 
@@ -215,6 +230,28 @@ fn format_scalar_webapi_block(status: &ScalarWebApiStatus) -> String {
                 .unwrap_or_else(|| "unknown".into()),
         ),
     ]);
+
+    if let Some(input) = &status.speaker_input {
+        let label = if status.speaker_input_uses_default == Some(true) {
+            format!("{input} (default)")
+        } else {
+            input.clone()
+        };
+        rows.push(("configured input", label));
+    }
+    if let Some(active_input) = &status.active_speaker_input {
+        rows.push(("active input", active_input.clone()));
+    }
+    if let Some(error) = &status.speaker_input_error {
+        rows.push(("input error", error.clone()));
+    }
+    if let Some(matches) = status.speaker_input_matches {
+        rows.push((
+            "input matches",
+            if matches { "yes".into() } else { "no".into() },
+        ));
+    }
+
     let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     format_labeled_section("ScalarWebAPI", "  ", &borrowed)
 }
@@ -889,6 +926,11 @@ mod tests {
             mac_output_uid: Some("BuiltInHeadphoneOutputDevice".into()),
             mac_output_label: Some("External Headphones".into()),
             power_status: Some("active".into()),
+            speaker_input: Some("Audio in".into()),
+            speaker_input_uses_default: Some(false),
+            active_speaker_input: Some("Audio in".into()),
+            speaker_input_matches: Some(true),
+            speaker_input_error: None,
         });
         assert!(block.contains("model"));
         assert!(block.contains("The Lair"));
@@ -928,6 +970,7 @@ mod tests {
                 wake_debounce_ms: 30_000,
                 request_timeout_ms: 3_000,
                 require_quick_start: true,
+                speaker_input: None,
             }),
             ..Default::default()
         };

@@ -1,11 +1,12 @@
 //! Interactive ScalarWebAPI device setup during `rusty-jack install`.
 
-use crate::config::ScalarWebApiDeviceConfig;
+use crate::config::{ScalarWebApiDeviceConfig, DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT};
 use crate::output_device::OutputDevice;
 use crate::scalar_webapi_device::{
     discover_scalar_webapi_devices_on_lan, has_all_default_wake_triggers,
-    DiscoveredScalarWebApiDevice, DEFAULT_WAKE_TRIGGERS, KEYBOARD_TRIGGER, MOUSE_TRIGGER,
-    OUTPUT_SELECTED_TRIGGER,
+    list_scalar_webapi_speaker_inputs, validate_speaker_input_name,
+    validate_speaker_input_name_in_list, DiscoveredScalarWebApiDevice, ScalarWebApiSpeakerInput,
+    DEFAULT_WAKE_TRIGGERS, KEYBOARD_TRIGGER, MOUSE_TRIGGER, OUTPUT_SELECTED_TRIGGER,
 };
 use crate::transport::TransportKind;
 use crate::RustyJackError;
@@ -35,6 +36,7 @@ pub struct ScalarWebApiInstallSelection {
     pub mac_output_uid: String,
     pub mac_output_name: String,
     pub triggers: Vec<String>,
+    pub speaker_input: String,
 }
 
 /// Ask whether to configure ScalarWebAPI speaker wake during install.
@@ -47,6 +49,7 @@ pub fn prompt_add_scalar_webapi_device(
     };
 
     let mac_output = prompt_mac_output_for_scalar_webapi(devices, default_mac_output)?;
+    let speaker_input = prompt_scalar_webapi_speaker_input(&host, &mac_output)?;
     let triggers = prompt_wake_triggers()?;
 
     Ok(Some(ScalarWebApiInstallSelection {
@@ -55,6 +58,7 @@ pub fn prompt_add_scalar_webapi_device(
         mac_output_uid: mac_output.uid.clone(),
         mac_output_name: mac_output.name.clone(),
         triggers,
+        speaker_input,
     }))
 }
 
@@ -363,6 +367,56 @@ fn discovered_model_label(device: &DiscoveredScalarWebApiDevice) -> String {
 }
 
 /// Offer to add missing recommended wake triggers on an existing config.
+pub fn maybe_prompt_scalar_webapi_speaker_input(
+    value: &Value,
+    devices: &[OutputDevice],
+) -> Result<Option<String>, RustyJackError> {
+    let enabled = value
+        .pointer("/scalar_webapi_device/enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if !enabled {
+        return Ok(None);
+    }
+    let has_input = value
+        .pointer("/scalar_webapi_device/speaker_input")
+        .or_else(|| value.pointer("/scalar_webapi_device/speaker_input_title"))
+        .and_then(Value::as_str)
+        .is_some_and(|name| !name.trim().is_empty());
+    if has_input {
+        return Ok(None);
+    }
+    let host = value
+        .pointer("/scalar_webapi_device/host")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| RustyJackError::Config("scalar_webapi_device.host is not set".into()))?;
+    let mac_uid = value
+        .pointer("/scalar_webapi_device/mac_output/uid")
+        .and_then(Value::as_str)
+        .filter(|uid| !crate::config::is_placeholder_uid(uid))
+        .ok_or_else(|| {
+            RustyJackError::Config("scalar_webapi_device.mac_output.uid is not set".into())
+        })?;
+    let mac_output = devices
+        .iter()
+        .find(|device| device.uid == mac_uid)
+        .cloned()
+        .ok_or_else(|| {
+            RustyJackError::Config(format!(
+                "scalar_webapi_device.mac_output.uid {mac_uid} is not a current output"
+            ))
+        })?;
+
+    println!();
+    println!(
+        "{}",
+        style("ScalarWebAPI speaker input is not configured yet.").yellow()
+    );
+    Ok(Some(prompt_scalar_webapi_speaker_input(host, &mac_output)?))
+}
+
 pub fn maybe_prompt_scalar_webapi_wake_triggers(
     value: &Value,
 ) -> Result<Option<Vec<String>>, RustyJackError> {
@@ -433,6 +487,7 @@ pub fn scalar_webapi_install_to_config(
         wake_debounce_ms: 5_000,
         request_timeout_ms: 3_000,
         require_quick_start: true,
+        speaker_input: Some(selection.speaker_input.clone()),
     }
 }
 
@@ -453,6 +508,7 @@ pub fn append_scalar_webapi_to_config_json(
         "wake_debounce_ms": api.wake_debounce_ms,
         "request_timeout_ms": api.request_timeout_ms,
         "require_quick_start": api.require_quick_start,
+        "speaker_input": api.speaker_input,
     });
 }
 
@@ -518,6 +574,190 @@ fn prompt_mac_output_for_scalar_webapi(
             RustyJackError::Config(format!("ScalarWebAPI Mac output prompt failed: {err}"))
         })?;
     Ok(candidates[selection].clone())
+}
+
+pub fn prompt_scalar_webapi_speaker_input(
+    host: &str,
+    mac_output: &OutputDevice,
+) -> Result<String, RustyJackError> {
+    println!();
+    println!("{}", style("ScalarWebAPI speaker input").cyan());
+    let api = temp_scalar_webapi_api_for_install(host, mac_output);
+
+    let inputs = match list_scalar_webapi_speaker_inputs(&api) {
+        Ok(inputs) => inputs,
+        Err(err) => {
+            println!(
+                "{}",
+                style(format!("Could not list speaker inputs: {err}")).yellow()
+            );
+            return prompt_manual_scalar_webapi_speaker_input(&api);
+        }
+    };
+
+    if inputs.is_empty() {
+        println!(
+            "{}",
+            style("Speaker did not report any selectable inputs.").yellow()
+        );
+        return prompt_manual_scalar_webapi_speaker_input(&api);
+    }
+
+    if inputs.len() == 1 {
+        let input = &inputs[0];
+        let keep = Confirm::new()
+            .with_prompt(format!("Use speaker input \"{}\"?", input.title))
+            .default(true)
+            .interact()
+            .map_err(|err| {
+                RustyJackError::Config(format!("ScalarWebAPI speaker input prompt failed: {err}"))
+            })?;
+        if keep {
+            return Ok(input.title.clone());
+        }
+        return default_speaker_input_choice("declined the only reported input", &inputs);
+    }
+
+    let default_index = default_speaker_input_index(&inputs, mac_output);
+    let labels = inputs
+        .iter()
+        .map(|input| input.title.clone())
+        .collect::<Vec<_>>();
+    let selection = Select::new()
+        .with_prompt(
+            style(concat!(
+                "Which speaker input matches the Mac connection?\n",
+                "Pick the input the speaker should listen on when this Mac output is active."
+            ))
+            .cyan()
+            .to_string(),
+        )
+        .items(&labels)
+        .default(default_index)
+        .interact()
+        .map_err(|err| {
+            RustyJackError::Config(format!("ScalarWebAPI speaker input prompt failed: {err}"))
+        })?;
+    Ok(inputs[selection].title.clone())
+}
+
+fn default_speaker_input_choice(
+    reason: &str,
+    inputs: &[ScalarWebApiSpeakerInput],
+) -> Result<String, RustyJackError> {
+    validate_speaker_input_name_in_list(DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT, inputs)?;
+    println!(
+        "{}",
+        style(format!(
+            "Using default speaker input \"{DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT}\" ({reason})."
+        ))
+        .yellow()
+    );
+    Ok(DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT.into())
+}
+
+fn temp_scalar_webapi_api_for_install(
+    host: &str,
+    mac_output: &OutputDevice,
+) -> ScalarWebApiDeviceConfig {
+    ScalarWebApiDeviceConfig {
+        enabled: true,
+        model: "ScalarWebAPI device".into(),
+        host: Some(host.to_string()),
+        port: 10_000,
+        path: concat!("so", "ny").to_string(),
+        mac_output: crate::config::DeviceSelectorConfig {
+            name: Some(mac_output.name.clone()),
+            uid: Some(mac_output.uid.clone()),
+        },
+        triggers: vec![],
+        wake_debounce_ms: 5_000,
+        request_timeout_ms: INSTALL_DISCOVERY_TIMEOUT_MS,
+        require_quick_start: true,
+        speaker_input: None,
+    }
+}
+
+fn prompt_manual_scalar_webapi_speaker_input(
+    api: &ScalarWebApiDeviceConfig,
+) -> Result<String, RustyJackError> {
+    let configure = Confirm::new()
+        .with_prompt("Enter a speaker input name manually?")
+        .default(false)
+        .interact()
+        .map_err(|err| {
+            RustyJackError::Config(format!("ScalarWebAPI speaker input prompt failed: {err}"))
+        })?;
+    if !configure {
+        let inputs = list_scalar_webapi_speaker_inputs(api).unwrap_or_default();
+        if inputs.is_empty() {
+            return validate_speaker_input_name(api, DEFAULT_SCALAR_WEBAPI_SPEAKER_INPUT)
+                .map(|input| input.title);
+        }
+        return default_speaker_input_choice("manual entry skipped", &inputs);
+    }
+
+    let available = list_scalar_webapi_speaker_inputs(api).ok();
+    loop {
+        let name: String = Input::new()
+            .with_prompt("Speaker input name (must match the device label)")
+            .interact_text()
+            .map_err(|err| {
+                RustyJackError::Config(format!("ScalarWebAPI speaker input prompt failed: {err}"))
+            })?;
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        match validate_speaker_input_name(api, &name) {
+            Ok(input) => return Ok(input.title),
+            Err(err) => {
+                println!("{}", style(err.to_string()).yellow());
+                if let Some(inputs) = available.as_ref() {
+                    println!(
+                        "Available inputs: {}",
+                        inputs
+                            .iter()
+                            .map(|input| input.title.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn default_speaker_input_index(
+    inputs: &[ScalarWebApiSpeakerInput],
+    mac_output: &OutputDevice,
+) -> usize {
+    let prefer_hdmi = matches!(
+        mac_output.transport,
+        TransportKind::Hdmi | TransportKind::DisplayPort | TransportKind::Thunderbolt
+    );
+    let prefer_analog = matches!(
+        mac_output.transport,
+        TransportKind::BuiltIn | TransportKind::Unknown
+    ) && mac_output.name.to_ascii_lowercase().contains("headphone");
+
+    if prefer_hdmi {
+        if let Some(index) = inputs.iter().position(|input| {
+            input.uri.to_ascii_lowercase().contains("hdmi")
+                || input.title.to_ascii_lowercase().contains("hdmi")
+        }) {
+            return index;
+        }
+    }
+    if prefer_analog {
+        if let Some(index) = inputs.iter().position(|input| {
+            input.uri.to_ascii_lowercase().contains("line")
+                || input.title.to_ascii_lowercase().contains("audio in")
+        }) {
+            return index;
+        }
+    }
+    0
 }
 
 fn prompt_scalar_mac_connection_kind(

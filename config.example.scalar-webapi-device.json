@@ -18,7 +18,8 @@
     "request_timeout_ms": 3000,
     "require_quick_start": true,
     "triggers": ["keyboard", "mouse", "output_selected"],
-    "wake_debounce_ms": 5000
+    "wake_debounce_ms": 5000,
+    "speaker_input": "Audio in"
   },
   "switch_delay_ms": 500,
   "version": 1
