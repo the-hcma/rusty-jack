@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.10.1...rusty-jack-v0.11.0) (2026-06-22)
+
+
+### Features
+
+* configure ScalarWebAPI speaker input by human-readable name ([#150](https://github.com/the-hcma/rusty-jack/issues/150)) ([bb94bc1](https://github.com/the-hcma/rusty-jack/commit/bb94bc18c5497994a7646d232462350b23fff85b))
+
+
+### Bug Fixes
+
+* wait for release PR CI before merge prompt ([#149](https://github.com/the-hcma/rusty-jack/issues/149)) ([c28ad83](https://github.com/the-hcma/rusty-jack/commit/c28ad83c083e030bf937ba06d9c7a5cbe65ca80e))
+
 ## [0.10.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.10.0...rusty-jack-v0.10.1) (2026-06-22)
 
 
