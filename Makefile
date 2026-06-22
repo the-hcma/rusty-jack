@@ -7,7 +7,7 @@
 # If the active rustup toolchain is incomplete, check-cargo offers to repair it.
 # Non-interactive builds can pass REPAIR_RUST=1 to repair without prompting.
 
-.PHONY: all build build-release check-cargo clean clippy do-release driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal update-release-pr upgrade validate-driver-bundle
+.PHONY: all build build-release check-cargo check-makefile clean clippy do-release driver-bundle fmt install list list-hdmi package publish-release release render-homebrew-formula sign-driver-bundle test uninstall universal update-release-pr upgrade validate-driver-bundle
 
 export MACOSX_DEPLOYMENT_TARGET ?= 12.0
 export PATH := $(HOME)/.cargo/bin:$(PATH)
@@ -41,12 +41,11 @@ DRIVER_BUNDLE_SOURCES := \
 
 HOMEBREW_FORMULA_TEMPLATE := packaging/homebrew/rusty-jack.formula.in
 
-all: test build
+# Top-level .PHONY entries and target rule blocks must stay in lexicographic order by target name.
 
-build: check-cargo
-	$(CARGO) build
-
-build-release: $(RELEASE_BIN)
+$(DRIVER_BUNDLE_STAMP): $(DRIVER_BUNDLE_SOURCES)
+	./scripts/build-driver-bundle "$(DRIVER_BUNDLE_OUTPUT)"
+	@touch "$@"
 
 $(GIT_COMMIT_STAMP):
 	@mkdir -p target
@@ -55,6 +54,13 @@ $(GIT_COMMIT_STAMP):
 $(RELEASE_BIN): $(RUST_BUILD_INPUTS) $(GIT_COMMIT_STAMP)
 	@$(MAKE) check-cargo
 	$(CARGO) build --release
+
+all: test build
+
+build: check-cargo
+	$(CARGO) build
+
+build-release: $(RELEASE_BIN)
 
 check-cargo:
 	@command -v $(CARGO) >/dev/null 2>&1 || { \
@@ -108,17 +114,20 @@ check-cargo:
 		printf 'Rust toolchain repair complete.\n\n'; \
 	fi
 
+check-makefile:
+	@./scripts/check-makefile-target-order
+
 clean: check-cargo
 	$(CARGO) clean
 
 clippy: check-cargo
 	$(CARGO) clippy --all-targets -- -D warnings
 
-driver-bundle: $(DRIVER_BUNDLE_STAMP)
+do-release:
+	@chmod +x scripts/do-release scripts/update-release-pr scripts/publish-release scripts/release-lib
+	@./scripts/do-release
 
-$(DRIVER_BUNDLE_STAMP): $(DRIVER_BUNDLE_SOURCES)
-	./scripts/build-driver-bundle "$(DRIVER_BUNDLE_OUTPUT)"
-	@touch "$@"
+driver-bundle: $(DRIVER_BUNDLE_STAMP)
 
 fmt: check-cargo
 	$(CARGO) fmt --all
@@ -143,20 +152,26 @@ list-hdmi: build
 
 package: driver-bundle release
 
-release: check-cargo
-	$(CARGO) build --release
-
 publish-release:
 	@chmod +x scripts/publish-release scripts/release-lib
 	@./scripts/publish-release
 
-update-release-pr:
-	@chmod +x scripts/update-release-pr scripts/release-lib
-	@./scripts/update-release-pr
+release: check-cargo
+	$(CARGO) build --release
 
-do-release:
-	@chmod +x scripts/do-release scripts/update-release-pr scripts/publish-release scripts/release-lib
-	@./scripts/do-release
+render-homebrew-formula:
+	@test -n '$(ARCHIVE_URL)' || { echo 'ARCHIVE_URL is required' >&2; exit 1; }
+	@test -n '$(ARCHIVE_SHA256)' || { echo 'ARCHIVE_SHA256 is required' >&2; exit 1; }
+	@test -n '$(GIT_COMMIT)' || GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); \
+	sed \
+	  -e 's|@ARCHIVE_URL@|$(ARCHIVE_URL)|g' \
+	  -e 's|@ARCHIVE_SHA256@|$(ARCHIVE_SHA256)|g' \
+	  -e "s|@GIT_COMMIT@|$${GIT_COMMIT:-unknown}|g" \
+	  '$(HOMEBREW_FORMULA_TEMPLATE)'
+
+sign-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/sign-driver-bundle
+	chmod +x scripts/sign-driver-bundle
+	./scripts/sign-driver-bundle "$(DRIVER_BUNDLE)"
 
 test: check-cargo
 	$(CARGO) test --all-targets
@@ -191,6 +206,10 @@ uninstall: check-cargo
 universal: check-cargo
 	./scripts/build-universal
 
+update-release-pr:
+	@chmod +x scripts/update-release-pr scripts/release-lib
+	@./scripts/update-release-pr
+
 upgrade: check-cargo
 	@mkdir -p "$(INSTALL_BIN_DIR)"
 	@mkdir -p "$(INSTALL_SHARE_DIR)"
@@ -208,19 +227,5 @@ upgrade: check-cargo
 	$(MAKE) driver-bundle DRIVER_BUNDLE_OUTPUT="$(INSTALL_SHARE_DIR)"; \
 	RUSTY_JACK_UPGRADE_PREVIOUS_VERSION="$$PREV_VER" rusty-jack upgrade --force
 
-render-homebrew-formula:
-	@test -n '$(ARCHIVE_URL)' || { echo 'ARCHIVE_URL is required' >&2; exit 1; }
-	@test -n '$(ARCHIVE_SHA256)' || { echo 'ARCHIVE_SHA256 is required' >&2; exit 1; }
-	@test -n '$(GIT_COMMIT)' || GIT_COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); \
-	sed \
-	  -e 's|@ARCHIVE_URL@|$(ARCHIVE_URL)|g' \
-	  -e 's|@ARCHIVE_SHA256@|$(ARCHIVE_SHA256)|g' \
-	  -e "s|@GIT_COMMIT@|$${GIT_COMMIT:-unknown}|g" \
-	  '$(HOMEBREW_FORMULA_TEMPLATE)'
-
 validate-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/validate-driver-bundle
 	./scripts/validate-driver-bundle "$(DRIVER_BUNDLE)"
-
-sign-driver-bundle: $(DRIVER_BUNDLE_STAMP) scripts/sign-driver-bundle
-	chmod +x scripts/sign-driver-bundle
-	./scripts/sign-driver-bundle "$(DRIVER_BUNDLE)"

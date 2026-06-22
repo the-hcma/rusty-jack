@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Verify Makefile .PHONY entries and top-level target blocks are lexicographically sorted.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MAKEFILE="${ROOT}/Makefile"
+
+if [[ ! -f "$MAKEFILE" ]]; then
+  echo "error: Makefile not found: $MAKEFILE" >&2
+  exit 1
+fi
+
+is_assignment_line() {
+  local line="$1"
+  [[ "$line" =~ := ]] || [[ "$line" =~ \?= ]] || [[ "$line" =~ \+= ]]
+}
+
+collect_sorted_targets() {
+  local -n _out="$1"
+  local line target
+
+  _out=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]] ]] && continue
+    [[ "$line" =~ ^# ]] && continue
+    is_assignment_line "$line" && continue
+    [[ "$line" =~ ^\.PHONY: ]] && continue
+    [[ "$line" =~ ^([^:]+): ]] || continue
+
+    target="${BASH_REMATCH[1]}"
+    _out+=("$target")
+  done <"$MAKEFILE"
+}
+
+collect_phony_targets() {
+  local -n _out="$1"
+  local line rest target
+
+  _out=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^\.PHONY:[[:space:]]*(.*) ]] || continue
+    rest="${BASH_REMATCH[1]}"
+    for target in $rest; do
+      _out+=("$target")
+    done
+  done <"$MAKEFILE"
+}
+
+assert_lex_sorted() {
+  local label="$1"
+  shift
+  local -a items=("$@")
+  local -a sorted=()
+  local i prev curr
+
+  if ((${#items[@]} == 0)); then
+    return 0
+  fi
+
+  sorted=("${items[@]}")
+  if ! IFS=$'\n' sorted=($(printf '%s\n' "${sorted[@]}" | LC_ALL=C sort)); then
+    echo "error: failed to sort ${label}" >&2
+    exit 1
+  fi
+
+  prev="${sorted[0]}"
+  for ((i = 1; i < ${#sorted[@]}; i++)); do
+    curr="${sorted[i]}"
+    if [[ "$prev" > "$curr" ]]; then
+      echo "error: Makefile ${label} are not in lexicographic order" >&2
+      echo "  out of order: ${prev} should come after ${curr}" >&2
+      exit 1
+    fi
+    prev="$curr"
+  done
+
+  prev="${items[0]}"
+  for ((i = 1; i < ${#items[@]}; i++)); do
+    curr="${items[i]}"
+    if [[ "$prev" > "$curr" ]]; then
+      echo "error: Makefile ${label} are not in lexicographic order" >&2
+      echo "  out of order: ${prev} should come after ${curr}" >&2
+      exit 1
+    fi
+    prev="$curr"
+  done
+}
+
+targets=()
+phony_targets=()
+collect_sorted_targets targets
+collect_phony_targets phony_targets
+
+assert_lex_sorted "top-level target blocks" "${targets[@]}"
+assert_lex_sorted ".PHONY entries" "${phony_targets[@]}"

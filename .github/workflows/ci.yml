@@ -85,6 +85,9 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
 
+      - name: check Makefile target order
+        run: ./scripts/check-makefile-target-order
+
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
 
