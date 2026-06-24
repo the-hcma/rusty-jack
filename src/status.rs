@@ -1043,6 +1043,7 @@ mod tests {
         assert!(block.contains("12.4s (threshold 60.0s)"));
         assert!(block.contains("console user"));
         assert!(block.contains("hcma"));
+        assert!(block.contains("event=KeyDown"));
         assert!(block.contains("keyboard, mouse"));
     }
 
