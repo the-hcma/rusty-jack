@@ -29,6 +29,8 @@ pub struct ActivitySnapshot {
     pub last_became_active_console_user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_became_active_daemon_user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_became_active_event: Option<String>,
 }
 
 fn state_dir() -> Option<PathBuf> {
@@ -165,6 +167,7 @@ mod tests {
             last_became_active_at_unix_seconds: Some(1_713_999_000),
             last_became_active_console_user: Some("hcma".into()),
             last_became_active_daemon_user: Some("hcma".into()),
+            last_became_active_event: Some("KeyDown".into()),
         };
         let raw = serde_json::to_string(&value).unwrap();
         let parsed: ActivitySnapshot = serde_json::from_str(&raw).unwrap();

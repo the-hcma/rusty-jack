@@ -258,6 +258,7 @@ pub struct ScalarWebApiDeviceWakeResult {
     pub status_code: u16,
     pub previous_status: Option<String>,
     pub trigger: String,
+    pub activity_event: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -429,7 +430,7 @@ pub fn wake_on_output_selected(
         return Ok(None);
     }
 
-    try_wake_scalar_webapi_device(api, OUTPUT_SELECTED_TRIGGER, true)
+    try_wake_scalar_webapi_device(api, OUTPUT_SELECTED_TRIGGER, true, None)
 }
 
 /// Log ScalarWebAPI wake failures as warnings so audio routing still succeeds.
@@ -446,6 +447,7 @@ pub fn wake_on_activity(
     config: &Config,
     devices: &[OutputDevice],
     active_uid: &str,
+    activity_event: Option<&str>,
 ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
     let Some(api) = config.scalar_webapi_device.as_ref() else {
         return Ok(None);
@@ -461,7 +463,21 @@ pub fn wake_on_activity(
         return Ok(None);
     }
 
-    try_wake_scalar_webapi_device(api, activity_trigger_label(api), false)
+    let trigger = activity_trigger_for_wake(api, activity_event);
+    try_wake_scalar_webapi_device(api, trigger, false, activity_event)
+}
+
+fn activity_trigger_for_wake(
+    api: &ScalarWebApiDeviceConfig,
+    activity_event: Option<&str>,
+) -> &'static str {
+    if let Some(event) = activity_event {
+        let trigger = crate::activity::wake_trigger_for_activity_event(event);
+        if trigger_enabled(api, trigger) {
+            return trigger;
+        }
+    }
+    activity_trigger_label(api)
 }
 
 fn activity_trigger_label(api: &ScalarWebApiDeviceConfig) -> &'static str {
@@ -476,6 +492,7 @@ fn try_wake_scalar_webapi_device(
     api: &ScalarWebApiDeviceConfig,
     trigger: &str,
     allow_wake_without_power_status: bool,
+    activity_event: Option<&str>,
 ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
     if !crate::network::host_ready_for_scalar_webapi_wake(api.host.as_deref())? {
         return Ok(None);
@@ -538,6 +555,7 @@ fn try_wake_scalar_webapi_device(
     record_successful_wake_sent();
     result.previous_status = previous_status;
     result.trigger = trigger.into();
+    result.activity_event = activity_event.map(str::to_string);
     finish_scalar_webapi_device_wake(api, trigger, Some(result))
 }
 
@@ -594,8 +612,13 @@ pub fn warn_on_speaker_input_enforcement(
 }
 
 /// Log activity-triggered ScalarWebAPI wake failures as warnings so daemon routing still succeeds.
-pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &str) {
-    match wake_on_activity(config, devices, active_uid) {
+pub fn warn_on_activity(
+    config: &Config,
+    devices: &[OutputDevice],
+    active_uid: &str,
+    activity_event: Option<&str>,
+) {
+    match wake_on_activity(config, devices, active_uid, activity_event) {
         Ok(Some(result)) => eprintln!("{}", format_wake_message(&result)),
         Ok(None) => {}
         Err(err) => eprintln!("warning: {err}"),
@@ -605,17 +628,22 @@ pub fn warn_on_activity(config: &Config, devices: &[OutputDevice], active_uid: &
 #[must_use]
 pub fn format_wake_message(result: &ScalarWebApiDeviceWakeResult) -> String {
     let trigger = human_readable_trigger_label(&result.trigger, None);
+    let event_suffix = result
+        .activity_event
+        .as_deref()
+        .map(|event| format!(" ({event})"))
+        .unwrap_or_default();
     match result.previous_status.as_deref() {
         Some(status) if status.eq_ignore_ascii_case("standby") => format!(
-            "ScalarWebAPI wake on {trigger}: device was standby; sent setPowerStatus(active) via {}.",
+            "ScalarWebAPI wake on {trigger}{event_suffix}: device was standby; sent setPowerStatus(active) via {}.",
             result.endpoint
         ),
         Some(status) => format!(
-            "ScalarWebAPI wake on {trigger}: power was {status}; sent setPowerStatus(active) via {}.",
+            "ScalarWebAPI wake on {trigger}{event_suffix}: power was {status}; sent setPowerStatus(active) via {}.",
             result.endpoint
         ),
         None => format!(
-            "ScalarWebAPI wake on {trigger}: power status unavailable; sent setPowerStatus(active) via {}.",
+            "ScalarWebAPI wake on {trigger}{event_suffix}: power status unavailable; sent setPowerStatus(active) via {}.",
             result.endpoint
         ),
     }
@@ -841,6 +869,7 @@ fn send_wake_command_to(
         status_code,
         previous_status: None,
         trigger: String::new(),
+        activity_event: None,
     })
 }
 
@@ -1845,9 +1874,11 @@ mod tests {
             status_code: 200,
             previous_status: Some("standby".into()),
             trigger: OUTPUT_SELECTED_TRIGGER.into(),
+            activity_event: Some("KeyDown".into()),
         });
         assert!(message.contains("output device selection"));
         assert!(message.contains("standby"));
+        assert!(message.contains("(KeyDown)"));
     }
 
     #[test]
@@ -1857,6 +1888,7 @@ mod tests {
             status_code: 200,
             previous_status: None,
             trigger: KEYBOARD_TRIGGER.into(),
+            activity_event: None,
         });
         assert!(message.contains("keyboard activity"));
         assert!(message.contains("power status unavailable"));

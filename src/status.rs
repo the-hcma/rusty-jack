@@ -520,9 +520,14 @@ fn format_activity_block(snapshot: &ActivitySnapshot) -> String {
             .last_became_active_console_user
             .as_deref()
             .unwrap_or("(unknown)");
+        let event = snapshot
+            .last_became_active_event
+            .as_deref()
+            .map(|label| format!(" event={label}"))
+            .unwrap_or_default();
         rows.push((
             "last became_active",
-            format!("{} (console user {user})", format_unix_local(at)),
+            format!("{} (console user {user}){event}", format_unix_local(at)),
         ));
     } else {
         rows.push(("last became_active", "(none recorded)".into()));
@@ -1032,6 +1037,7 @@ mod tests {
             last_became_active_at_unix_seconds: Some(1_713_999_000),
             last_became_active_console_user: Some("hcma".into()),
             last_became_active_daemon_user: Some("hcma".into()),
+            last_became_active_event: Some("KeyDown".into()),
         });
         assert!(block.contains("Activity"));
         assert!(block.contains("12.4s (threshold 60.0s)"));

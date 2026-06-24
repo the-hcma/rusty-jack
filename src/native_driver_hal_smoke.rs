@@ -149,6 +149,8 @@ pub fn smoke_config_for_hdmi(devices: &[OutputDevice]) -> Result<Config, RustyJa
         activity_idle_threshold_ms: 60_000,
         activity_poll_interval_ms: 1_000,
         activity_monitor: "idle".into(),
+        activity_active_confirm_ms: 5_000,
+        activity_event_tap_include_mouse_move: false,
         preferred_device: DeviceSelectorConfig {
             name: Some(hdmi.friendly_label()),
             uid: Some(hdmi.uid.clone()),

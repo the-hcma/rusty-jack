@@ -9,6 +9,20 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Source of host idle time for the daemon.
 pub trait ActivityMonitor {
     fn idle_duration(&self) -> Result<Duration, RustyJackError>;
+
+    /// Most recent keyboard/mouse event label, when the monitor can provide one.
+    fn last_activity_event(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Map a CoreGraphics event label to the ScalarWebAPI wake trigger category.
+#[must_use]
+pub fn wake_trigger_for_activity_event(event: &str) -> &'static str {
+    match event {
+        "KeyDown" | "KeyUp" | "FlagsChanged" => KEYBOARD_TRIGGER,
+        _ => MOUSE_TRIGGER,
+    }
 }
 
 /// Platform idle-time monitor.
@@ -67,6 +81,7 @@ pub fn record_activity_poll(
     idle_threshold: Duration,
     config: &Config,
     became_active: bool,
+    activity_event: Option<&str>,
 ) -> Result<ActivitySnapshot, RustyJackError> {
     let idle_seconds = idle_duration.as_secs_f64();
     let threshold_seconds = idle_threshold.as_secs_f64();
@@ -89,12 +104,14 @@ pub fn record_activity_poll(
         last_became_active_at_unix_seconds: None,
         last_became_active_console_user: None,
         last_became_active_daemon_user: None,
+        last_became_active_event: None,
     };
 
     if became_active {
         snapshot.last_became_active_at_unix_seconds = Some(sampled_at_unix_seconds);
         snapshot.last_became_active_console_user = console_user.clone();
         snapshot.last_became_active_daemon_user = Some(daemon_user.clone());
+        snapshot.last_became_active_event = activity_event.map(str::to_string);
         tracing::info!(
             target: "daemon",
             "{}",
@@ -106,6 +123,7 @@ pub fn record_activity_poll(
                 previous.last_became_active_at_unix_seconds;
             snapshot.last_became_active_console_user = previous.last_became_active_console_user;
             snapshot.last_became_active_daemon_user = previous.last_became_active_daemon_user;
+            snapshot.last_became_active_event = previous.last_became_active_event.clone();
         }
         tracing::debug!(
             target: "daemon",
@@ -136,10 +154,17 @@ pub fn format_activity_log_line(snapshot: &ActivitySnapshot, event: ActivityLogE
         snapshot.triggers.join(",")
     };
     match event {
-        ActivityLogEvent::IdleToActiveTransition => format!(
-            "[activity] idle→active transition: user input resumed after ≥{:.1}s without keyboard/mouse; idle_now={:.1}s console_user={console} daemon_user={} scalar_wake_triggers={triggers}",
-            snapshot.threshold_seconds, snapshot.idle_seconds, snapshot.daemon_user
-        ),
+        ActivityLogEvent::IdleToActiveTransition => {
+            let event = snapshot
+                .last_became_active_event
+                .as_deref()
+                .map(|label| format!(" event={label}"))
+                .unwrap_or_default();
+            format!(
+                "[activity] idle→active transition: user input resumed after ≥{:.1}s without keyboard/mouse; idle_now={:.1}s console_user={console} daemon_user={}{event} scalar_wake_triggers={triggers}",
+                snapshot.threshold_seconds, snapshot.idle_seconds, snapshot.daemon_user
+            )
+        }
         ActivityLogEvent::Poll => {
             let state = if snapshot.is_idle { "idle" } else { "active" };
             format!(
@@ -283,10 +308,20 @@ mod tests {
             last_became_active_at_unix_seconds: Some(1),
             last_became_active_console_user: Some("hcma".into()),
             last_became_active_daemon_user: Some("hcma".into()),
+            last_became_active_event: Some("KeyDown".into()),
         };
         assert_eq!(
             format_activity_log_line(&snapshot, ActivityLogEvent::IdleToActiveTransition),
-            "[activity] idle→active transition: user input resumed after ≥60.0s without keyboard/mouse; idle_now=0.1s console_user=hcma daemon_user=hcma scalar_wake_triggers=keyboard,mouse"
+            "[activity] idle→active transition: user input resumed after ≥60.0s without keyboard/mouse; idle_now=0.1s console_user=hcma daemon_user=hcma event=KeyDown scalar_wake_triggers=keyboard,mouse"
+        );
+    }
+
+    #[test]
+    fn test_wake_trigger_for_activity_event() {
+        assert_eq!(wake_trigger_for_activity_event("KeyDown"), KEYBOARD_TRIGGER);
+        assert_eq!(
+            wake_trigger_for_activity_event("LeftMouseDown"),
+            MOUSE_TRIGGER
         );
     }
 
@@ -303,6 +338,7 @@ mod tests {
             last_became_active_at_unix_seconds: None,
             last_became_active_console_user: None,
             last_became_active_daemon_user: None,
+            last_became_active_event: None,
         };
         assert_eq!(
             format_activity_log_line(&snapshot, ActivityLogEvent::Poll),

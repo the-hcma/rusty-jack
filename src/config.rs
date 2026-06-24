@@ -152,6 +152,14 @@ pub struct Config {
     /// Activity source for ScalarWebAPI wake triggers: `idle` (default) or `event_tap`.
     #[serde(default = "default_activity_monitor")]
     pub activity_monitor: String,
+    /// How long activity must stay below `activity_idle_threshold_ms` before an
+    /// idle→active transition counts. `0` disables confirmation.
+    #[serde(default = "default_activity_active_confirm_ms")]
+    pub activity_active_confirm_ms: u64,
+    /// When using `event_tap`, count `MouseMoved` events as activity. Defaults to
+    /// false to reduce Bluetooth pointer jitter false wakes.
+    #[serde(default)]
+    pub activity_event_tap_include_mouse_move: bool,
     #[serde(default)]
     pub preferred_device: DeviceSelectorConfig,
     /// Legacy field; use `preferred_device.uid` instead.
@@ -198,6 +206,10 @@ fn default_activity_poll_interval_ms() -> u64 {
     1_000
 }
 
+fn default_activity_active_confirm_ms() -> u64 {
+    5_000
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -208,6 +220,8 @@ impl Default for Config {
             activity_idle_threshold_ms: default_activity_idle_threshold_ms(),
             activity_poll_interval_ms: default_activity_poll_interval_ms(),
             activity_monitor: default_activity_monitor(),
+            activity_active_confirm_ms: default_activity_active_confirm_ms(),
+            activity_event_tap_include_mouse_move: false,
             preferred_device: DeviceSelectorConfig::default(),
             preferred_device_uid: None,
             fallback_uids: Vec::new(),
@@ -485,6 +499,8 @@ mod tests {
         assert_eq!(config.switch_delay_ms, 500);
         assert_eq!(config.activity_idle_threshold_ms, 60_000);
         assert_eq!(config.activity_poll_interval_ms, 1_000);
+        assert_eq!(config.activity_active_confirm_ms, 5_000);
+        assert!(!config.activity_event_tap_include_mouse_move);
     }
 
     #[test]
