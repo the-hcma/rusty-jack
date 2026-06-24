@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.1...rusty-jack-v0.11.2) (2026-06-24)
+
+
+### Bug Fixes
+
+* address event tap review feedback on PR [#158](https://github.com/the-hcma/rusty-jack/issues/158) ([#159](https://github.com/the-hcma/rusty-jack/issues/159)) ([46868af](https://github.com/the-hcma/rusty-jack/commit/46868afcecb5031839778f19b03f93d2d1f607eb))
+* narrow event tap activity monitor and debounce idle wakes ([#158](https://github.com/the-hcma/rusty-jack/issues/158)) ([5ee7fc9](https://github.com/the-hcma/rusty-jack/commit/5ee7fc91e7760eb2cb95cedeedebf03077741ac6))
+
 ## [0.11.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.0...rusty-jack-v0.11.1) (2026-06-22)
 
 
