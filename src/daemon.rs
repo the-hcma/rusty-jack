@@ -61,7 +61,11 @@ pub struct DaemonState {
 enum ActivityPhase {
     Unknown,
     Idle,
-    ConfirmingActive { since: Instant },
+    ConfirmingActive {
+        since: Instant,
+        last_idle_duration: Duration,
+        saw_fresh_activity: bool,
+    },
     Active,
 }
 
@@ -119,16 +123,33 @@ impl DaemonState {
                     self.activity_phase = ActivityPhase::Active;
                     true
                 } else {
-                    self.activity_phase = ActivityPhase::ConfirmingActive { since: now };
+                    self.activity_phase = ActivityPhase::ConfirmingActive {
+                        since: now,
+                        last_idle_duration: idle_duration,
+                        saw_fresh_activity: false,
+                    };
                     false
                 }
             }
-            ActivityPhase::ConfirmingActive { since } => {
-                if confirm_duration.is_zero() || now.duration_since(since) >= confirm_duration {
+            ActivityPhase::ConfirmingActive {
+                since,
+                last_idle_duration,
+                mut saw_fresh_activity,
+            } => {
+                if idle_duration < last_idle_duration {
+                    saw_fresh_activity = true;
+                }
+                if confirm_duration.is_zero()
+                    || (now.duration_since(since) >= confirm_duration && saw_fresh_activity)
+                {
                     self.activity_phase = ActivityPhase::Active;
                     true
                 } else {
-                    self.activity_phase = ActivityPhase::ConfirmingActive { since };
+                    self.activity_phase = ActivityPhase::ConfirmingActive {
+                        since,
+                        last_idle_duration: idle_duration,
+                        saw_fresh_activity,
+                    };
                     false
                 }
             }
@@ -1756,6 +1777,35 @@ mod tests {
         assert!(
             !state
                 .observe_activity(Duration::from_secs(1), threshold, Duration::ZERO)
+                .became_active
+        );
+    }
+
+    #[test]
+    fn test_activity_confirm_requires_fresh_event_during_window() {
+        let mut state = DaemonState::new();
+        let threshold = Duration::from_secs(60);
+        let confirm = Duration::from_millis(200);
+
+        assert!(
+            !state
+                .observe_activity(Duration::from_secs(90), threshold, confirm)
+                .became_active
+        );
+        assert!(
+            !state
+                .observe_activity(Duration::from_millis(50), threshold, confirm)
+                .became_active
+        );
+        thread::sleep(confirm + Duration::from_millis(50));
+        assert!(
+            !state
+                .observe_activity(Duration::from_secs(1), threshold, confirm)
+                .became_active
+        );
+        assert!(
+            state
+                .observe_activity(Duration::from_millis(50), threshold, confirm)
                 .became_active
         );
     }

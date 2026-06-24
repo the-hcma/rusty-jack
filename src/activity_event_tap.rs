@@ -5,6 +5,7 @@ use crate::activity::ActivityMonitor;
 use crate::config::Config;
 use crate::RustyJackError;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -121,16 +122,26 @@ impl EventTapActivityMonitor {
             last_event_unix_nanos: Arc::clone(&last_event_unix_nanos),
             last_event_label: Arc::clone(&last_event_label),
         };
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
             .name("rusty-jack-event-tap".into())
-            .spawn(move || event_tap_thread(callback_state, include_mouse_move))
+            .spawn(move || event_tap_thread(callback_state, include_mouse_move, ready_tx))
             .map_err(|err| RustyJackError::AppLaunch(format!("event tap thread failed: {err}")))?;
 
-        Ok(Self {
-            last_event_unix_nanos,
-            last_event_label,
-            _thread: thread,
-        })
+        match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => Ok(Self {
+                last_event_unix_nanos,
+                last_event_label,
+                _thread: thread,
+            }),
+            Ok(Err(err)) => Err(err),
+            Err(RecvTimeoutError::Timeout) => Err(RustyJackError::AppLaunch(
+                "event tap setup timed out".into(),
+            )),
+            Err(RecvTimeoutError::Disconnected) => Err(RustyJackError::AppLaunch(
+                "event tap thread exited before setup completed".into(),
+            )),
+        }
     }
 }
 
@@ -169,9 +180,13 @@ fn now_unix_nanos() -> u64 {
 }
 
 #[cfg(target_os = "macos")]
-fn event_tap_thread(state: EventTapCallbackState, include_mouse_move: bool) {
-    if event_tap_run_loop(&state, include_mouse_move).is_err() {
-        tracing::warn!(target: "daemon", "[activity] event tap thread exited");
+fn event_tap_thread(
+    state: EventTapCallbackState,
+    include_mouse_move: bool,
+    ready_tx: SyncSender<Result<(), RustyJackError>>,
+) {
+    if let Err(err) = event_tap_run_loop(&state, include_mouse_move, ready_tx) {
+        tracing::warn!(target: "daemon", "[activity] event tap thread exited: {err}");
     }
 }
 
@@ -179,6 +194,7 @@ fn event_tap_thread(state: EventTapCallbackState, include_mouse_move: bool) {
 fn event_tap_run_loop(
     state: &EventTapCallbackState,
     include_mouse_move: bool,
+    ready_tx: SyncSender<Result<(), RustyJackError>>,
 ) -> Result<(), RustyJackError> {
     use core_foundation::base::{TCFType, TCFTypeRef};
     use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
@@ -209,10 +225,10 @@ fn event_tap_run_loop(
     const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
 
     extern "C" fn event_callback(
-        user_info: *mut c_void,
+        _proxy: *mut c_void,
         event_type: u32,
-        _event: *mut c_void,
-        _user_data: *mut c_void,
+        event: *mut c_void,
+        user_info: *mut c_void,
     ) -> *mut c_void {
         // SAFETY: `user_info` is the `EventTapCallbackState` pointer installed by this module.
         if !user_info.is_null() {
@@ -224,7 +240,7 @@ fn event_tap_run_loop(
                 *label = cg_event_type_label(event_type).into();
             }
         }
-        _event
+        event
     }
 
     let state_ptr = state as *const EventTapCallbackState as *mut c_void;
@@ -241,9 +257,10 @@ fn event_tap_run_loop(
         )
     };
     if tap.is_null() {
-        return Err(RustyJackError::AppLaunch(
-            "CGEventTapCreate returned null (grant Accessibility permission to rusty-jack)".into(),
-        ));
+        let message: String =
+            "CGEventTapCreate returned null (grant Accessibility permission to rusty-jack)".into();
+        let _ = ready_tx.send(Err(RustyJackError::AppLaunch(message.clone())));
+        return Err(RustyJackError::AppLaunch(message));
     }
 
     // SAFETY: tap is non-null and owned for this thread.
@@ -251,10 +268,12 @@ fn event_tap_run_loop(
 
     let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
     if source.is_null() {
-        return Err(RustyJackError::AppLaunch(
-            "CFMachPortCreateRunLoopSource failed for event tap".into(),
-        ));
+        let message: String = "CFMachPortCreateRunLoopSource failed for event tap".into();
+        let _ = ready_tx.send(Err(RustyJackError::AppLaunch(message.clone())));
+        return Err(RustyJackError::AppLaunch(message));
     }
+
+    let _ = ready_tx.send(Ok(()));
 
     let run_loop = CFRunLoop::get_current();
     // SAFETY: source is a valid run loop source for this thread.
