@@ -1,5 +1,8 @@
 {
+  "activity_active_confirm_ms": 5000,
+  "activity_event_tap_include_mouse_move": false,
   "activity_idle_threshold_ms": 60000,
+  "activity_monitor": "event_tap",
   "activity_poll_interval_ms": 1000,
   "auto_switch": true,
   "poll_interval_ms": 3000,

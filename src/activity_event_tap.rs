@@ -5,7 +5,7 @@ use crate::activity::ActivityMonitor;
 use crate::config::Config;
 use crate::RustyJackError;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,39 +15,129 @@ pub fn daemon_activity_monitor(config: &Config) -> Box<dyn ActivityMonitor> {
     #[cfg(target_os = "macos")]
     {
         if config.activity_monitor.eq_ignore_ascii_case("event_tap") {
-            if let Ok(monitor) = EventTapActivityMonitor::try_new() {
-                return Box::new(monitor);
+            match EventTapActivityMonitor::try_new(config.activity_event_tap_include_mouse_move) {
+                Ok(monitor) => {
+                    tracing::info!(
+                        target: "daemon",
+                        "[activity] event tap active (keyboard/mouse events only; include_mouse_move={})",
+                        config.activity_event_tap_include_mouse_move
+                    );
+                    return Box::new(monitor);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "daemon",
+                        "[activity] event tap unavailable ({err}); falling back to idle monitor"
+                    );
+                }
             }
-            tracing::warn!(
-                target: "daemon",
-                "[activity] event tap unavailable (Accessibility permission may be required); falling back to idle monitor"
-            );
         }
     }
     Box::new(crate::activity::PlatformActivityMonitor)
 }
 
+/// `CGEventMask` bit for one `CGEventType` value.
+#[must_use]
+pub const fn cg_event_mask_bit(event_type: u32) -> u64 {
+    1_u64 << event_type
+}
+
+/// CoreGraphics event types observed for keyboard and pointer activity.
+pub const K_CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
+pub const K_CG_EVENT_LEFT_MOUSE_UP: u32 = 2;
+pub const K_CG_EVENT_RIGHT_MOUSE_DOWN: u32 = 3;
+pub const K_CG_EVENT_RIGHT_MOUSE_UP: u32 = 4;
+pub const K_CG_EVENT_MOUSE_MOVED: u32 = 5;
+pub const K_CG_EVENT_LEFT_MOUSE_DRAGGED: u32 = 6;
+pub const K_CG_EVENT_RIGHT_MOUSE_DRAGGED: u32 = 7;
+pub const K_CG_EVENT_KEY_DOWN: u32 = 10;
+pub const K_CG_EVENT_KEY_UP: u32 = 11;
+pub const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+pub const K_CG_EVENT_SCROLL_WHEEL: u32 = 22;
+pub const K_CG_EVENT_OTHER_MOUSE_DOWN: u32 = 25;
+pub const K_CG_EVENT_OTHER_MOUSE_UP: u32 = 26;
+pub const K_CG_EVENT_OTHER_MOUSE_DRAGGED: u32 = 27;
+
+/// Event mask for keyboard and pointer activity used by the event tap.
+#[must_use]
+pub fn keyboard_mouse_event_mask(include_mouse_move: bool) -> u64 {
+    let keyboard = cg_event_mask_bit(K_CG_EVENT_KEY_DOWN)
+        | cg_event_mask_bit(K_CG_EVENT_KEY_UP)
+        | cg_event_mask_bit(K_CG_EVENT_FLAGS_CHANGED);
+
+    let mut mouse = cg_event_mask_bit(K_CG_EVENT_LEFT_MOUSE_DOWN)
+        | cg_event_mask_bit(K_CG_EVENT_LEFT_MOUSE_UP)
+        | cg_event_mask_bit(K_CG_EVENT_RIGHT_MOUSE_DOWN)
+        | cg_event_mask_bit(K_CG_EVENT_RIGHT_MOUSE_UP)
+        | cg_event_mask_bit(K_CG_EVENT_LEFT_MOUSE_DRAGGED)
+        | cg_event_mask_bit(K_CG_EVENT_RIGHT_MOUSE_DRAGGED)
+        | cg_event_mask_bit(K_CG_EVENT_SCROLL_WHEEL)
+        | cg_event_mask_bit(K_CG_EVENT_OTHER_MOUSE_DOWN)
+        | cg_event_mask_bit(K_CG_EVENT_OTHER_MOUSE_UP)
+        | cg_event_mask_bit(K_CG_EVENT_OTHER_MOUSE_DRAGGED);
+
+    if include_mouse_move {
+        mouse |= cg_event_mask_bit(K_CG_EVENT_MOUSE_MOVED);
+    }
+
+    keyboard | mouse
+}
+
+/// Human-readable label for a CoreGraphics `CGEventType` value.
+#[must_use]
+pub fn cg_event_type_label(event_type: u32) -> &'static str {
+    match event_type {
+        K_CG_EVENT_LEFT_MOUSE_DOWN => "LeftMouseDown",
+        K_CG_EVENT_LEFT_MOUSE_UP => "LeftMouseUp",
+        K_CG_EVENT_RIGHT_MOUSE_DOWN => "RightMouseDown",
+        K_CG_EVENT_RIGHT_MOUSE_UP => "RightMouseUp",
+        K_CG_EVENT_MOUSE_MOVED => "MouseMoved",
+        K_CG_EVENT_LEFT_MOUSE_DRAGGED => "LeftMouseDragged",
+        K_CG_EVENT_RIGHT_MOUSE_DRAGGED => "RightMouseDragged",
+        K_CG_EVENT_KEY_DOWN => "KeyDown",
+        K_CG_EVENT_KEY_UP => "KeyUp",
+        K_CG_EVENT_FLAGS_CHANGED => "FlagsChanged",
+        K_CG_EVENT_SCROLL_WHEEL => "ScrollWheel",
+        K_CG_EVENT_OTHER_MOUSE_DOWN => "OtherMouseDown",
+        K_CG_EVENT_OTHER_MOUSE_UP => "OtherMouseUp",
+        K_CG_EVENT_OTHER_MOUSE_DRAGGED => "OtherMouseDragged",
+        _ => "Unknown",
+    }
+}
+
 #[cfg(target_os = "macos")]
 struct EventTapActivityMonitor {
     last_event_unix_nanos: Arc<AtomicU64>,
+    last_event_label: Arc<Mutex<String>>,
     _thread: JoinHandle<()>,
 }
 
 #[cfg(target_os = "macos")]
 impl EventTapActivityMonitor {
-    fn try_new() -> Result<Self, RustyJackError> {
+    fn try_new(include_mouse_move: bool) -> Result<Self, RustyJackError> {
         let last_event_unix_nanos = Arc::new(AtomicU64::new(now_unix_nanos()));
-        let callback_state = Arc::clone(&last_event_unix_nanos);
+        let last_event_label = Arc::new(Mutex::new(String::new()));
+        let callback_state = EventTapCallbackState {
+            last_event_unix_nanos: Arc::clone(&last_event_unix_nanos),
+            last_event_label: Arc::clone(&last_event_label),
+        };
         let thread = thread::Builder::new()
             .name("rusty-jack-event-tap".into())
-            .spawn(move || event_tap_thread(callback_state))
+            .spawn(move || event_tap_thread(callback_state, include_mouse_move))
             .map_err(|err| RustyJackError::AppLaunch(format!("event tap thread failed: {err}")))?;
 
         Ok(Self {
             last_event_unix_nanos,
+            last_event_label,
             _thread: thread,
         })
     }
+}
+
+#[cfg(target_os = "macos")]
+struct EventTapCallbackState {
+    last_event_unix_nanos: Arc<AtomicU64>,
+    last_event_label: Arc<Mutex<String>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -57,6 +147,14 @@ impl ActivityMonitor for EventTapActivityMonitor {
         let now = now_unix_nanos();
         let idle_nanos = now.saturating_sub(last);
         Ok(Duration::from_nanos(idle_nanos))
+    }
+
+    fn last_activity_event(&self) -> Option<String> {
+        self.last_event_label
+            .lock()
+            .ok()
+            .filter(|label| !label.is_empty())
+            .map(|label| label.clone())
     }
 }
 
@@ -71,14 +169,17 @@ fn now_unix_nanos() -> u64 {
 }
 
 #[cfg(target_os = "macos")]
-fn event_tap_thread(last_event_unix_nanos: Arc<AtomicU64>) {
-    if event_tap_run_loop(&last_event_unix_nanos).is_err() {
+fn event_tap_thread(state: EventTapCallbackState, include_mouse_move: bool) {
+    if event_tap_run_loop(&state, include_mouse_move).is_err() {
         tracing::warn!(target: "daemon", "[activity] event tap thread exited");
     }
 }
 
 #[cfg(target_os = "macos")]
-fn event_tap_run_loop(last_event_unix_nanos: &Arc<AtomicU64>) -> Result<(), RustyJackError> {
+fn event_tap_run_loop(
+    state: &EventTapCallbackState,
+    include_mouse_move: bool,
+) -> Result<(), RustyJackError> {
     use core_foundation::base::{TCFType, TCFTypeRef};
     use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
     use std::ffi::c_void;
@@ -106,30 +207,35 @@ fn event_tap_run_loop(last_event_unix_nanos: &Arc<AtomicU64>) -> Result<(), Rust
     const K_CG_SESSION_EVENT_TAP: u32 = 1;
     const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
     const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
-    const K_CG_EVENT_MASK_FOR_ALL_EVENTS: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
     extern "C" fn event_callback(
         user_info: *mut c_void,
-        _event_type: u32,
+        event_type: u32,
         _event: *mut c_void,
         _user_data: *mut c_void,
     ) -> *mut c_void {
-        // SAFETY: `user_info` is the `Arc` pointer installed by this module.
+        // SAFETY: `user_info` is the `EventTapCallbackState` pointer installed by this module.
         if !user_info.is_null() {
-            let state = unsafe { &*(user_info as *const AtomicU64) };
-            state.store(now_unix_nanos(), Ordering::Relaxed);
+            let state = unsafe { &*(user_info as *const EventTapCallbackState) };
+            state
+                .last_event_unix_nanos
+                .store(now_unix_nanos(), Ordering::Relaxed);
+            if let Ok(mut label) = state.last_event_label.lock() {
+                *label = cg_event_type_label(event_type).into();
+            }
         }
         _event
     }
 
-    let state_ptr = Arc::as_ptr(last_event_unix_nanos) as *mut c_void;
+    let state_ptr = state as *const EventTapCallbackState as *mut c_void;
+    let event_mask = keyboard_mouse_event_mask(include_mouse_move);
     // SAFETY: CoreGraphics retains the tap for the run loop lifetime of this thread.
     let tap = unsafe {
         CGEventTapCreate(
             K_CG_SESSION_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
             K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
-            K_CG_EVENT_MASK_FOR_ALL_EVENTS,
+            event_mask,
             event_callback,
             state_ptr,
         )
@@ -165,4 +271,47 @@ fn event_tap_run_loop(last_event_unix_nanos: &Arc<AtomicU64>) -> Result<(), Rust
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keyboard_mouse_event_mask_includes_key_and_click_types() {
+        let mask = keyboard_mouse_event_mask(false);
+        assert_ne!(mask, 0);
+        assert_eq!(
+            mask & cg_event_mask_bit(K_CG_EVENT_KEY_DOWN),
+            cg_event_mask_bit(K_CG_EVENT_KEY_DOWN)
+        );
+        assert_eq!(
+            mask & cg_event_mask_bit(K_CG_EVENT_LEFT_MOUSE_DOWN),
+            cg_event_mask_bit(K_CG_EVENT_LEFT_MOUSE_DOWN)
+        );
+        assert_eq!(mask & cg_event_mask_bit(K_CG_EVENT_MOUSE_MOVED), 0);
+    }
+
+    #[test]
+    fn keyboard_mouse_event_mask_can_include_mouse_move() {
+        let mask = keyboard_mouse_event_mask(true);
+        assert_eq!(
+            mask & cg_event_mask_bit(K_CG_EVENT_MOUSE_MOVED),
+            cg_event_mask_bit(K_CG_EVENT_MOUSE_MOVED)
+        );
+    }
+
+    #[test]
+    fn keyboard_mouse_event_mask_excludes_tablet_events() {
+        let mask = keyboard_mouse_event_mask(true);
+        assert_eq!(mask & cg_event_mask_bit(23), 0);
+        assert_eq!(mask & cg_event_mask_bit(24), 0);
+        assert!(mask < u64::MAX);
+    }
+
+    #[test]
+    fn cg_event_type_label_maps_known_types() {
+        assert_eq!(cg_event_type_label(K_CG_EVENT_KEY_DOWN), "KeyDown");
+        assert_eq!(cg_event_type_label(K_CG_EVENT_SCROLL_WHEEL), "ScrollWheel");
+    }
 }

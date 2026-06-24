@@ -50,11 +50,37 @@ pub enum DaemonTickResult {
 }
 
 /// Mutable state carried between daemon polls.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DaemonState {
-    was_idle: Option<bool>,
+    activity_phase: ActivityPhase,
     network_access_observed: bool,
     network_access: Option<NetworkAccessSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityPhase {
+    Unknown,
+    Idle,
+    ConfirmingActive { since: Instant },
+    Active,
+}
+
+/// Outcome of one activity poll sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActivityObservation {
+    pub is_idle: bool,
+    pub became_active: bool,
+    pub is_confirmed_active: bool,
+}
+
+impl Default for DaemonState {
+    fn default() -> Self {
+        Self {
+            activity_phase: ActivityPhase::Unknown,
+            network_access_observed: false,
+            network_access: None,
+        }
+    }
 }
 
 impl DaemonState {
@@ -63,17 +89,57 @@ impl DaemonState {
         Self::default()
     }
 
-    /// Return true only on an idle -> active transition.
+    /// Track idle/active phases and return true only on a confirmed idle→active transition.
     #[must_use]
-    pub fn observe_idle_duration(
+    pub fn observe_activity(
         &mut self,
         idle_duration: Duration,
         idle_threshold: Duration,
-    ) -> bool {
+        confirm_duration: Duration,
+    ) -> ActivityObservation {
         let is_idle = idle_duration >= idle_threshold;
-        let became_active = matches!(self.was_idle, Some(true)) && !is_idle;
-        self.was_idle = Some(is_idle);
-        became_active
+        let now = Instant::now();
+
+        if is_idle {
+            self.activity_phase = ActivityPhase::Idle;
+            return ActivityObservation {
+                is_idle: true,
+                became_active: false,
+                is_confirmed_active: false,
+            };
+        }
+
+        let became_active = match self.activity_phase {
+            ActivityPhase::Unknown => {
+                self.activity_phase = ActivityPhase::Active;
+                false
+            }
+            ActivityPhase::Idle => {
+                if confirm_duration.is_zero() {
+                    self.activity_phase = ActivityPhase::Active;
+                    true
+                } else {
+                    self.activity_phase = ActivityPhase::ConfirmingActive { since: now };
+                    false
+                }
+            }
+            ActivityPhase::ConfirmingActive { since } => {
+                if confirm_duration.is_zero() || now.duration_since(since) >= confirm_duration {
+                    self.activity_phase = ActivityPhase::Active;
+                    true
+                } else {
+                    self.activity_phase = ActivityPhase::ConfirmingActive { since };
+                    false
+                }
+            }
+            ActivityPhase::Active => false,
+        };
+
+        ActivityObservation {
+            is_idle: false,
+            became_active,
+            is_confirmed_active: matches!(self.activity_phase, ActivityPhase::Active),
+        }
     }
 
     pub fn observe_network_access(
@@ -114,6 +180,7 @@ pub fn daemon_tick(
         config,
         reason,
         &daemon_hooks(ScalarWebApiDeviceFallbackPermission::Allowed),
+        None,
     )
 }
 
@@ -137,6 +204,7 @@ type ScalarWebApiDeviceWakeFn<'a> = dyn Fn(
         &Config,
         &[OutputDevice],
         &str,
+        Option<&str>,
     ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError>
     + 'a;
 
@@ -164,10 +232,19 @@ fn daemon_hooks(
         },
         scalar_webapi_device: ScalarWebApiDeviceHooks {
             fallback: scalar_webapi_device_fallback,
-            wake_on_output_selected: &crate::scalar_webapi_device::wake_on_output_selected,
+            wake_on_output_selected: &scalar_webapi_device_wake_on_output_selected,
             wake_on_activity: &crate::scalar_webapi_device::wake_on_activity,
         },
     }
+}
+
+fn scalar_webapi_device_wake_on_output_selected(
+    config: &Config,
+    devices: &[OutputDevice],
+    active_uid: &str,
+    _activity_event: Option<&str>,
+) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
+    crate::scalar_webapi_device::wake_on_output_selected(config, devices, active_uid)
 }
 
 fn daemon_tick_with_hooks(
@@ -175,6 +252,7 @@ fn daemon_tick_with_hooks(
     config: &Config,
     reason: DaemonTickReason,
     hooks: &DaemonHooks<'_>,
+    activity_event: Option<&str>,
 ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
     let list = hal.list_outputs()?;
     if !config.auto_switch {
@@ -201,6 +279,7 @@ fn daemon_tick_with_hooks(
                 &physical.uid,
                 hooks.scalar_webapi_device.fallback,
                 hooks.scalar_webapi_device.wake_on_activity,
+                activity_event,
             ) {
                 let result = switch_daemon_target(
                     hal,
@@ -528,7 +607,7 @@ fn scalar_webapi_device_checked_target_or_fallback(
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
     wake_on_output_selected: &ScalarWebApiDeviceWakeFn<'_>,
 ) -> RoutingTarget {
-    match wake_on_output_selected(config, devices, &target.uid) {
+    match wake_on_output_selected(config, devices, &target.uid, None) {
         Ok(Some(result)) => tracing::info!(
             target: "daemon",
             "[scalar] {}",
@@ -570,8 +649,9 @@ fn scalar_webapi_device_activity_fallback_target(
     target_uid: &str,
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
     wake_on_activity: &ScalarWebApiDeviceWakeFn<'_>,
+    activity_event: Option<&str>,
 ) -> Option<RoutingTarget> {
-    match wake_on_activity(config, devices, target_uid) {
+    match wake_on_activity(config, devices, target_uid, activity_event) {
         Ok(Some(result)) => {
             tracing::info!(
                 target: "daemon",
@@ -630,6 +710,7 @@ pub fn run_forever(
         &config,
         DaemonTickReason::Startup,
         ScalarWebApiDeviceFallbackPermission::Suppressed,
+        None,
     );
     sync_passthrough_logged(hal, &mut passthrough, &config);
     let startup_grace_started = Instant::now();
@@ -668,6 +749,7 @@ pub fn run_forever(
                                 &config,
                                 DaemonTickReason::Scheduled,
                                 scalar_webapi_device_fallback_permission(network_change),
+                                None,
                             );
                             sync_passthrough_logged(hal, &mut passthrough, &config);
                             continue;
@@ -681,23 +763,26 @@ pub fn run_forever(
             thread::sleep(activity_interval.min(remaining));
 
             let idle_threshold = Duration::from_millis(config.activity_idle_threshold_ms);
+            let confirm_duration = Duration::from_millis(config.activity_active_confirm_ms);
+            let activity_event = activity.last_activity_event();
             match activity.idle_duration() {
                 Ok(idle_duration) => {
-                    let is_idle = idle_duration >= idle_threshold;
-                    let became_active = state.observe_idle_duration(idle_duration, idle_threshold);
+                    let observation =
+                        state.observe_activity(idle_duration, idle_threshold, confirm_duration);
                     if let Err(err) = crate::activity::record_activity_poll(
                         idle_duration,
                         idle_threshold,
                         &config,
-                        became_active,
+                        observation.became_active,
+                        activity_event.as_deref(),
                     ) {
                         tracing::warn!(
                             target: "daemon",
                             "[activity] could not persist activity snapshot: {err}"
                         );
                     }
-                    if should_attempt_scalar_wake(is_idle, became_active) {
-                        let network_change = if became_active {
+                    if should_attempt_scalar_wake(&observation) {
+                        let network_change = if observation.became_active {
                             match load_config(config_path) {
                                 Ok(updated) => config = updated,
                                 Err(err) => {
@@ -713,12 +798,12 @@ pub fn run_forever(
                             NetworkAccessChange::Unchanged
                         };
                         if crate::scalar_webapi_device::wake_attempt_allowed(&config) {
-                            let tick_reason = if became_active {
+                            let tick_reason = if observation.became_active {
                                 DaemonTickReason::UserActivity
                             } else {
                                 DaemonTickReason::KeepAwake
                             };
-                            let scalar_webapi_device_fallback = if became_active {
+                            let scalar_webapi_device_fallback = if observation.became_active {
                                 scalar_webapi_device_fallback_permission(network_change)
                             } else {
                                 ScalarWebApiDeviceFallbackPermission::Suppressed
@@ -728,6 +813,11 @@ pub fn run_forever(
                                 &config,
                                 tick_reason,
                                 scalar_webapi_device_fallback,
+                                if observation.became_active {
+                                    activity_event.as_deref()
+                                } else {
+                                    None
+                                },
                             );
                             sync_passthrough_logged(hal, &mut passthrough, &config);
                         }
@@ -759,7 +849,7 @@ pub fn run_forever(
         } else {
             ScalarWebApiDeviceFallbackPermission::Suppressed
         };
-        run_tick_logged(hal, &config, reason, scalar_webapi_device_fallback);
+        run_tick_logged(hal, &config, reason, scalar_webapi_device_fallback, None);
         sync_passthrough_logged(hal, &mut passthrough, &config);
     }
 }
@@ -779,9 +869,10 @@ fn run_tick_logged(
     config: &Config,
     reason: DaemonTickReason,
     scalar_webapi_device_fallback: ScalarWebApiDeviceFallbackPermission,
+    activity_event: Option<&str>,
 ) {
     let hooks = daemon_hooks(scalar_webapi_device_fallback);
-    match daemon_tick_with_hooks(hal, config, reason, &hooks) {
+    match daemon_tick_with_hooks(hal, config, reason, &hooks, activity_event) {
         Ok((DaemonTickResult::Switched(result), list)) => {
             print_daemon_switch(&result, &list);
         }
@@ -817,10 +908,16 @@ fn print_daemon_switch(result: &ApplyResult, list: &DeviceList) {
 fn seed_activity_state(activity: &dyn ActivityMonitor, state: &mut DaemonState, config: &Config) {
     if let Ok(idle_duration) = activity.idle_duration() {
         let threshold = Duration::from_millis(config.activity_idle_threshold_ms);
-        let became_active = state.observe_idle_duration(idle_duration, threshold);
-        if let Err(err) =
-            crate::activity::record_activity_poll(idle_duration, threshold, config, became_active)
-        {
+        let confirm_duration = Duration::from_millis(config.activity_active_confirm_ms);
+        let activity_event = activity.last_activity_event();
+        let observation = state.observe_activity(idle_duration, threshold, confirm_duration);
+        if let Err(err) = crate::activity::record_activity_poll(
+            idle_duration,
+            threshold,
+            config,
+            observation.became_active,
+            activity_event.as_deref(),
+        ) {
             tracing::warn!(
                 target: "daemon",
                 "[activity] could not persist initial activity snapshot: {err}"
@@ -837,11 +934,10 @@ fn observe_current_network_access(state: &mut DaemonState) -> NetworkAccessChang
     state.observe_network_access(current_network_access_snapshot().ok().flatten())
 }
 
-/// Wake on idle→active transitions and keep trying while the Mac stays active so
-/// network speakers that drift into standby during use are re-woken.
+/// Wake on confirmed idle→active transitions and keep trying while activity is confirmed.
 #[must_use]
-fn should_attempt_scalar_wake(is_idle: bool, became_active: bool) -> bool {
-    became_active || !is_idle
+fn should_attempt_scalar_wake(observation: &ActivityObservation) -> bool {
+    observation.became_active || observation.is_confirmed_active
 }
 
 fn scalar_webapi_device_fallback_permission(
@@ -956,7 +1052,7 @@ mod tests {
         reason: DaemonTickReason,
     ) -> Result<(DaemonTickResult, DeviceList), RustyJackError> {
         let hooks = no_op_daemon_hooks(ScalarWebApiDeviceFallbackPermission::Allowed);
-        daemon_tick_with_hooks(hal, config, reason, &hooks)
+        daemon_tick_with_hooks(hal, config, reason, &hooks, None)
     }
 
     fn no_op_hdmi_displayport_volume_control_hooks() -> HdmiDisplayPortVolumeControlHooks<'static> {
@@ -970,6 +1066,7 @@ mod tests {
         _config: &Config,
         _devices: &[OutputDevice],
         _uid: &str,
+        _activity_event: Option<&str>,
     ) -> Result<Option<ScalarWebApiDeviceWakeResult>, RustyJackError> {
         Ok(None)
     }
@@ -1044,6 +1141,7 @@ mod tests {
             status_code: 200,
             previous_status: Some("standby".into()),
             trigger: crate::scalar_webapi_device::OUTPUT_SELECTED_TRIGGER.into(),
+            activity_event: None,
         }
     }
 
@@ -1127,11 +1225,12 @@ mod tests {
             .with_default("BuiltInHeadphoneOutputDevice");
         let config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         let wake_calls = Mutex::new(Vec::<String>::new());
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], uid: &str| {
-            wake_calls.lock().unwrap().push(uid.to_string());
-            Ok(Some(fake_scalar_webapi_device_wake_result()))
-        };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_output_selected =
+            |_: &Config, _: &[OutputDevice], uid: &str, _: Option<&str>| {
+                wake_calls.lock().unwrap().push(uid.to_string());
+                Ok(Some(fake_scalar_webapi_device_wake_result()))
+            };
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1142,6 +1241,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1162,10 +1262,10 @@ mod tests {
         .with_default("BuiltInHeadphoneOutputDevice");
         let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
         };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1176,6 +1276,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1196,10 +1297,10 @@ mod tests {
         .with_default("BuiltInHeadphoneOutputDevice");
         let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
         };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1210,6 +1311,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1230,10 +1332,10 @@ mod tests {
         .with_default("BuiltInSpeakerDevice");
         let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
         };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1244,6 +1346,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1263,10 +1366,10 @@ mod tests {
         .with_default("BuiltInHeadphoneOutputDevice");
         let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
         };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1277,6 +1380,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1296,10 +1400,10 @@ mod tests {
         .with_default("BuiltInHeadphoneOutputDevice");
         let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
         };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1310,6 +1414,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1330,10 +1435,10 @@ mod tests {
         .with_default("BuiltInSpeakerDevice");
         let mut config = scalar_webapi_device_config("BuiltInHeadphoneOutputDevice");
         config.fallback_uids = vec!["BuiltInSpeakerDevice".into()];
-        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str| {
+        let wake_on_output_selected = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| {
             Err(RustyJackError::Speaker("speaker unreachable".into()))
         };
-        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str| Ok(None);
+        let wake_on_activity = |_: &Config, _: &[OutputDevice], _: &str, _: Option<&str>| Ok(None);
 
         let (result, _list) = daemon_tick_with_hooks(
             &hal,
@@ -1344,6 +1449,7 @@ mod tests {
                 &wake_on_output_selected,
                 &wake_on_activity,
             ),
+            None,
         )
         .unwrap();
 
@@ -1374,6 +1480,7 @@ mod tests {
                 &ensure_volume_control,
                 &no_op_hdmi_displayport_volume_control_recovery,
             ),
+            None,
         )
         .unwrap();
 
@@ -1410,6 +1517,7 @@ mod tests {
                 &ensure_volume_control,
                 &recover_volume_control,
             ),
+            None,
         )
         .unwrap();
 
@@ -1441,6 +1549,7 @@ mod tests {
                 &ensure_volume_control,
                 &recover_volume_control,
             ),
+            None,
         )
         .unwrap();
 
@@ -1477,6 +1586,7 @@ mod tests {
                 &ensure_volume_control,
                 &recover_volume_control,
             ),
+            None,
         )
         .unwrap();
 
@@ -1628,18 +1738,50 @@ mod tests {
         let mut state = DaemonState::new();
         let threshold = Duration::from_secs(60);
 
-        assert!(!state.observe_idle_duration(Duration::from_secs(1), threshold));
-        assert!(!state.observe_idle_duration(Duration::from_secs(90), threshold));
-        assert!(state.observe_idle_duration(Duration::from_secs(1), threshold));
-        assert!(!state.observe_idle_duration(Duration::from_secs(1), threshold));
+        assert!(
+            !state
+                .observe_activity(Duration::from_secs(1), threshold, Duration::ZERO)
+                .became_active
+        );
+        assert!(
+            !state
+                .observe_activity(Duration::from_secs(90), threshold, Duration::ZERO)
+                .became_active
+        );
+        assert!(
+            state
+                .observe_activity(Duration::from_secs(1), threshold, Duration::ZERO)
+                .became_active
+        );
+        assert!(
+            !state
+                .observe_activity(Duration::from_secs(1), threshold, Duration::ZERO)
+                .became_active
+        );
     }
 
     #[test]
     fn test_should_attempt_scalar_wake_while_active_or_on_transition() {
-        assert!(should_attempt_scalar_wake(false, true));
-        assert!(should_attempt_scalar_wake(false, false));
-        assert!(!should_attempt_scalar_wake(true, false));
-        assert!(should_attempt_scalar_wake(true, true));
+        assert!(should_attempt_scalar_wake(&ActivityObservation {
+            is_idle: false,
+            became_active: true,
+            is_confirmed_active: true,
+        }));
+        assert!(should_attempt_scalar_wake(&ActivityObservation {
+            is_idle: false,
+            became_active: false,
+            is_confirmed_active: true,
+        }));
+        assert!(!should_attempt_scalar_wake(&ActivityObservation {
+            is_idle: true,
+            became_active: false,
+            is_confirmed_active: false,
+        }));
+        assert!(!should_attempt_scalar_wake(&ActivityObservation {
+            is_idle: false,
+            became_active: false,
+            is_confirmed_active: false,
+        }));
     }
 
     #[test]

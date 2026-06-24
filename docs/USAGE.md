@@ -82,7 +82,9 @@ The daemon reloads config before each scheduled poll, resolves the preferred/fal
 | `switch_delay_ms` | `500` | Delay after a daemon switch before wake hooks |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that counts as away |
 | `activity_poll_interval_ms` | `1000` | How often the daemon samples macOS idle time |
-| `activity_monitor` | `idle` | `idle` or `event_tap` for keyboard/mouse wake sampling |
+| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (keyboard/mouse CoreGraphics tap; falls back to `idle`) |
+| `activity_active_confirm_ms` | `5000` | Activity must stay below `activity_idle_threshold_ms` for this long before an idle→active transition counts. `0` disables confirmation. |
+| `activity_event_tap_include_mouse_move` | `false` | When using `event_tap`, count `MouseMoved` events as activity. Leave `false` to reduce Bluetooth pointer jitter false wakes. |
 
 ---
 
@@ -404,7 +406,9 @@ Array of UIDs tried in order when preferred is missing or not alive. Leave it em
 | `switch_delay_ms` | `500` | Delay after daemon-initiated route switches before wake hooks run. |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that must be reached before the next active sample counts as an idle-to-active transition. Must be greater than zero. |
 | `activity_poll_interval_ms` | `1000` | How often `daemon` samples macOS idle time between scheduled route checks. Must be greater than zero. |
-| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (keyboard/mouse tap; falls back to idle) |
+| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (keyboard/mouse CoreGraphics tap; falls back to `idle` when unavailable — Accessibility permission may be required). Interactive ScalarWebAPI install with `keyboard`/`mouse` triggers sets `event_tap` automatically. |
+| `activity_active_confirm_ms` | `5000` | Activity must remain below `activity_idle_threshold_ms` for this long before the next sample counts as an idle→active transition. `0` disables confirmation. |
+| `activity_event_tap_include_mouse_move` | `false` | When using `event_tap`, count `MouseMoved` events as activity. Leave `false` to reduce Bluetooth pointer jitter false wakes. |
 
 ### `volume`
 

@@ -528,6 +528,20 @@ pub fn append_scalar_webapi_to_config_json(
         "require_quick_start": api.require_quick_start,
         "speaker_input": api.speaker_input,
     });
+    if scalar_webapi_install_should_use_event_tap(&api.triggers) {
+        value["activity_monitor"] = serde_json::json!("event_tap");
+        value["activity_event_tap_include_mouse_move"] = serde_json::json!(false);
+        value["activity_active_confirm_ms"] = serde_json::json!(5_000);
+    }
+}
+
+fn scalar_webapi_install_should_use_event_tap(triggers: &[String]) -> bool {
+    triggers.iter().any(|trigger| {
+        matches!(
+            trigger.to_ascii_lowercase().as_str(),
+            KEYBOARD_TRIGGER | MOUSE_TRIGGER
+        )
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1034,6 +1048,27 @@ mod tests {
         assert!(hosts_match("192.168.86.18", "192.168.86.18"));
         assert!(hosts_match(" Speaker.Local ", "speaker.local"));
         assert!(!hosts_match("192.168.86.18", "192.168.86.19"));
+    }
+
+    #[test]
+    fn test_append_scalar_webapi_sets_event_tap_for_keyboard_mouse_triggers() {
+        let selection = ScalarWebApiInstallSelection {
+            model: "SRS-ZR5".into(),
+            host: "speaker.local".into(),
+            mac_output_name: "External Headphones".into(),
+            mac_output_uid: "BuiltInHeadphoneOutputDevice".into(),
+            triggers: vec![
+                KEYBOARD_TRIGGER.into(),
+                MOUSE_TRIGGER.into(),
+                OUTPUT_SELECTED_TRIGGER.into(),
+            ],
+            speaker_input: "Audio in".into(),
+        };
+        let mut value = serde_json::json!({ "version": 1 });
+        append_scalar_webapi_to_config_json(&mut value, &selection);
+        assert_eq!(value["activity_monitor"], "event_tap");
+        assert_eq!(value["activity_active_confirm_ms"], 5_000);
+        assert_eq!(value["activity_event_tap_include_mouse_move"], false);
     }
 
     #[test]

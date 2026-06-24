@@ -61,11 +61,12 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
     let binary_version = BinaryVersion::current();
     tracing::info!(
         target: "daemon",
-        "[daemon] started version={} commit={} poll={}ms activity_poll={}ms",
+        "[daemon] started version={} commit={} poll={}ms activity_poll={}ms activity_monitor={}",
         binary_version.version,
         binary_version.commit,
         config.poll_interval_ms,
-        config.activity_poll_interval_ms
+        config.activity_poll_interval_ms,
+        config.activity_monitor
     );
 
     let activity = daemon_activity_monitor(&config);

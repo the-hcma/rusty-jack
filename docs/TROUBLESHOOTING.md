@@ -134,7 +134,9 @@ launchctl print "gui/$(id -u)/com.example.rusty-jack"
 tail -n 100 "$HOME/Library/Logs/rusty-jack.log"
 ```
 
-`rusty-jack status` shows the log path in the Daemon block and the latest activity poll in the Activity block (idle time, console user, last idle→active transition). Set `RUSTY_JACK_LOG_LEVEL=debug` before starting the daemon to log every activity poll; transitions log at `info` by default.
+`rusty-jack status` shows the log path in the Daemon block and the latest activity poll in the Activity block (idle time, console user, last idle→active transition, and last wake event when `event_tap` is active). Set `RUSTY_JACK_LOG_LEVEL=debug` before starting the daemon to log every activity poll; transitions log at `info` by default.
+
+If the daemon wakes your ScalarWebAPI speaker when you are away, check for overnight `[activity] idle→active transition` lines without real use. Set `activity_monitor` to `event_tap`, keep `activity_event_tap_include_mouse_move` at `false`, and leave `activity_active_confirm_ms` at `5000` or higher. Grant Accessibility permission to `rusty-jack` when using `event_tap`. Bluetooth mice that micro-move can still count as activity when `activity_event_tap_include_mouse_move` is `true`.
 
 ---
 
