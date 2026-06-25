@@ -4,11 +4,19 @@
 use crate::activity::ActivityMonitor;
 use crate::config::Config;
 use crate::RustyJackError;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// What the listen-only event tap records (for logs and permission hints).
+pub const EVENT_TAP_PRIVACY_NOTE: &str =
+    "listen-only tap records event timing and type labels (e.g. KeyDown); it does not log or record keystrokes";
+
+/// Shown when `CGEventTapCreate` fails or the tap is disabled (Accessibility permission).
+pub const EVENT_TAP_PERMISSION_HINT: &str =
+    "grant Accessibility permission to rusty-jack (listen-only: timing and event-type labels only, no keystroke logging); restart the daemon after granting permission";
 
 /// Build the daemon activity monitor selected by config.
 #[must_use]
@@ -20,7 +28,7 @@ pub fn daemon_activity_monitor(config: &Config) -> Box<dyn ActivityMonitor> {
                 Ok(monitor) => {
                     tracing::info!(
                         target: "daemon",
-                        "[activity] event tap active (keyboard/mouse events only; include_mouse_move={})",
+                        "[activity] event tap active ({EVENT_TAP_PRIVACY_NOTE}; include_mouse_move={})",
                         config.activity_event_tap_include_mouse_move
                     );
                     return Box::new(monitor);
@@ -28,7 +36,7 @@ pub fn daemon_activity_monitor(config: &Config) -> Box<dyn ActivityMonitor> {
                 Err(err) => {
                     tracing::warn!(
                         target: "daemon",
-                        "[activity] event tap unavailable ({err}); falling back to idle monitor"
+                        "[activity] event tap unavailable ({err}); falling back to idle monitor ({EVENT_TAP_PRIVACY_NOTE})"
                     );
                 }
             }
@@ -58,6 +66,49 @@ pub const K_CG_EVENT_SCROLL_WHEEL: u32 = 22;
 pub const K_CG_EVENT_OTHER_MOUSE_DOWN: u32 = 25;
 pub const K_CG_EVENT_OTHER_MOUSE_UP: u32 = 26;
 pub const K_CG_EVENT_OTHER_MOUSE_DRAGGED: u32 = 27;
+
+/// macOS notifies the tap callback when CoreGraphics disables it.
+pub const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
+pub const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
+
+/// Return true for CoreGraphics tap-disabled notifications.
+#[must_use]
+pub const fn is_event_tap_disabled_notification(event_type: u32) -> bool {
+    event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+}
+
+/// Detect a listen-only tap that stopped receiving HID events while the session is active.
+///
+/// Only meaningful when the tap watches the same event classes as platform idle (for example
+/// when `activity_event_tap_include_mouse_move` is `true`). With mouse-move excluded, platform
+/// idle can stay low from pointer jitter while the tap is healthy.
+#[must_use]
+pub fn event_tap_appears_silent(tap_idle: Duration, platform_idle: Duration) -> bool {
+    const SILENT_TAP_IDLE_FLOOR: Duration = Duration::from_secs(90);
+    const PLATFORM_IDLE_CEILING: Duration = Duration::from_secs(30);
+    const MIN_IDLE_GAP: Duration = Duration::from_secs(30);
+
+    tap_idle >= SILENT_TAP_IDLE_FLOOR
+        && platform_idle <= PLATFORM_IDLE_CEILING
+        && tap_idle > platform_idle.saturating_add(MIN_IDLE_GAP)
+}
+
+/// Poll `flag` until it becomes true or `attempts` is exhausted.
+#[must_use]
+pub fn poll_atomic_flag_while(
+    flag: &AtomicBool,
+    attempts: usize,
+    mut between_attempts: impl FnMut(),
+) -> bool {
+    for _ in 0..attempts.max(1) {
+        if flag.load(Ordering::Acquire) {
+            return true;
+        }
+        between_attempts();
+    }
+    false
+}
 
 /// Event mask for keyboard and pointer activity used by the event tap.
 #[must_use]
@@ -110,7 +161,11 @@ pub fn cg_event_type_label(event_type: u32) -> &'static str {
 struct EventTapActivityMonitor {
     last_event_unix_nanos: Arc<AtomicU64>,
     last_event_label: Arc<Mutex<String>>,
-    _thread: JoinHandle<()>,
+    use_platform_idle: Arc<AtomicBool>,
+    logged_platform_fallback: Arc<AtomicBool>,
+    include_mouse_move: bool,
+    shutdown: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -118,9 +173,16 @@ impl EventTapActivityMonitor {
     fn try_new(include_mouse_move: bool) -> Result<Self, RustyJackError> {
         let last_event_unix_nanos = Arc::new(AtomicU64::new(now_unix_nanos()));
         let last_event_label = Arc::new(Mutex::new(String::new()));
+        let use_platform_idle = Arc::new(AtomicBool::new(false));
+        let logged_platform_fallback = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let callback_state = EventTapCallbackState {
             last_event_unix_nanos: Arc::clone(&last_event_unix_nanos),
             last_event_label: Arc::clone(&last_event_label),
+            tap_port: AtomicUsize::new(0),
+            use_platform_idle: Arc::clone(&use_platform_idle),
+            logged_disabled: Arc::new(AtomicBool::new(false)),
+            shutdown: Arc::clone(&shutdown),
         };
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
@@ -128,39 +190,121 @@ impl EventTapActivityMonitor {
             .spawn(move || event_tap_thread(callback_state, include_mouse_move, ready_tx))
             .map_err(|err| RustyJackError::AppLaunch(format!("event tap thread failed: {err}")))?;
 
+        let mut monitor = Self {
+            last_event_unix_nanos,
+            last_event_label,
+            use_platform_idle,
+            logged_platform_fallback,
+            include_mouse_move,
+            shutdown,
+            thread: Some(thread),
+        };
+
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(Self {
-                last_event_unix_nanos,
-                last_event_label,
-                _thread: thread,
-            }),
-            Ok(Err(err)) => Err(err),
-            Err(RecvTimeoutError::Timeout) => Err(RustyJackError::AppLaunch(
-                "event tap setup timed out".into(),
-            )),
-            Err(RecvTimeoutError::Disconnected) => Err(RustyJackError::AppLaunch(
-                "event tap thread exited before setup completed".into(),
-            )),
+            Ok(Ok(())) => {
+                if wait_for_event_tap_disabled(
+                    &monitor.use_platform_idle,
+                    Duration::from_millis(250),
+                ) {
+                    monitor.stop_event_tap_thread();
+                    return Err(RustyJackError::AppLaunch(EVENT_TAP_PERMISSION_HINT.into()));
+                }
+                Ok(monitor)
+            }
+            Ok(Err(err)) => {
+                monitor.stop_event_tap_thread();
+                Err(err)
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                monitor.stop_event_tap_thread();
+                Err(RustyJackError::AppLaunch(
+                    "event tap setup timed out".into(),
+                ))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                monitor.stop_event_tap_thread();
+                Err(RustyJackError::AppLaunch(
+                    "event tap thread exited before setup completed".into(),
+                ))
+            }
         }
     }
+
+    fn stop_event_tap_thread(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+
+    fn log_platform_fallback(&self, reason: &str) {
+        if self
+            .logged_platform_fallback
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            tracing::warn!(
+                target: "daemon",
+                "[activity] event tap using idle monitor fallback ({reason}; {EVENT_TAP_PRIVACY_NOTE})"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for EventTapActivityMonitor {
+    fn drop(&mut self) {
+        self.stop_event_tap_thread();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_event_tap_disabled(use_platform_idle: &AtomicBool, timeout: Duration) -> bool {
+    let step = Duration::from_millis(25);
+    let attempts = timeout.div_duration_f64(step).ceil() as usize;
+    poll_atomic_flag_while(use_platform_idle, attempts, || thread::sleep(step))
 }
 
 #[cfg(target_os = "macos")]
 struct EventTapCallbackState {
     last_event_unix_nanos: Arc<AtomicU64>,
     last_event_label: Arc<Mutex<String>>,
+    tap_port: AtomicUsize,
+    use_platform_idle: Arc<AtomicBool>,
+    logged_disabled: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "macos")]
 impl ActivityMonitor for EventTapActivityMonitor {
     fn idle_duration(&self) -> Result<Duration, RustyJackError> {
-        let last = self.last_event_unix_nanos.load(Ordering::Relaxed);
+        if self.use_platform_idle.load(Ordering::Acquire) {
+            return crate::activity::macos_platform_idle_duration();
+        }
+
+        let last = self.last_event_unix_nanos.load(Ordering::Acquire);
         let now = now_unix_nanos();
-        let idle_nanos = now.saturating_sub(last);
-        Ok(Duration::from_nanos(idle_nanos))
+        let tap_idle = Duration::from_nanos(now.saturating_sub(last));
+
+        if self.include_mouse_move {
+            if let Ok(platform_idle) = crate::activity::macos_platform_idle_duration() {
+                if event_tap_appears_silent(tap_idle, platform_idle) {
+                    self.use_platform_idle.store(true, Ordering::Release);
+                    self.log_platform_fallback(
+                        "tap stopped receiving events while the session is active (grant Accessibility permission and restart the daemon to restore event-tap mode)",
+                    );
+                    return Ok(platform_idle);
+                }
+            }
+        }
+
+        Ok(tap_idle)
     }
 
     fn last_activity_event(&self) -> Option<String> {
+        if self.use_platform_idle.load(Ordering::Acquire) {
+            return None;
+        }
         self.last_event_label
             .lock()
             .ok()
@@ -223,6 +367,7 @@ fn event_tap_run_loop(
     const K_CG_SESSION_EVENT_TAP: u32 = 1;
     const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
     const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
+    const RUN_LOOP_SLICE: Duration = Duration::from_millis(250);
 
     extern "C" fn event_callback(
         _proxy: *mut c_void,
@@ -231,14 +376,36 @@ fn event_tap_run_loop(
         user_info: *mut c_void,
     ) -> *mut c_void {
         // SAFETY: `user_info` is the `EventTapCallbackState` pointer installed by this module.
-        if !user_info.is_null() {
-            let state = unsafe { &*(user_info as *const EventTapCallbackState) };
-            state
-                .last_event_unix_nanos
-                .store(now_unix_nanos(), Ordering::Relaxed);
-            if let Ok(mut label) = state.last_event_label.lock() {
-                *label = cg_event_type_label(event_type).into();
+        if user_info.is_null() {
+            return event;
+        }
+        let state = unsafe { &*(user_info as *const EventTapCallbackState) };
+        if is_event_tap_disabled_notification(event_type) {
+            state.use_platform_idle.store(true, Ordering::Release);
+            if state
+                .logged_disabled
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                tracing::warn!(
+                    target: "daemon",
+                    "[activity] event tap disabled by macOS ({EVENT_TAP_PERMISSION_HINT})"
+                );
             }
+            let tap = state.tap_port.load(Ordering::Relaxed) as *mut c_void;
+            if !tap.is_null() {
+                // SAFETY: `tap` is the port installed by this module.
+                unsafe { CGEventTapEnable(tap, true) };
+            }
+            return event;
+        }
+
+        state
+            .last_event_unix_nanos
+            .store(now_unix_nanos(), Ordering::Release);
+        state.use_platform_idle.store(false, Ordering::Release);
+        if let Ok(mut label) = state.last_event_label.lock() {
+            *label = cg_event_type_label(event_type).into();
         }
         event
     }
@@ -257,11 +424,12 @@ fn event_tap_run_loop(
         )
     };
     if tap.is_null() {
-        let message: String =
-            "CGEventTapCreate returned null (grant Accessibility permission to rusty-jack)".into();
+        let message = format!("CGEventTapCreate returned null ({EVENT_TAP_PERMISSION_HINT})");
         let _ = ready_tx.send(Err(RustyJackError::AppLaunch(message.clone())));
         return Err(RustyJackError::AppLaunch(message));
     }
+
+    state.tap_port.store(tap as usize, Ordering::Relaxed);
 
     // SAFETY: tap is non-null and owned for this thread.
     unsafe { CGEventTapEnable(tap, true) };
@@ -286,7 +454,9 @@ fn event_tap_run_loop(
             source,
             kCFRunLoopDefaultMode.as_void_ptr(),
         );
-        CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, Duration::from_secs(86_400), false);
+        while !state.shutdown.load(Ordering::Acquire) {
+            CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, RUN_LOOP_SLICE, false);
+        }
     }
 
     Ok(())
@@ -332,5 +502,40 @@ mod tests {
     fn cg_event_type_label_maps_known_types() {
         assert_eq!(cg_event_type_label(K_CG_EVENT_KEY_DOWN), "KeyDown");
         assert_eq!(cg_event_type_label(K_CG_EVENT_SCROLL_WHEEL), "ScrollWheel");
+    }
+
+    #[test]
+    fn is_event_tap_disabled_notification_matches_coregraphics_values() {
+        assert!(is_event_tap_disabled_notification(
+            K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+        ));
+        assert!(is_event_tap_disabled_notification(
+            K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+        ));
+        assert!(!is_event_tap_disabled_notification(K_CG_EVENT_KEY_DOWN));
+    }
+
+    #[test]
+    fn event_tap_appears_silent_when_tap_idle_diverges_from_platform_idle() {
+        assert!(event_tap_appears_silent(
+            Duration::from_secs(120),
+            Duration::from_secs(1)
+        ));
+        assert!(!event_tap_appears_silent(
+            Duration::from_secs(30),
+            Duration::from_secs(1)
+        ));
+        assert!(!event_tap_appears_silent(
+            Duration::from_secs(120),
+            Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn poll_atomic_flag_while_detects_flag_without_sleeping() {
+        let flag = AtomicBool::new(false);
+        assert!(!poll_atomic_flag_while(&flag, 3, || {}));
+        flag.store(true, Ordering::Release);
+        assert!(poll_atomic_flag_while(&flag, 3, || {}));
     }
 }

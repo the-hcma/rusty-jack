@@ -136,7 +136,7 @@ tail -n 100 "$HOME/Library/Logs/rusty-jack.log"
 
 `rusty-jack status` shows the log path in the Daemon block and the latest activity poll in the Activity block (idle time, console user, last idle→active transition, and last wake event when `event_tap` is active). Set `RUSTY_JACK_LOG_LEVEL=debug` before starting the daemon to log every activity poll; transitions log at `info` by default.
 
-If the daemon wakes your ScalarWebAPI speaker when you are away, check for overnight `[activity] idle→active transition` lines without real use. Set `activity_monitor` to `event_tap`, keep `activity_event_tap_include_mouse_move` at `false`, and leave `activity_active_confirm_ms` at `5000` or higher. Grant Accessibility permission to `rusty-jack` when using `event_tap`. Bluetooth mice that micro-move can still count as activity when `activity_event_tap_include_mouse_move` is `true`.
+If the daemon wakes your ScalarWebAPI speaker when you are away, check for overnight `[activity] idle→active transition` lines without real use. Set `activity_monitor` to `event_tap`, keep `activity_event_tap_include_mouse_move` at `false`, and leave `activity_active_confirm_ms` at `5000` or higher. Grant Accessibility permission to `rusty-jack` when using `event_tap`. **Rusty Jack does not log keystrokes** — the tap only detects that input occurred (timing and coarse labels like `KeyDown`, not typed text). **Restart the daemon** after granting permission (`launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"`). If permission was missing at startup, the daemon falls back to the idle monitor automatically once it detects a silent tap. Bluetooth mice that micro-move can still count as activity when `activity_event_tap_include_mouse_move` is `true`.
 
 ---
 
@@ -156,6 +156,19 @@ If the daemon wakes your ScalarWebAPI speaker when you are away, check for overn
 3. Confirm the device is reachable by hostname/IP and has its network standby/wake option enabled.
 4. Run `rusty-jack picker` and look for the ScalarWebAPI power-state note on the configured output.
 5. Check daemon logs for wake errors or discovery warnings. `No route to host` right after unlock usually means Wi-Fi was not ready yet; the daemon defers wake until macOS reports the host reachable and retries after network changes.
+
+### Event tap permission and silent tap fallback
+
+When `activity_monitor` is `event_tap` (set automatically when ScalarWebAPI wake triggers include `keyboard` or `mouse`):
+
+**Privacy:** Rusty Jack is **not a keylogger**. The listen-only event tap does **not** record, log, or store what you type. It does not read key codes, characters, or passwords. macOS may phrase the permission as “receive keystrokes from any application”; Rusty Jack only uses it to detect that keyboard or pointer activity happened (for example “a key was pressed” or “the mouse moved”), so it can wake your speaker when you return to the Mac.
+
+1. Grant **Accessibility** permission to `rusty-jack` in System Settings → Privacy & Security.
+2. **Restart the daemon** after granting permission: `launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"`. Permission granted while the daemon is already running does not revive a disabled tap.
+3. Run `rusty-jack status` and check the Activity block. While you use the Mac, `idle` should stay low (seconds, not hours). `state: idle` with a very large `idle` value while you are at the keyboard means the tap is silent — grant permission and restart, or set `"activity_monitor": "idle"` in config.
+4. Look for `[activity] event tap disabled by macOS` or `[activity] event tap using idle monitor fallback` in `~/Library/Logs/rusty-jack.log`. Fallback to the idle monitor still supports keyboard/mouse wakes, but with coarser idle-time sampling.
+
+On daemon startup or after `upgrade`, a wake may still occur via the `output_selected` trigger even when activity detection is broken — that is separate from idle→active keyboard/mouse wakes.
 
 Rusty Jack uses ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
 
