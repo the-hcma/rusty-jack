@@ -198,6 +198,12 @@ fn platform_console_user_name() -> Option<String> {
     None
 }
 
+/// macOS idle time from CoreGraphics, used when the event tap is unavailable or silent.
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_platform_idle_duration() -> Result<Duration, RustyJackError> {
+    platform_idle_duration()
+}
+
 #[cfg(target_os = "macos")]
 fn platform_idle_duration() -> Result<Duration, RustyJackError> {
     let seconds = macos_idle_seconds();

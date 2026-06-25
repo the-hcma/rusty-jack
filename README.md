@@ -249,6 +249,8 @@ Plist template: [`launchd/com.example.rusty-jack.plist.template`](./launchd/com.
 
 Daemon logs are written in a single rotated file (`~/Library/Logs/rusty-jack.log` by default). `rusty-jack status` shows the log path, daemon state, and the latest activity poll (idle time, console user, last idle→active transition).
 
+When ScalarWebAPI wake triggers include `keyboard` or `mouse`, config may set `activity_monitor` to `event_tap` (listen-only CoreGraphics tap). macOS requires **Accessibility** permission for that mode; grant it to `rusty-jack` and **restart the daemon** afterward. **Rusty Jack does not log keystrokes** — the tap only detects that input occurred (timing and coarse event-type labels such as `KeyDown`, not typed text or key codes). If the tap is unavailable or silent, the daemon falls back to macOS idle-time sampling automatically. See [docs/USAGE.md](./docs/USAGE.md#event-tap-activity-monitor) and [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md#scalarwebapi-device-does-not-wake).
+
 ### Install the LaunchAgent
 
 ```bash

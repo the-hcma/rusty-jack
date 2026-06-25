@@ -73,7 +73,7 @@ rusty-jack daemon
 rusty-jack --config ~/.config/rusty-jack/config.json daemon
 ```
 
-The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent; while the Mac stays active, keep-awake and idle-to-active ticks ensure eqMac is still running without restarting it every poll. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. While the Mac is active (idle below `activity_idle_threshold_ms`), the daemon periodically re-checks ScalarWebAPI power status on the configured output and sends a wake command when the device is not active. After a successful `setPowerStatus`, it waits `scalar_webapi_device.wake_debounce_ms` before sending another wake command (failed sends are not debounced). When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an immediate activity-triggered wake attempt subject to the same post-success debounce. Activity sampling uses `activity_monitor`: `idle` (default, macOS idle time) or `event_tap` (CoreGraphics keyboard/mouse tap; falls back to idle when unavailable — Accessibility permission may be required).
+The daemon reloads config before each scheduled poll, resolves the preferred/fallback output, and switches only when the active routed output differs. This includes HDMI/DisplayPort routes through a virtual volume-control device, where the raw CoreAudio default may be virtual while the audible route is already correct. On startup, including a fresh login or after `upgrade`, it selects or preserves the preferred ScalarWebAPI-backed output and sends a wake command when that output is selected. For HDMI/DisplayPort routes using installed eqMac fallback, startup ticks restart eqMac before re-applying the route so macOS wake does not leave eqMac running but silent; while the Mac stays active, keep-awake and idle-to-active ticks ensure eqMac is still running without restarting it every poll. During the initial startup grace window, retry ticks keep trying ScalarWebAPI wake without falling back so the network and device discovery have time to settle; the grace window is at least 30 seconds and grows with `scalar_webapi_device.wake_debounce_ms` if configured longer. Later scheduled polls check ScalarWebAPI reachability, but they only switch to fallback after the Mac's network access fingerprint changes: active default interface, default gateway, or interface IP address. If that fingerprint is stable, a ScalarWebAPI timeout is treated as transient and the daemon keeps the ScalarWebAPI-backed Mac output selected. While the Mac is active (idle below `activity_idle_threshold_ms`), the daemon periodically re-checks ScalarWebAPI power status on the configured output and sends a wake command when the device is not active. After a successful `setPowerStatus`, it waits `scalar_webapi_device.wake_debounce_ms` before sending another wake command (failed sends are not debounced). When the Mac has been idle longer than `activity_idle_threshold_ms` and then becomes active again, the daemon runs an immediate activity-triggered wake attempt subject to the same post-success debounce. Activity sampling uses `activity_monitor`: `idle` (default, macOS idle time) or `event_tap` (listen-only CoreGraphics keyboard/mouse tap; falls back to `idle` when unavailable, disabled, or silent — see [Event tap activity monitor](#event-tap-activity-monitor) below).
 
 | Field | Default | Meaning |
 |-------|---------|---------|
@@ -82,9 +82,43 @@ The daemon reloads config before each scheduled poll, resolves the preferred/fal
 | `switch_delay_ms` | `500` | Delay after a daemon switch before wake hooks |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that counts as away |
 | `activity_poll_interval_ms` | `1000` | How often the daemon samples macOS idle time |
-| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (keyboard/mouse CoreGraphics tap; falls back to `idle`) |
+| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (listen-only keyboard/mouse tap for activity detection; **does not log keystrokes**; falls back to `idle` when unavailable) |
 | `activity_active_confirm_ms` | `5000` | Activity must stay below `activity_idle_threshold_ms` for this long before an idle→active transition counts. `0` disables confirmation. |
 | `activity_event_tap_include_mouse_move` | `false` | When using `event_tap`, count `MouseMoved` events as activity. Leave `false` to reduce Bluetooth pointer jitter false wakes. |
+
+### Event tap activity monitor
+
+When `activity_monitor` is `event_tap`, the daemon installs a **listen-only** CoreGraphics event tap to detect that you resumed using the Mac (for ScalarWebAPI speaker wake gating).
+
+#### Does not log or record keystrokes
+
+Rusty Jack **does not log, record, store, or transmit what you type**. The event tap is not a keylogger.
+
+macOS may ask for permission with wording like “receive keystrokes from any application.” That is Apple’s generic label for Accessibility / input monitoring. Rusty Jack uses the permission only to learn that **some** keyboard or pointer activity occurred — not **which keys** were pressed or **what text** was entered.
+
+The tap never reads key codes, characters, passwords, clipboard content, or application names from events. Nothing you type is written to `~/Library/Logs/rusty-jack.log`, config, or disk.
+
+#### What is recorded
+
+| Recorded | Purpose | Example |
+|----------|---------|---------|
+| Time since last keyboard/pointer event | Idle vs active detection | `idle: 1.5s` in `rusty-jack status` |
+| Coarse event-type label (in memory only) | Choose keyboard vs mouse wake trigger | `KeyDown`, `LeftMouseDown` |
+| Idle/active snapshot fields | `status` and daemon activity logs | `[activity] idle→active transition` |
+
+Event-type labels describe the *kind* of input (key press vs mouse click), not the content. They are not persisted as a history of your typing.
+
+#### Permission and fallback
+
+macOS requires **Accessibility** permission for the tap to receive events. **Restart the daemon after granting permission** so the tap is created with access enabled:
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"
+```
+
+If permission is missing at startup, macOS may disable the tap immediately or leave it silent. Rusty Jack detects macOS disabling the tap and **falls back to the `idle` monitor** automatically. When `activity_event_tap_include_mouse_move` is `true`, it can also detect a silent tap by comparing tap idle time with platform idle time (look for `[activity] event tap using idle monitor fallback` or `[activity] event tap disabled by macOS` in `~/Library/Logs/rusty-jack.log`). Interactive ScalarWebAPI install with `keyboard`/`mouse` wake triggers sets `event_tap` automatically.
+
+`rusty-jack status` Activity block shows idle time, state, and the last idle→active transition. When the tap is working, `idle` stays low while you use the Mac; if `idle` climbs for hours while you are active, grant Accessibility permission and restart the daemon.
 
 ---
 
@@ -406,7 +440,7 @@ Array of UIDs tried in order when preferred is missing or not alive. Leave it em
 | `switch_delay_ms` | `500` | Delay after daemon-initiated route switches before wake hooks run. |
 | `activity_idle_threshold_ms` | `60000` | Idle duration that must be reached before the next active sample counts as an idle-to-active transition. Must be greater than zero. |
 | `activity_poll_interval_ms` | `1000` | How often `daemon` samples macOS idle time between scheduled route checks. Must be greater than zero. |
-| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (keyboard/mouse CoreGraphics tap; falls back to `idle` when unavailable — Accessibility permission may be required). Interactive ScalarWebAPI install with `keyboard`/`mouse` triggers sets `event_tap` automatically. |
+| `activity_monitor` | `idle` | `idle` (macOS idle time) or `event_tap` (listen-only tap for activity detection; **does not log keystrokes** — see [Event tap activity monitor](#event-tap-activity-monitor); falls back to `idle` when unavailable, disabled, or silent; Accessibility permission required; restart daemon after granting). Interactive ScalarWebAPI install with `keyboard`/`mouse` triggers sets `event_tap` automatically. |
 | `activity_active_confirm_ms` | `5000` | Activity must remain below `activity_idle_threshold_ms` for this long before the next sample counts as an idle→active transition. `0` disables confirmation. |
 | `activity_event_tap_include_mouse_move` | `false` | When using `event_tap`, count `MouseMoved` events as activity. Leave `false` to reduce Bluetooth pointer jitter false wakes. |
 
