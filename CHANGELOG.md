@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.3](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.2...rusty-jack-v0.11.3) (2026-06-25)
+
+
+### Bug Fixes
+
+* detect silent event tap and fall back to idle monitor ([#161](https://github.com/the-hcma/rusty-jack/issues/161)) ([641737c](https://github.com/the-hcma/rusty-jack/commit/641737c312377e48ebb9f5292a9b6a1ed2f84aab))
+
 ## [0.11.2](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.1...rusty-jack-v0.11.2) (2026-06-24)
 
 
