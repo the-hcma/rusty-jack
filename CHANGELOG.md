@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.3...rusty-jack-v0.11.4) (2026-07-08)
+
+
+### Bug Fixes
+
+* **ci:** key CI concurrency on head SHA ([#163](https://github.com/the-hcma/rusty-jack/issues/163)) ([ab16862](https://github.com/the-hcma/rusty-jack/commit/ab16862450aa92054782ce92b8626b3474ca3997))
+
 ## [0.11.3](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.2...rusty-jack-v0.11.3) (2026-06-25)
 
 
