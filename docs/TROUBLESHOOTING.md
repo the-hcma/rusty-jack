@@ -221,16 +221,28 @@ Neither stops external volume-control apps such as eqMac — manage them separat
 
 ## Daemon still runs the old version after update
 
-Pause the LaunchAgent before replacing the binary, then resume it:
+Homebrew and `cargo install` can both place a `rusty-jack` binary on your PATH. Upgrading one does **not** refresh the LaunchAgent — the daemon may keep running an older path until you run `rusty-jack upgrade --force`.
+
+`rusty-jack status` reports `daemon stale: yes` when the running daemon’s version/commit differs from the CLI you invoked.
+
+After `brew upgrade the-hcma/tap/rusty-jack`, run:
+
+```bash
+rusty-jack upgrade --force
+```
+
+Maintainers: `make do-release` offers step 6 to remove a stale `~/.cargo/bin/rusty-jack` (when Homebrew is installed), brew-upgrade, and refresh the daemon after a successful publish.
+
+For source installs:
 
 ```bash
 rusty-jack pause
 git pull
 make install
-rusty-jack upgrade
+rusty-jack upgrade --force
 ```
 
-If `rusty-jack --help` shows the new version but the daemon logs do not, the plist may point at an old binary path. Run `rusty-jack upgrade` to regenerate `~/Library/LaunchAgents/com.example.rusty-jack.plist` and restart the daemon.
+If `rusty-jack --help` shows the new version but the daemon logs do not, the plist may point at an old binary path. Run `rusty-jack upgrade --force` to regenerate `~/Library/LaunchAgents/com.example.rusty-jack.plist` and restart the daemon.
 
 ---
 
