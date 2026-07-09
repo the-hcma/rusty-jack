@@ -81,6 +81,8 @@ pub const fn is_event_tap_disabled_notification(event_type: u32) -> bool {
 /// Minimum time between event-tap recreations when the tap appears silent.
 pub const TAP_RECREATE_COOLDOWN: Duration = Duration::from_secs(600);
 
+const TAP_RECREATE_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
+
 /// Detect a listen-only tap that stopped receiving HID events while the session is active.
 ///
 /// When `activity_event_tap_include_mouse_move` is `true`, this divergence triggers a fallback
@@ -194,6 +196,7 @@ impl EventTapActivityMonitor {
         let recreate_requested = Arc::new(AtomicBool::new(false));
         let last_recreate_unix_nanos = Arc::new(AtomicU64::new(0));
         let fallback_on_disable = Arc::new(AtomicBool::new(include_mouse_move));
+        let startup_failed = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
         let callback_state = EventTapCallbackState {
             last_event_unix_nanos: Arc::clone(&last_event_unix_nanos),
@@ -202,7 +205,9 @@ impl EventTapActivityMonitor {
             use_platform_idle: Arc::clone(&use_platform_idle),
             logged_disabled: Arc::new(AtomicBool::new(false)),
             recreate_requested: Arc::clone(&recreate_requested),
+            last_recreate_unix_nanos: Arc::clone(&last_recreate_unix_nanos),
             fallback_on_disable: Arc::clone(&fallback_on_disable),
+            startup_failed: Arc::clone(&startup_failed),
             shutdown: Arc::clone(&shutdown),
         };
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -225,10 +230,7 @@ impl EventTapActivityMonitor {
 
         match ready_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => {
-                if wait_for_event_tap_disabled(
-                    &monitor.use_platform_idle,
-                    Duration::from_millis(250),
-                ) {
+                if wait_for_event_tap_disabled(&startup_failed, Duration::from_millis(250)) {
                     monitor.stop_event_tap_thread();
                     return Err(RustyJackError::AppLaunch(EVENT_TAP_PERMISSION_HINT.into()));
                 }
@@ -280,11 +282,7 @@ impl EventTapActivityMonitor {
         if !should_request_tap_recreate(tap_idle, platform_idle, since_last_recreate) {
             return;
         }
-        if self
-            .last_recreate_unix_nanos
-            .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if !arm_tap_recreate(&self.last_recreate_unix_nanos) {
             return;
         }
         self.recreate_requested.store(true, Ordering::Release);
@@ -305,10 +303,10 @@ impl Drop for EventTapActivityMonitor {
 }
 
 #[cfg(target_os = "macos")]
-fn wait_for_event_tap_disabled(use_platform_idle: &AtomicBool, timeout: Duration) -> bool {
+fn wait_for_event_tap_disabled(disabled: &AtomicBool, timeout: Duration) -> bool {
     let step = Duration::from_millis(25);
     let attempts = timeout.div_duration_f64(step).ceil() as usize;
-    poll_atomic_flag_while(use_platform_idle, attempts, || thread::sleep(step))
+    poll_atomic_flag_while(disabled, attempts, || thread::sleep(step))
 }
 
 #[cfg(target_os = "macos")]
@@ -319,7 +317,9 @@ struct EventTapCallbackState {
     use_platform_idle: Arc<AtomicBool>,
     logged_disabled: Arc<AtomicBool>,
     recreate_requested: Arc<AtomicBool>,
+    last_recreate_unix_nanos: Arc<AtomicU64>,
     fallback_on_disable: Arc<AtomicBool>,
+    startup_failed: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -372,6 +372,30 @@ fn now_unix_nanos() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+/// Record a recreate attempt when the cooldown has elapsed.
+#[must_use]
+fn arm_tap_recreate(last_recreate_unix_nanos: &AtomicU64) -> bool {
+    let now = now_unix_nanos();
+    let last = last_recreate_unix_nanos.load(Ordering::Acquire);
+    let since_last_recreate = Duration::from_nanos(now.saturating_sub(last));
+    if since_last_recreate < TAP_RECREATE_COOLDOWN {
+        return false;
+    }
+    last_recreate_unix_nanos
+        .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+fn request_tap_recreate_from_callback(state: &EventTapCallbackState, reason: &str) {
+    if !arm_tap_recreate(&state.last_recreate_unix_nanos) {
+        return;
+    }
+    state.recreate_requested.store(true, Ordering::Release);
+    if !reason.is_empty() {
+        tracing::warn!(target: "daemon", "[activity] {reason}");
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn event_tap_thread(
     state: EventTapCallbackState,
@@ -386,16 +410,33 @@ fn event_tap_thread(
             first_setup = false;
             Some(ready_tx.clone())
         } else {
-            tracing::info!(
+            tracing::warn!(
                 target: "daemon",
-                "[activity] event tap recreated after silent stall ({EVENT_TAP_PRIVACY_NOTE}; include_mouse_move={include_mouse_move})"
+                "[activity] event tap attempting recreate after silent stall ({EVENT_TAP_PRIVACY_NOTE}; include_mouse_move={include_mouse_move})"
             );
             None
         };
 
+        let is_recreate_attempt = setup_tx.is_none();
         if let Err(err) = event_tap_run_loop(&state, include_mouse_move, setup_tx) {
             if state.shutdown.load(Ordering::Acquire) {
                 break;
+            }
+            if is_recreate_attempt {
+                tracing::warn!(
+                    target: "daemon",
+                    "[activity] event tap recreate failed: {err}"
+                );
+                if include_mouse_move {
+                    state.use_platform_idle.store(true, Ordering::Release);
+                    tracing::warn!(
+                        target: "daemon",
+                        "[activity] event tap using idle monitor fallback after recreate failure ({EVENT_TAP_PRIVACY_NOTE})"
+                    );
+                    break;
+                }
+                thread::sleep(TAP_RECREATE_FAILURE_BACKOFF);
+                continue;
             }
             if !state.recreate_requested.load(Ordering::Acquire) {
                 tracing::warn!(target: "daemon", "[activity] event tap thread exited: {err}");
@@ -440,6 +481,8 @@ fn event_tap_run_loop(
             port: *mut c_void,
             order: i32,
         ) -> *mut c_void;
+        fn CFMachPortInvalidate(port: *mut c_void);
+        fn CFRelease(cf: *const c_void);
     }
 
     const K_CG_SESSION_EVENT_TAP: u32 = 1;
@@ -459,6 +502,7 @@ fn event_tap_run_loop(
         }
         let state = unsafe { &*(user_info as *const EventTapCallbackState) };
         if is_event_tap_disabled_notification(event_type) {
+            state.startup_failed.store(true, Ordering::Release);
             if state.fallback_on_disable.load(Ordering::Acquire) {
                 state.use_platform_idle.store(true, Ordering::Release);
                 if state
@@ -472,17 +516,18 @@ fn event_tap_run_loop(
                     );
                 }
             } else {
-                state.recreate_requested.store(true, Ordering::Release);
-                if state
+                let reason = if state
                     .logged_disabled
                     .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
                 {
-                    tracing::warn!(
-                        target: "daemon",
-                        "[activity] event tap disabled by macOS; requesting tap recreate ({EVENT_TAP_PERMISSION_HINT})"
-                    );
-                }
+                    format!(
+                        "event tap disabled by macOS; requesting tap recreate ({EVENT_TAP_PERMISSION_HINT})"
+                    )
+                } else {
+                    String::new()
+                };
+                request_tap_recreate_from_callback(state, &reason);
             }
             let tap = state.tap_port.load(Ordering::Relaxed) as *mut c_void;
             if !tap.is_null() {
@@ -531,6 +576,11 @@ fn event_tap_run_loop(
     let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
     if source.is_null() {
         let message: String = "CFMachPortCreateRunLoopSource failed for event tap".into();
+        state.tap_port.store(0, Ordering::Relaxed);
+        unsafe {
+            CFMachPortInvalidate(tap);
+            CFRelease(tap);
+        }
         if let Some(ready_tx) = ready_tx.as_ref() {
             let _ = ready_tx.send(Err(RustyJackError::AppLaunch(message.clone())));
         }
@@ -539,6 +589,11 @@ fn event_tap_run_loop(
 
     if let Some(ready_tx) = ready_tx.as_ref() {
         let _ = ready_tx.send(Ok(()));
+    } else {
+        tracing::info!(
+            target: "daemon",
+            "[activity] event tap recreated after silent stall ({EVENT_TAP_PRIVACY_NOTE}; include_mouse_move={include_mouse_move})"
+        );
     }
 
     let run_loop = CFRunLoop::get_current();
@@ -546,6 +601,7 @@ fn event_tap_run_loop(
     unsafe {
         extern "C" {
             fn CFRunLoopAddSource(rl: *mut c_void, source: *mut c_void, mode: *const c_void);
+            fn CFRunLoopRemoveSource(rl: *mut c_void, source: *mut c_void, mode: *const c_void);
         }
         CFRunLoopAddSource(
             run_loop.as_concrete_TypeRef() as *mut c_void,
@@ -557,6 +613,18 @@ fn event_tap_run_loop(
         {
             CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, RUN_LOOP_SLICE, false);
         }
+        CFRunLoopRemoveSource(
+            run_loop.as_concrete_TypeRef() as *mut c_void,
+            source,
+            kCFRunLoopDefaultMode.as_void_ptr(),
+        );
+    }
+
+    state.tap_port.store(0, Ordering::Relaxed);
+    unsafe {
+        CFMachPortInvalidate(tap);
+        CFRelease(source);
+        CFRelease(tap);
     }
 
     Ok(())
@@ -656,5 +724,12 @@ mod tests {
             Duration::from_secs(1),
             TAP_RECREATE_COOLDOWN,
         ));
+    }
+
+    #[test]
+    fn arm_tap_recreate_respects_cooldown() {
+        let last_recreate = AtomicU64::new(0);
+        assert!(arm_tap_recreate(&last_recreate));
+        assert!(!arm_tap_recreate(&last_recreate));
     }
 }
