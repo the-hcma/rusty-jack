@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.5](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.4...rusty-jack-v0.11.5) (2026-07-09)
+
+
+### Bug Fixes
+
+* self-heal silent event tap when include_mouse_move is false ([#175](https://github.com/the-hcma/rusty-jack/issues/175)) ([21ca6e5](https://github.com/the-hcma/rusty-jack/commit/21ca6e59da54fbefb8d5044a52e6d6c8c1a7ebe7))
+
 ## [0.11.4](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.3...rusty-jack-v0.11.4) (2026-07-08)
 
 
