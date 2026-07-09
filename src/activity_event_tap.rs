@@ -396,6 +396,7 @@ fn request_tap_recreate_from_callback(state: &EventTapCallbackState, reason: &st
     }
 }
 
+/// Wait until shutdown is requested or the recreate backoff elapses.
 #[cfg(target_os = "macos")]
 fn wait_for_shutdown_or_timeout(shutdown: &AtomicBool, timeout: Duration) {
     let step = Duration::from_millis(100);
@@ -692,6 +693,7 @@ mod tests {
 
     #[test]
     fn event_tap_appears_silent_when_tap_idle_diverges_from_platform_idle() {
+        // Synthetic idle inputs only; this compares durations and does not sleep.
         assert!(event_tap_appears_silent(
             Duration::from_secs(120),
             Duration::from_secs(1)
@@ -716,6 +718,7 @@ mod tests {
 
     #[test]
     fn should_request_tap_recreate_requires_silence_and_cooldown() {
+        // Synthetic idle/cooldown inputs only; should_request_tap_recreate is pure logic.
         assert!(should_request_tap_recreate(
             Duration::from_secs(120),
             Duration::from_secs(1),
@@ -735,13 +738,14 @@ mod tests {
 
     #[test]
     fn arm_tap_recreate_respects_cooldown() {
+        // Two back-to-back calls; the second fails immediately (no 10-minute wait).
         let last_recreate = AtomicU64::new(0);
         assert!(arm_tap_recreate(&last_recreate));
         assert!(!arm_tap_recreate(&last_recreate));
     }
 
     #[test]
-    fn poll_atomic_flag_while_stops_waiting_once_flag_is_set() {
+    fn poll_atomic_flag_while_stops_on_flag_set() {
         let flag = AtomicBool::new(false);
         let attempts = AtomicUsize::new(0);
         assert!(poll_atomic_flag_while(&flag, 4, || {
