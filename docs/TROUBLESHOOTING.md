@@ -166,7 +166,7 @@ When `activity_monitor` is `event_tap` (set automatically when ScalarWebAPI wake
 1. Grant **Accessibility** permission to `rusty-jack` in System Settings → Privacy & Security.
 2. **Restart the daemon** after granting permission: `launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"`. Permission granted while the daemon is already running does not revive a disabled tap.
 3. Run `rusty-jack status` and check the Activity block. While you use the Mac, `idle` should stay low (seconds, not hours). `state: idle` with a very large `idle` value while you are at the keyboard means the tap is silent — grant permission and restart, or set `"activity_monitor": "idle"` in config.
-4. Look for `[activity] event tap disabled by macOS` or `[activity] event tap using idle monitor fallback` in `~/Library/Logs/rusty-jack.log`. Fallback to the idle monitor still supports keyboard/mouse wakes, but with coarser idle-time sampling.
+4. Look for `[activity] event tap disabled by macOS`, `[activity] event tap using idle monitor fallback`, or `[activity] event tap appears silent` / `event tap recreated after silent stall` in `~/Library/Logs/rusty-jack.log`. With `activity_event_tap_include_mouse_move: false` (the default), a silent tap is **recreated** automatically (about every 10 minutes at most) instead of falling back to platform idle, so Bluetooth pointer jitter does not cause speaker wakes. Fallback to the idle monitor only happens when `activity_event_tap_include_mouse_move` is `true`.
 
 On daemon startup or after `upgrade`, a wake may still occur via the `output_selected` trigger even when activity detection is broken — that is separate from idle→active keyboard/mouse wakes.
 

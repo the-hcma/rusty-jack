@@ -116,9 +116,9 @@ macOS requires **Accessibility** permission for the tap to receive events. **Res
 launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"
 ```
 
-If permission is missing at startup, macOS may disable the tap immediately or leave it silent. Rusty Jack detects macOS disabling the tap and **falls back to the `idle` monitor** automatically. When `activity_event_tap_include_mouse_move` is `true`, it can also detect a silent tap by comparing tap idle time with platform idle time (look for `[activity] event tap using idle monitor fallback` or `[activity] event tap disabled by macOS` in `~/Library/Logs/rusty-jack.log`). Interactive ScalarWebAPI install with `keyboard`/`mouse` wake triggers sets `event_tap` automatically.
+If permission is missing at startup, macOS may disable the tap immediately or leave it silent. When `activity_event_tap_include_mouse_move` is `true`, Rusty Jack **falls back to the `idle` monitor** if the tap stops receiving events while the session is active. With the default `activity_event_tap_include_mouse_move: false`, a silent tap is **recreated** automatically (rate-limited) instead of falling back, so Bluetooth pointer jitter does not trigger speaker wakes. Look for `[activity] event tap using idle monitor fallback`, `[activity] event tap disabled by macOS`, `[activity] event tap appears silent`, or `event tap recreated after silent stall` in `~/Library/Logs/rusty-jack.log`. Interactive ScalarWebAPI install with `keyboard`/`mouse` wake triggers sets `event_tap` automatically.
 
-`rusty-jack status` Activity block shows idle time, state, and the last idle→active transition. When the tap is working, `idle` stays low while you use the Mac; if `idle` climbs for hours while you are active, grant Accessibility permission and restart the daemon.
+`rusty-jack status` Activity block shows idle time, state, and the last idle→active transition. When the tap is working, `idle` stays low while you use the Mac; if `idle` climbs for hours while you are active, grant Accessibility permission and restart the daemon (or wait for an automatic tap recreate when `include_mouse_move` is `false`).
 
 ---
 
