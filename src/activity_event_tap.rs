@@ -397,6 +397,13 @@ fn request_tap_recreate_from_callback(state: &EventTapCallbackState, reason: &st
 }
 
 #[cfg(target_os = "macos")]
+fn wait_for_shutdown_or_timeout(shutdown: &AtomicBool, timeout: Duration) {
+    let step = Duration::from_millis(100);
+    let attempts = timeout.div_duration_f64(step).ceil() as usize;
+    let _ = poll_atomic_flag_while(shutdown, attempts, || thread::sleep(step));
+}
+
+#[cfg(target_os = "macos")]
 fn event_tap_thread(
     state: EventTapCallbackState,
     include_mouse_move: bool,
@@ -435,7 +442,7 @@ fn event_tap_thread(
                     );
                     break;
                 }
-                thread::sleep(TAP_RECREATE_FAILURE_BACKOFF);
+                wait_for_shutdown_or_timeout(&state.shutdown, TAP_RECREATE_FAILURE_BACKOFF);
                 continue;
             }
             if !state.recreate_requested.load(Ordering::Acquire) {
@@ -731,5 +738,17 @@ mod tests {
         let last_recreate = AtomicU64::new(0);
         assert!(arm_tap_recreate(&last_recreate));
         assert!(!arm_tap_recreate(&last_recreate));
+    }
+
+    #[test]
+    fn poll_atomic_flag_while_stops_waiting_once_flag_is_set() {
+        let flag = AtomicBool::new(false);
+        let attempts = AtomicUsize::new(0);
+        assert!(poll_atomic_flag_while(&flag, 4, || {
+            if attempts.fetch_add(1, Ordering::AcqRel) == 1 {
+                flag.store(true, Ordering::Release);
+            }
+        }));
+        assert_eq!(attempts.load(Ordering::Acquire), 2);
     }
 }
