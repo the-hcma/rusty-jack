@@ -24,6 +24,7 @@ Run the full local release flow interactively:
   3. Offer to merge the release PR (or wait for a manual merge on GitHub)
   4. Publish the GitHub release and Homebrew tap update (make publish-release)
   5. Verify the release tag and tap formula
+  6. Optionally remove a stale cargo install, brew upgrade, and rusty-jack upgrade --force
 
 Options:
   --dry-run    Print the steps without changing GitHub or the tap.
@@ -31,6 +32,7 @@ Options:
 
 Environment:
   YES=1 or RUSTY_JACK_RELEASE_YES=1   Skip interactive approval prompts
+  RUSTY_JACK_RELEASE_UPGRADE_LOCAL=1  Run step 6 without a TTY (also auto-confirms sub-steps)
   RUSTY_JACK_RELEASE_PR_MERGE_TIMEOUT_SECS  Max seconds to wait for release PR merge (default: 86400)
 
 Requires: gh, git, curl, make, npx (Node.js). Run from a clean main worktree.
@@ -67,12 +69,13 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "[dry-run] would offer to merge the release PR (or wait for manual merge)"
   echo "[dry-run] would run: make publish-release"
   echo "[dry-run] would verify GitHub release tag and Homebrew tap formula"
+  release_lib_run_post_release_local_upgrade "" 1
   exit 0
 fi
 
 release_lib_ensure_synced_main 0
 
-echo "=== Step 1/5: open or update the Release Please PR ==="
+echo "=== Step 1/6: open or update the Release Please PR ==="
 "${ROOT}/scripts/update-release-pr"
 
 RELEASE_PR_URL="$(release_lib_resolve_release_pr_url "${REPO}" "${RELEASE_LIB_RELEASE_PLEASE_OUTPUT:-}")"
@@ -90,7 +93,7 @@ if [[ -z "${RELEASE_PR_URL}" ]]; then
 fi
 
 echo ""
-echo "=== Step 2/5: review release PR ==="
+echo "=== Step 2/6: review release PR ==="
 gh pr view "${RELEASE_PR_URL}" --repo "${REPO}"
 echo ""
 release_lib_show_pr_diff "${REPO}" "${RELEASE_PR_URL}"
@@ -113,7 +116,7 @@ if ! release_lib_confirm "Approve this release PR and continue?"; then
 fi
 
 echo ""
-echo "=== Step 3/5: merge release PR ==="
+echo "=== Step 3/6: merge release PR ==="
 if release_lib_confirm "Merge this release PR now?"; then
   if ! release_lib_merge_pr "${REPO}" "${RELEASE_PR_URL}" "Release PR" 1; then
     echo "Automatic merge failed; waiting for manual merge on GitHub (do not add merge-it)."
@@ -125,7 +128,7 @@ else
 fi
 
 echo ""
-echo "=== Step 4/5: publish GitHub release and Homebrew tap ==="
+echo "=== Step 4/6: publish GitHub release and Homebrew tap ==="
 git fetch origin main
 if git merge-base --is-ancestor HEAD origin/main && [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
   echo "Fast-forwarding main after release PR merge..."
@@ -135,7 +138,7 @@ fi
 "${ROOT}/scripts/publish-release"
 
 echo ""
-echo "=== Step 5/5: verify release ==="
+echo "=== Step 5/6: verify release ==="
 version="$(release_lib_cargo_version)"
 if [[ -z "${version}" ]]; then
   echo "error: could not read package version from Cargo.toml" >&2
@@ -150,3 +153,5 @@ echo "  Version:  ${version}"
 echo "  Tag:      ${tag}"
 echo "  Release:  https://github.com/${REPO}/releases/tag/${tag}"
 echo "  Install:  brew update && brew upgrade the-hcma/tap/rusty-jack"
+
+release_lib_run_post_release_local_upgrade "${version}" 0

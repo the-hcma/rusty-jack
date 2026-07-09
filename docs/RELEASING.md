@@ -63,8 +63,9 @@ make do-release
 | 3 | Offer to squash-merge the release PR after CI passes (or poll until you merge manually; do **not** add `merge-it`) |
 | 4 | Fast-forward local `main`, then run `publish-release` (GitHub tag/release, Homebrew tap PR, tap CI wait, tap auto-merge wait) |
 | 5 | Verify the GitHub release tag exists and `the-hcma/homebrew-tap` `main` references that tag in `Formula/rusty-jack.rb` |
+| 6 | Optionally remove a stale `~/.cargo/bin/rusty-jack` when Homebrew is installed, run `brew upgrade the-hcma/tap/rusty-jack`, then `rusty-jack upgrade --force` |
 
-On success it prints the version, tag, release URL, and a `brew upgrade` reminder.
+On success it prints the version, tag, release URL, and (when step 6 runs) upgrades the maintainer’s local install so the CLI and LaunchAgent match the release just published.
 
 If there is no open release PR and the current `Cargo.toml` version is already published (tag + tap), it exits successfully with a short message instead of erroring.
 
@@ -72,12 +73,13 @@ If there is no open release PR and the current `Cargo.toml` version is already p
 
 | Variable / flag | Meaning |
 |-----------------|--------|
-| `--dry-run` | Print the five steps without calling GitHub or release-please |
-| `YES=1` or `RUSTY_JACK_RELEASE_YES=1` | Skip the interactive approval prompt after showing the diff |
+| `--dry-run` | Print all six steps without calling GitHub, release-please, brew, or rusty-jack |
+| `YES=1` or `RUSTY_JACK_RELEASE_YES=1` | Skip interactive approval prompts (including step 6 sub-prompts) |
+| `RUSTY_JACK_RELEASE_UPGRADE_LOCAL=1` | Run step 6 without a TTY (auto-confirms sub-steps) |
 | `RUSTY_JACK_RELEASE_PR_MERGE_TIMEOUT_SECS` | Max seconds to wait for release PR merge (default `86400`) |
 | `RUSTY_JACK_REPO` / `RUSTY_JACK_TAP_REPO` | Override default repos (same as other release scripts) |
 
-The approval prompt requires a TTY unless `YES=1` is set.
+The approval prompt requires a TTY unless `YES=1` is set. Step 6 is skipped on non-TTY sessions unless `RUSTY_JACK_RELEASE_UPGRADE_LOCAL=1`.
 
 ### When to use manual steps instead
 

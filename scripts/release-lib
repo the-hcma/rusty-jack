@@ -806,3 +806,150 @@ release_lib_wait_for_tap_pr_merge() {
   echo "error: timed out after ${timeout_secs}s waiting for tap PR merge: ${pr_url}" >&2
   return 1
 }
+
+# --- Post-release local install (do-release step 6) ---
+
+release_lib_confirm_optional() {
+  local prompt="$1"
+
+  if [[ "${YES:-0}" == "1" || "${RUSTY_JACK_RELEASE_YES:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${RUSTY_JACK_RELEASE_UPGRADE_LOCAL:-0}" == "1" ]] && [[ ! -t 0 ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    return 1
+  fi
+
+  local reply
+  read -r -p "${prompt} [y/N] " reply
+  [[ "${reply}" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+release_lib_post_release_local_upgrade_should_run() {
+  [[ -t 0 ]] || [[ "${RUSTY_JACK_RELEASE_UPGRADE_LOCAL:-0}" == "1" ]]
+}
+
+release_lib_homebrew_rusty_jack_installed() {
+  command -v brew >/dev/null 2>&1 && brew list --formula rusty-jack >/dev/null 2>&1
+}
+
+release_lib_homebrew_rusty_jack_bin() {
+  if ! release_lib_homebrew_rusty_jack_installed; then
+    return 1
+  fi
+  local prefix
+  prefix="$(brew --prefix rusty-jack 2>/dev/null)" || return 1
+  local bin="${prefix}/bin/rusty-jack"
+  [[ -x "${bin}" ]] || return 1
+  printf '%s' "${bin}"
+}
+
+release_lib_rusty_jack_version_line() {
+  local bin="$1"
+  if [[ -x "${bin}" ]]; then
+    "${bin}" --version 2>/dev/null | head -n 1 || true
+  fi
+}
+
+release_lib_maybe_remove_stale_cargo_install() {
+  local cargo_bin="${HOME}/.cargo/bin/rusty-jack"
+  if [[ ! -x "${cargo_bin}" ]]; then
+    return 0
+  fi
+  if ! release_lib_homebrew_rusty_jack_installed; then
+    return 0
+  fi
+
+  local brew_bin cargo_version brew_version
+  brew_bin="$(release_lib_homebrew_rusty_jack_bin)" || return 0
+  cargo_version="$(release_lib_rusty_jack_version_line "${cargo_bin}")"
+  brew_version="$(release_lib_rusty_jack_version_line "${brew_bin}")"
+
+  if ! release_lib_confirm_optional \
+    "Remove cargo-installed rusty-jack at ${cargo_bin} (${cargo_version:-unknown}) so PATH prefers Homebrew (${brew_version:-unknown})?"; then
+    echo "Keeping ${cargo_bin}."
+    return 0
+  fi
+
+  rm -f "${cargo_bin}"
+  echo "Removed ${cargo_bin}."
+}
+
+release_lib_brew_upgrade_rusty_jack() {
+  local expected_version="$1"
+
+  if ! command -v brew >/dev/null 2>&1; then
+    echo "brew not found; skipping Homebrew upgrade."
+    return 0
+  fi
+  if ! release_lib_homebrew_rusty_jack_installed; then
+    echo "Homebrew rusty-jack is not installed; skipping brew upgrade."
+    return 0
+  fi
+
+  local before after
+  before="$(release_lib_rusty_jack_version_line "$(command -v rusty-jack 2>/dev/null || true)")"
+
+  if ! release_lib_confirm_optional "Run brew update && brew upgrade the-hcma/tap/rusty-jack?"; then
+    echo "Skipping brew upgrade."
+    return 0
+  fi
+
+  echo "Upgrading rusty-jack via Homebrew..."
+  brew update
+  brew upgrade the-hcma/tap/rusty-jack
+
+  after="$(release_lib_rusty_jack_version_line "$(command -v rusty-jack 2>/dev/null || true)")"
+  echo "  before: ${before:-unknown}"
+  echo "  after:  ${after:-unknown}"
+  if [[ -n "${expected_version}" ]] && [[ "${after}" != *"${expected_version}"* ]]; then
+    echo "warning: expected version ${expected_version} after brew upgrade; got ${after:-unknown}" >&2
+  fi
+}
+
+release_lib_daemon_upgrade_force() {
+  local expected_version="$1"
+
+  if ! command -v rusty-jack >/dev/null 2>&1; then
+    echo "rusty-jack not on PATH; skipping daemon upgrade."
+    return 0
+  fi
+
+  if ! release_lib_confirm_optional "Run rusty-jack upgrade --force to refresh the LaunchAgent?"; then
+    echo "Skipping daemon upgrade."
+    return 0
+  fi
+
+  rusty-jack upgrade --force
+  local after
+  after="$(release_lib_rusty_jack_version_line "$(command -v rusty-jack)")"
+  echo "  CLI: ${after:-unknown}"
+  if [[ -n "${expected_version}" ]] && [[ "${after}" != *"${expected_version}"* ]]; then
+    echo "warning: expected version ${expected_version} after daemon upgrade; got ${after:-unknown}" >&2
+  fi
+}
+
+release_lib_run_post_release_local_upgrade() {
+  local expected_version="$1"
+  local dry_run="${2:-0}"
+
+  if [[ "${dry_run}" -eq 1 ]]; then
+    echo "[dry-run] would offer to remove stale ~/.cargo/bin/rusty-jack when Homebrew rusty-jack is installed"
+    echo "[dry-run] would offer: brew update && brew upgrade the-hcma/tap/rusty-jack"
+    echo "[dry-run] would offer: rusty-jack upgrade --force"
+    return 0
+  fi
+
+  if ! release_lib_post_release_local_upgrade_should_run; then
+    echo "Skipping local install upgrade (not a TTY; set RUSTY_JACK_RELEASE_UPGRADE_LOCAL=1 to run)."
+    return 0
+  fi
+
+  echo ""
+  echo "=== Step 6/6: upgrade local install and refresh daemon ==="
+  release_lib_maybe_remove_stale_cargo_install
+  release_lib_brew_upgrade_rusty_jack "${expected_version}"
+  release_lib_daemon_upgrade_force "${expected_version}"
+}
