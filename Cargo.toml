@@ -19,7 +19,7 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.6.2", features = ["derive"] }
+clap = { version = "4.6.3", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.19"
@@ -33,6 +33,7 @@ tungstenite = "0.29.0"
 crossterm = "0.29.0"
 coreaudio-sys = "0.2.18"
 sysinfo = "0.39.6"
+libc = "0.2.187"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
