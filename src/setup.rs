@@ -225,7 +225,7 @@ fn reconfigure_existing_config(
                 "What would you like to reconfigure?\n",
                 "Select one or more sections (space to toggle, enter to confirm)."
             )))
-            .items(&sections.iter().map(|(_, label)| *label).collect::<Vec<_>>())
+            .items(sections.iter().map(|(_, label)| *label).collect::<Vec<_>>())
             .defaults(&defaults)
             .interact()
             .map_err(|err| {
