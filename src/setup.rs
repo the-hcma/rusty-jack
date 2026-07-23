@@ -225,6 +225,7 @@ fn reconfigure_existing_config(
                 "What would you like to reconfigure?\n",
                 "Select one or more sections (space to toggle, enter to confirm)."
             )))
+            // dialoguer 0.12 takes IntoIterator; do not reintroduce `&` (clippy needless_borrows).
             .items(sections.iter().map(|(_, label)| *label).collect::<Vec<_>>())
             .defaults(&defaults)
             .interact()
