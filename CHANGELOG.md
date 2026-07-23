@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.6](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.5...rusty-jack-v0.11.6) (2026-07-23)
+
+
+### Bug Fixes
+
+* document dialoguer 0.12 MultiSelect items() call site ([#189](https://github.com/the-hcma/rusty-jack/issues/189)) ([a38e393](https://github.com/the-hcma/rusty-jack/commit/a38e393677a8470b9190bc7ccabf909447ceaec5))
+
 ## [0.11.5](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.4...rusty-jack-v0.11.5) (2026-07-09)
 
 
