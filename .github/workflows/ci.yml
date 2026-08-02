@@ -8,9 +8,12 @@ on:
     branches-ignore:
       - main
       - '**/graphite-base/**'
+      # GitHub merge queue temporary branches — use merge_group, not push.
+      - 'gh-readonly-queue/**'
   pull_request:
-    # Stacked PRs (Graphite) target a non-main base branch; run CI anyway.
+    # Stacked PRs may target a non-main base branch; run CI anyway.
     types: [opened, reopened, synchronize, ready_for_review, edited]
+  merge_group:
 
 # Cancel in-progress reruns for the same trigger only. push and pull_request must
 # not share a group: cancel-in-progress would leave CANCELLED required checks on
@@ -18,7 +21,7 @@ on:
 # actions are also split (opened/synchronize vs edited) so review-bot description
 # patches do not cancel an in-flight test run for the same commit.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.event.action || github.event_name }}
+  group: ci-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}-${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}-${{ github.event.action || github.event_name }}
   cancel-in-progress: true
 env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
