@@ -26,10 +26,10 @@ Before creating any branch or writing code, initialize the session from the repo
 ~/work/ai/repository-helpers/scripts/dev/start-development --worktree <stack-name> --no-interactive
 ```
 
-- **`--refresh`** (first): syncs `main` with Graphite (`gt sync`), prunes merged worktrees and branches, pulls latest `main`, then exits.
+- **`--refresh`** (first): syncs via the stacking backend in `.github/stacking-tool` (`gh-stack` — `gh stack sync` / rebase as needed), prunes merged worktrees and branches, pulls latest `main`, then exits.
 - **plain / `--worktree`** (second): repeats sync/cleanup, then creates or resumes a worktree under `.worktrees/<stack-name>-wt`.
 - AI agents must always pass **`--no-interactive`** and an explicit **`--worktree`** name.
-- Do not manually create worktrees or run `gt sync` separately — `start-development` is the single entry point for new work.
+- Do not manually create worktrees or run `gh stack sync` separately — `start-development` is the single entry point for new work.
 - After `start-development` finishes, **`cd` into the stack worktree** (`.worktrees/<stack-name>-wt`) before any other work. Do not stay in the primary clone.
 
 ### Main worktree is off-limits (agents)
@@ -41,7 +41,7 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - Edit, create, or delete source files, config, or lockfiles
 - Run `cargo build`, `cargo test`, or other mutating toolchain commands
 - Run `dep-updater` with `--dir` pointing at the primary clone (it may fast-forward `main` and mutate git state)
-- Run `gt create`, `gt modify`, `gt submit`, `gt sync`, `gt restack`, or other Graphite/git write operations
+- Run `gh stack …`, commits, checkouts, or other git write operations
 - Leave uncommitted changes, stray branches, or detached HEAD state
 
 **Always** do implementation, investigation that mutates state, and validation in a **stack worktree** under `.worktrees/<stack-name>-wt`. Pass that path to tools (`--dir`, `cd`, etc.).
@@ -87,29 +87,27 @@ Shell helpers live in `scripts/` **without** a `.sh` extension (for example `scr
 
 ## Commits, Stacking & Pull Requests
 
-> See [GRAPHITE.md](./GRAPHITE.md) if present, and the org-wide Graphite guidance in `repository-helpers`.
+> Stacking backend is **`gh-stack`** (see `.github/stacking-tool`). Org skills live in [repository-helpers](https://github.com/the-hcma/repository-helpers) (`.cursor/skills/gh-stack/SKILL.md`). Do **not** use Graphite (`gt`) on this repo.
 
-- This project uses **Graphite (`gt`)** for branch stacking.
 - **Worktree-per-stack.** Every new stack is created via `start-development --worktree <name> --no-interactive`.
-- Never work directly on `main`.
+- Never work directly on `main`. Create layers with `gh stack init <branch>` / `gh stack add <branch>`, then `git add` / `git commit` as usual.
 - Keep each branch focused on one logical change.
-- Before publishing/submitting any PR, run the required local gates (see **Pre-Commit Checklist** below). **Do not run `gt submit --no-interactive --publish` until fmt, clippy, and tests pass locally.**
-- Submit with `gt submit --no-interactive --publish` when using Graphite.
-- To merge, add the `merge-it` label. Never use `gh pr merge` directly.
+- Before publishing/submitting any PR, run the required local gates (see **Pre-Commit Checklist** below). Prefer repository-helpers **`scripts/dev/submit-stack`** (runs pre-pr checks, then `gh stack submit --auto --open`). Agents must always pass `--auto` (and prefer `--open`) — never interactive `gh stack submit` / `gh stack view` without `--json`.
+- Merge path is **GitHub’s merge queue**: enable auto-merge with `gh pr merge --auto --squash` when the operator asks to merge. Do **not** use the leftover `merge-it` label. **Always ask the user before enabling auto-merge.**
 - Follow **Conventional Commits** for branch commits when practical: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
 - PR descriptions must include **Summary** and **Test plan** at minimum.
 
 ### Stacked PRs: fix bottom-up before publish
 
-Each PR in a Graphite stack is CI-tested against its merge base. A fmt, clippy, or test failure in an early branch fails the entire stack on GitHub Actions.
+Each PR in a gh-stack is CI-tested against its merge base. A fmt, clippy, or test failure in an early branch fails the entire stack on GitHub Actions.
 
 Before publishing a stack:
 
 1. Check out the **bottom** branch (closest to `main`).
 2. Run the **Pre-Commit Checklist** gates.
-3. Fix failures, then `gt modify` and `gt restack`.
+3. Fix failures, commit on that layer, then `gh stack rebase --upstack` as needed.
 4. Repeat on each subsequent branch until the stack tip passes all gates.
-5. Only then run `gt submit --no-interactive --publish`.
+5. Only then run `gh stack submit --auto --open --remote origin` (or `scripts/dev/submit-stack`).
 
 ---
 

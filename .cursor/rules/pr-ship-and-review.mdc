@@ -44,13 +44,13 @@ and follow `.cursor/rules/stacking-tool.mdc` — do not mix backends on the same
 
 ```bash
 # When marker is graphite:
-gt create <stack>/<topic> -m 'feat: …'   # or gt modify -m '…'
-gt submit --publish --no-interactive
+# gt create <stack>/<topic> -m 'feat: …'   # or gt modify -m '…'
+# gt submit --publish --no-interactive
 
 # When marker is gh-stack:
-# gh stack init <stack>/<topic>   # or gh stack add for a higher layer
-# git add -A && git commit -m 'feat: …'
-# gh stack submit --auto --open --remote origin
+gh stack init <stack>/<topic>   # or gh stack add for a higher layer
+git add -A && git commit -m 'feat: …'
+gh stack submit --auto --open --remote origin
 ```
 
 Wait for CI:
