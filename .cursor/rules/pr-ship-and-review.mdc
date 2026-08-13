@@ -41,16 +41,21 @@ Run this repository's quality gates from the stack worktree (tests, linters, etc
 
 Only after §1 quality gates pass. **Read** `.github/stacking-tool` (`graphite` or `gh-stack`)
 and follow `.cursor/rules/stacking-tool.mdc` — do not mix backends on the same stack.
+Copy **only** the block that matches the marker.
+
+**When marker is `graphite`:**
 
 ```bash
-# When marker is graphite:
 gt create <stack>/<topic> -m 'feat: …'   # or gt modify -m '…'
 gt submit --publish --no-interactive
+```
 
-# When marker is gh-stack:
-# gh stack init <stack>/<topic>   # or gh stack add for a higher layer
-# git add -A && git commit -m 'feat: …'
-# gh stack submit --auto --open --remote origin
+**When marker is `gh-stack`:**
+
+```bash
+gh stack init <stack>/<topic>   # or gh stack add for a higher layer
+git add -A && git commit -m 'feat: …'
+gh stack submit --auto --open --remote origin
 ```
 
 Wait for CI:
