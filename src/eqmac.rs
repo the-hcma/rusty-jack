@@ -5,6 +5,7 @@ use crate::output_device::OutputDevice;
 use crate::RustyJackError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -14,10 +15,14 @@ const EQMAC_APP_PATH: &str = "/Applications/eqMac.app";
 pub const EQMAC_EMBEDDED_DRIVER_PATH: &str =
     "/Applications/eqMac.app/Contents/Resources/Embedded/eqMac.driver";
 pub const EQMAC_HAL_DRIVER_PATH: &str = "/Library/Audio/Plug-Ins/HAL/eqMac.driver";
+/// Minimum time between automatic eqMac restarts (unlock, scheduled health checks, startup).
+pub const EQMAC_RESTART_COOLDOWN: Duration = Duration::from_secs(60);
 const EQMAC_STARTUP_WAIT: Duration = Duration::from_millis(1500);
 const EQMAC_STARTUP_POLL: Duration = Duration::from_millis(100);
 const EQMAC_DRIVER_BACKUP_DIR_NAME: &str = "driver-backups";
 const EQMAC_DRIVER_BACKUP_METADATA_NAME: &str = "eqMac.driver.json";
+
+static LAST_EQMAC_RESTART_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Whether eqMac is present on the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -198,7 +203,29 @@ pub fn eqmac_is_running() -> bool {
     crate::process_detect::any_process_with_exact_name(EQMAC_APP_NAME)
 }
 
+/// True when CoreAudio's default output is eqMac's virtual volume router.
+#[must_use]
+pub fn eqmac_virtual_default_is_active() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::coreaudio::volume::default_output_is_virtual_router()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// True when eqMac is running and owns the system default (volume keys can work).
+#[must_use]
+pub fn eqmac_volume_control_is_healthy(running: bool, virtual_default_active: bool) -> bool {
+    running && virtual_default_active
+}
+
 /// Start eqMac if installed, not running, and the target route needs software volume.
+///
+/// When eqMac is already running but no longer owns the CoreAudio virtual default
+/// (common after unlock / sleep), restarts it subject to [`EQMAC_RESTART_COOLDOWN`].
 ///
 /// # Errors
 ///
@@ -216,29 +243,7 @@ pub fn ensure_eqmac_for_target(
     ensure_eqmac_running()
 }
 
-fn wait_for_eqmac_running(timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if eqmac_is_running() {
-            return true;
-        }
-        thread::sleep(EQMAC_STARTUP_POLL);
-    }
-    eqmac_is_running()
-}
-
-fn wait_for_eqmac_shutdown(timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if !eqmac_is_running() {
-            return true;
-        }
-        thread::sleep(EQMAC_STARTUP_POLL);
-    }
-    !eqmac_is_running()
-}
-
-/// Start eqMac when installed but not running.
+/// Start eqMac when installed but not running; restart when running but stale.
 ///
 /// # Errors
 ///
@@ -252,14 +257,23 @@ pub fn ensure_eqmac_running() -> Result<EqMacEnsureResult, RustyJackError> {
     }
 
     if eqmac_is_running() {
-        return Ok(EqMacEnsureResult {
-            action: EqMacEnsureAction::AlreadyRunning,
-        });
+        if eqmac_volume_control_is_healthy(true, eqmac_virtual_default_is_active()) {
+            return Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            });
+        }
+        if !eqmac_restart_cooldown_elapsed() {
+            return Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            });
+        }
+        return restart_eqmac_app();
     }
 
     match launch_eqmac_app()? {
         EqMacLaunchAction::Launched => {
             let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_virtual_default(EQMAC_STARTUP_WAIT);
             Ok(EqMacEnsureResult {
                 action: EqMacEnsureAction::Launched,
             })
@@ -290,32 +304,52 @@ pub fn restart_eqmac_for_target(
         });
     }
 
-    if eqmac_is_running() {
-        quit_eqmac_app();
-        let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
-        if eqmac_is_running() {
-            kill_eqmac_app();
-            let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
-        }
-    }
+    restart_eqmac_app()
+}
 
-    match launch_eqmac_app()? {
-        EqMacLaunchAction::Launched => {
-            let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::Restarted,
-            })
+/// Human-readable lines for stderr after ensuring eqMac.
+#[must_use]
+pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
+    match result.action {
+        EqMacEnsureAction::NotNeeded | EqMacEnsureAction::AlreadyRunning => vec![],
+        EqMacEnsureAction::Launched => {
+            vec!["Started eqMac (software volume for HDMI/DisplayPort).".into()]
         }
-        EqMacLaunchAction::NotInstalled => Ok(EqMacEnsureResult {
-            action: EqMacEnsureAction::NotInstalled,
-        }),
+        EqMacEnsureAction::Restarted => {
+            vec![
+                "Restarted eqMac to restore HDMI/DisplayPort volume control (virtual default was missing)."
+                    .into(),
+            ]
+        }
+        EqMacEnsureAction::NotInstalled => vec![],
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EqMacLaunchAction {
-    Launched,
-    NotInstalled,
+fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
+    if success {
+        return Ok(EqMacLaunchAction::Launched);
+    }
+    if stderr.contains("Unable to find application named") {
+        return Ok(EqMacLaunchAction::NotInstalled);
+    }
+
+    Err(RustyJackError::AppLaunch(format!(
+        "failed to launch eqMac: {stderr}"
+    )))
+}
+
+fn eqmac_restart_cooldown_elapsed() -> bool {
+    let Ok(guard) = LAST_EQMAC_RESTART_AT.lock() else {
+        return true;
+    };
+    match *guard {
+        None => true,
+        Some(at) => at.elapsed() >= EQMAC_RESTART_COOLDOWN,
+    }
+}
+
+fn kill_eqmac_app() {
+    crate::process_detect::kill_processes_with_exact_name(EQMAC_APP_NAME);
 }
 
 fn launch_eqmac_app() -> Result<EqMacLaunchAction, RustyJackError> {
@@ -336,36 +370,74 @@ fn quit_eqmac_app() {
         .output();
 }
 
-fn kill_eqmac_app() {
-    crate::process_detect::kill_processes_with_exact_name(EQMAC_APP_NAME);
+fn record_eqmac_restart() {
+    if let Ok(mut guard) = LAST_EQMAC_RESTART_AT.lock() {
+        *guard = Some(Instant::now());
+    }
 }
 
-fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
-    if success {
-        return Ok(EqMacLaunchAction::Launched);
-    }
-    if stderr.contains("Unable to find application named") {
-        return Ok(EqMacLaunchAction::NotInstalled);
+fn restart_eqmac_app() -> Result<EqMacEnsureResult, RustyJackError> {
+    if eqmac_is_running() {
+        quit_eqmac_app();
+        let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
+        if eqmac_is_running() {
+            kill_eqmac_app();
+            let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
+        }
     }
 
-    Err(RustyJackError::AppLaunch(format!(
-        "failed to launch eqMac: {stderr}"
-    )))
+    match launch_eqmac_app()? {
+        EqMacLaunchAction::Launched => {
+            record_eqmac_restart();
+            let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_virtual_default(EQMAC_STARTUP_WAIT);
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::Restarted,
+            })
+        }
+        EqMacLaunchAction::NotInstalled => Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotInstalled,
+        }),
+    }
 }
 
-/// Human-readable lines for stderr after ensuring eqMac.
-#[must_use]
-pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
-    match result.action {
-        EqMacEnsureAction::NotNeeded | EqMacEnsureAction::AlreadyRunning => vec![],
-        EqMacEnsureAction::Launched => {
-            vec!["Started eqMac (software volume for HDMI/DisplayPort).".into()]
+fn wait_for_eqmac_running(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if eqmac_is_running() {
+            return true;
         }
-        EqMacEnsureAction::Restarted => {
-            vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
-        }
-        EqMacEnsureAction::NotInstalled => vec![],
+        thread::sleep(EQMAC_STARTUP_POLL);
     }
+    eqmac_is_running()
+}
+
+fn wait_for_eqmac_shutdown(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !eqmac_is_running() {
+            return true;
+        }
+        thread::sleep(EQMAC_STARTUP_POLL);
+    }
+    !eqmac_is_running()
+}
+
+fn wait_for_eqmac_virtual_default(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if eqmac_virtual_default_is_active() {
+            return true;
+        }
+        thread::sleep(EQMAC_STARTUP_POLL);
+    }
+    eqmac_virtual_default_is_active()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EqMacLaunchAction {
+    Launched,
+    NotInstalled,
 }
 
 #[cfg(test)]
@@ -414,6 +486,7 @@ mod tests {
         });
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("Restarted eqMac"));
+        assert!(lines[0].contains("virtual default was missing"));
     }
 
     #[test]
@@ -440,6 +513,14 @@ mod tests {
             backup_dir,
             PathBuf::from("/Users/example/.config/rusty-jack/driver-backups")
         );
+    }
+
+    #[test]
+    fn test_eqmac_volume_control_healthy_requires_running_and_virtual_default() {
+        assert!(eqmac_volume_control_is_healthy(true, true));
+        assert!(!eqmac_volume_control_is_healthy(true, false));
+        assert!(!eqmac_volume_control_is_healthy(false, true));
+        assert!(!eqmac_volume_control_is_healthy(false, false));
     }
 
     #[test]

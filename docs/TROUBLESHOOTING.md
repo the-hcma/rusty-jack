@@ -26,6 +26,19 @@ Common issues when using Rusty Jack on macOS with HDMI/DP monitors, HDMI/Display
 
 ---
 
+## eqMac is running but volume keys still do nothing
+
+**Cause:** eqMac’s app process is alive, but CoreAudio’s system default is still the **physical** HDMI/DisplayPort device (no `EQMOutputCapture` / `… (eqMac)` virtual default). Common after **login, screen unlock, or sleep/wake** when the LaunchAgent was already running.
+
+**Fix:**
+
+1. Confirm with `rusty-jack status`: preferred HDMI/DP is active, eqMac is installed, and the **System default (virtual)** footer is **missing**.
+2. The daemon should auto-recover: on **idle→active** (unlock/activity), on **scheduled** polls while active, and on **`apply` / `picker`**, it restarts eqMac when the process is up but the virtual default is missing (60s cooldown).
+3. After recovery, status should show `System default (virtual)` routing to your monitor, and `osascript -e 'get volume settings'` should report a numeric `output volume`.
+4. Manual workaround: quit and relaunch eqMac, then re-check status.
+
+---
+
 ## `apply` says switched but I hear nothing
 
 - Wrong device in config — run `list`, fix `preferred_device.uid`; `preferred_device.name` is only the human-readable label.
