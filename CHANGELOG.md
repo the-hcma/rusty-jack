@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.7](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.6...rusty-jack-v0.11.7) (2026-08-29)
+
+
+### Bug Fixes
+
+* restart stale eqMac when virtual default is missing ([#210](https://github.com/the-hcma/rusty-jack/issues/210)) ([db0bcab](https://github.com/the-hcma/rusty-jack/commit/db0bcab6cb6c8ca754014d352c1e870de863ae94))
+
 ## [0.11.6](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.5...rusty-jack-v0.11.6) (2026-07-23)
 
 
