@@ -186,7 +186,10 @@ pub fn format_ensure_messages(result: HdmiDisplayPortVolumeControlEnsureResult) 
             vec!["Started eqMac for HDMI/DisplayPort audio volume control.".into()]
         }
         HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted => {
-            vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
+            vec![
+                "Restarted eqMac to restore HDMI/DisplayPort volume control (virtual default was missing)."
+                    .into(),
+            ]
         }
         HdmiDisplayPortVolumeControlEnsureAction::NativeDriverRecommended => {
             if native_driver_user_install_offered() {

@@ -535,6 +535,7 @@ fn ensure_hdmi_displayport_volume_control_for_daemon_target(
     let should_log = matches!(
         volume_control.action,
         HdmiDisplayPortVolumeControlEnsureAction::EqMacLaunched
+            | HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted
     ) || (reason == DaemonTickReason::Startup
         && matches!(
             volume_control.action,
@@ -1619,6 +1620,38 @@ mod tests {
             hal.default_output_uid().unwrap().as_deref(),
             Some("EQMOutputCapture")
         );
+    }
+
+    #[test]
+    fn test_daemon_user_activity_accepts_stale_eqmac_restart_from_ensure() {
+        let mut hdmi = hdmi_device("hdmi-1", "DELL U3219Q");
+        hdmi.is_active = true;
+        let hal = MockHal::new(vec![hdmi]).with_default("hdmi-1");
+        let ensure_calls = std::sync::Mutex::new(Vec::<String>::new());
+        let recover_volume_control =
+            |_: &[OutputDevice], _: &str| panic!("user-activity uses ensure, not recover");
+        let ensure_volume_control = |_: &[OutputDevice], target_uid: &str| {
+            ensure_calls.lock().unwrap().push(target_uid.to_string());
+            Ok(HdmiDisplayPortVolumeControlEnsureResult {
+                action: HdmiDisplayPortVolumeControlEnsureAction::EqMacRestarted,
+            })
+        };
+
+        let (result, _list) = daemon_tick_with_hooks(
+            &hal,
+            &test_config("hdmi-1"),
+            DaemonTickReason::UserActivity,
+            &daemon_hooks_with_hdmi_displayport_volume_control(
+                &ensure_volume_control,
+                &recover_volume_control,
+            ),
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(result, DaemonTickResult::NoChange(_)));
+        assert_eq!(ensure_calls.lock().unwrap().as_slice(), ["hdmi-1"]);
+        assert!(hal.set_calls().is_empty());
     }
 
     #[test]

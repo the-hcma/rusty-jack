@@ -4,6 +4,8 @@ use crate::config::default_config_path;
 use crate::output_device::OutputDevice;
 use crate::RustyJackError;
 use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,10 +16,14 @@ const EQMAC_APP_PATH: &str = "/Applications/eqMac.app";
 pub const EQMAC_EMBEDDED_DRIVER_PATH: &str =
     "/Applications/eqMac.app/Contents/Resources/Embedded/eqMac.driver";
 pub const EQMAC_HAL_DRIVER_PATH: &str = "/Library/Audio/Plug-Ins/HAL/eqMac.driver";
+/// Minimum time between automatic eqMac restarts (unlock, scheduled health checks, startup).
+pub const EQMAC_RESTART_COOLDOWN: Duration = Duration::from_secs(60);
 const EQMAC_STARTUP_WAIT: Duration = Duration::from_millis(1500);
 const EQMAC_STARTUP_POLL: Duration = Duration::from_millis(100);
 const EQMAC_DRIVER_BACKUP_DIR_NAME: &str = "driver-backups";
 const EQMAC_DRIVER_BACKUP_METADATA_NAME: &str = "eqMac.driver.json";
+const EQMAC_LAST_RESTART_FILE_NAME: &str = "eqmac-last-restart";
+const ENV_STATE_DIR: &str = "RUSTY_JACK_STATE_DIR";
 
 /// Whether eqMac is present on the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -198,7 +204,29 @@ pub fn eqmac_is_running() -> bool {
     crate::process_detect::any_process_with_exact_name(EQMAC_APP_NAME)
 }
 
+/// True when CoreAudio's default output is eqMac's virtual volume router.
+#[must_use]
+pub fn eqmac_virtual_default_is_active() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::coreaudio::volume::default_output_is_virtual_router()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// True when eqMac is running and owns the system default (volume keys can work).
+#[must_use]
+pub fn eqmac_volume_control_is_healthy(running: bool, virtual_default_active: bool) -> bool {
+    running && virtual_default_active
+}
+
 /// Start eqMac if installed, not running, and the target route needs software volume.
+///
+/// When eqMac is already running but no longer owns the CoreAudio virtual default
+/// (common after unlock / sleep), restarts it subject to [`EQMAC_RESTART_COOLDOWN`].
 ///
 /// # Errors
 ///
@@ -216,29 +244,7 @@ pub fn ensure_eqmac_for_target(
     ensure_eqmac_running()
 }
 
-fn wait_for_eqmac_running(timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if eqmac_is_running() {
-            return true;
-        }
-        thread::sleep(EQMAC_STARTUP_POLL);
-    }
-    eqmac_is_running()
-}
-
-fn wait_for_eqmac_shutdown(timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if !eqmac_is_running() {
-            return true;
-        }
-        thread::sleep(EQMAC_STARTUP_POLL);
-    }
-    !eqmac_is_running()
-}
-
-/// Start eqMac when installed but not running.
+/// Start eqMac when installed but not running; restart when running but stale.
 ///
 /// # Errors
 ///
@@ -252,14 +258,31 @@ pub fn ensure_eqmac_running() -> Result<EqMacEnsureResult, RustyJackError> {
     }
 
     if eqmac_is_running() {
-        return Ok(EqMacEnsureResult {
-            action: EqMacEnsureAction::AlreadyRunning,
+        if eqmac_volume_control_is_healthy(true, eqmac_virtual_default_is_active()) {
+            return Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::AlreadyRunning,
+            });
+        }
+        return with_eqmac_restart_lock(|_lock| {
+            // Another process may have recovered while we waited for the lock.
+            if eqmac_volume_control_is_healthy(true, eqmac_virtual_default_is_active()) {
+                return Ok(EqMacEnsureResult {
+                    action: EqMacEnsureAction::AlreadyRunning,
+                });
+            }
+            if !eqmac_restart_cooldown_elapsed() {
+                return Ok(EqMacEnsureResult {
+                    action: EqMacEnsureAction::AlreadyRunning,
+                });
+            }
+            restart_eqmac_app()
         });
     }
 
     match launch_eqmac_app()? {
         EqMacLaunchAction::Launched => {
             let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_virtual_default(EQMAC_STARTUP_WAIT);
             Ok(EqMacEnsureResult {
                 action: EqMacEnsureAction::Launched,
             })
@@ -290,32 +313,82 @@ pub fn restart_eqmac_for_target(
         });
     }
 
-    if eqmac_is_running() {
-        quit_eqmac_app();
-        let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
-        if eqmac_is_running() {
-            kill_eqmac_app();
-            let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
-        }
-    }
+    with_eqmac_restart_lock(|_lock| restart_eqmac_app())
+}
 
-    match launch_eqmac_app()? {
-        EqMacLaunchAction::Launched => {
-            let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
-            Ok(EqMacEnsureResult {
-                action: EqMacEnsureAction::Restarted,
-            })
+/// Human-readable lines for stderr after ensuring eqMac.
+#[must_use]
+pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
+    match result.action {
+        EqMacEnsureAction::NotNeeded | EqMacEnsureAction::AlreadyRunning => vec![],
+        EqMacEnsureAction::Launched => {
+            vec!["Started eqMac (software volume for HDMI/DisplayPort).".into()]
         }
-        EqMacLaunchAction::NotInstalled => Ok(EqMacEnsureResult {
-            action: EqMacEnsureAction::NotInstalled,
-        }),
+        EqMacEnsureAction::Restarted => {
+            vec![
+                "Restarted eqMac to restore HDMI/DisplayPort volume control (virtual default was missing)."
+                    .into(),
+            ]
+        }
+        EqMacEnsureAction::NotInstalled => vec![],
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EqMacLaunchAction {
-    Launched,
-    NotInstalled,
+fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
+    if success {
+        return Ok(EqMacLaunchAction::Launched);
+    }
+    if stderr.contains("Unable to find application named") {
+        return Ok(EqMacLaunchAction::NotInstalled);
+    }
+
+    Err(RustyJackError::AppLaunch(format!(
+        "failed to launch eqMac: {stderr}"
+    )))
+}
+
+fn eqmac_last_restart_path() -> Option<PathBuf> {
+    eqmac_state_dir().map(|dir| dir.join(EQMAC_LAST_RESTART_FILE_NAME))
+}
+
+fn eqmac_restart_cooldown_elapsed() -> bool {
+    let Some(path) = eqmac_last_restart_path() else {
+        return true;
+    };
+    let mut raw = String::new();
+    let Ok(mut file) = File::open(&path) else {
+        return true;
+    };
+    if file.read_to_string(&mut raw).is_err() {
+        return true;
+    }
+    let Ok(secs) = raw.trim().parse::<u64>() else {
+        return true;
+    };
+    let Some(at) = UNIX_EPOCH.checked_add(Duration::from_secs(secs)) else {
+        return true;
+    };
+    match SystemTime::now().duration_since(at) {
+        Ok(elapsed) => elapsed >= EQMAC_RESTART_COOLDOWN,
+        Err(_) => true,
+    }
+}
+
+fn eqmac_state_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(ENV_STATE_DIR) {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
+    if cfg!(test) {
+        return None;
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".local/state/rusty-jack"))
+}
+
+fn kill_eqmac_app() {
+    crate::process_detect::kill_processes_with_exact_name(EQMAC_APP_NAME);
 }
 
 fn launch_eqmac_app() -> Result<EqMacLaunchAction, RustyJackError> {
@@ -336,36 +409,142 @@ fn quit_eqmac_app() {
         .output();
 }
 
-fn kill_eqmac_app() {
-    crate::process_detect::kill_processes_with_exact_name(EQMAC_APP_NAME);
+fn record_eqmac_restart() {
+    let Some(path) = eqmac_last_restart_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let _ = std::fs::write(path, format!("{secs}\n"));
 }
 
-fn classify_eqmac_launch(success: bool, stderr: &str) -> Result<EqMacLaunchAction, RustyJackError> {
-    if success {
-        return Ok(EqMacLaunchAction::Launched);
-    }
-    if stderr.contains("Unable to find application named") {
-        return Ok(EqMacLaunchAction::NotInstalled);
+fn restart_eqmac_app() -> Result<EqMacEnsureResult, RustyJackError> {
+    if eqmac_is_running() {
+        quit_eqmac_app();
+        let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
+        if eqmac_is_running() {
+            kill_eqmac_app();
+            let _ = wait_for_eqmac_shutdown(EQMAC_STARTUP_WAIT);
+        }
     }
 
-    Err(RustyJackError::AppLaunch(format!(
-        "failed to launch eqMac: {stderr}"
-    )))
+    match launch_eqmac_app()? {
+        EqMacLaunchAction::Launched => {
+            record_eqmac_restart();
+            let _ = wait_for_eqmac_running(EQMAC_STARTUP_WAIT);
+            let _ = wait_for_eqmac_virtual_default(EQMAC_STARTUP_WAIT);
+            Ok(EqMacEnsureResult {
+                action: EqMacEnsureAction::Restarted,
+            })
+        }
+        EqMacLaunchAction::NotInstalled => Ok(EqMacEnsureResult {
+            action: EqMacEnsureAction::NotInstalled,
+        }),
+    }
 }
 
-/// Human-readable lines for stderr after ensuring eqMac.
-#[must_use]
-pub fn format_ensure_messages(result: EqMacEnsureResult) -> Vec<String> {
-    match result.action {
-        EqMacEnsureAction::NotNeeded | EqMacEnsureAction::AlreadyRunning => vec![],
-        EqMacEnsureAction::Launched => {
-            vec!["Started eqMac (software volume for HDMI/DisplayPort).".into()]
+fn wait_for_eqmac_running(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if eqmac_is_running() {
+            return true;
         }
-        EqMacEnsureAction::Restarted => {
-            vec!["Restarted eqMac to recover HDMI/DisplayPort audio.".into()]
-        }
-        EqMacEnsureAction::NotInstalled => vec![],
+        thread::sleep(EQMAC_STARTUP_POLL);
     }
+    eqmac_is_running()
+}
+
+fn wait_for_eqmac_shutdown(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !eqmac_is_running() {
+            return true;
+        }
+        thread::sleep(EQMAC_STARTUP_POLL);
+    }
+    !eqmac_is_running()
+}
+
+fn wait_for_eqmac_virtual_default(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if eqmac_virtual_default_is_active() {
+            return true;
+        }
+        thread::sleep(EQMAC_STARTUP_POLL);
+    }
+    eqmac_virtual_default_is_active()
+}
+
+fn with_eqmac_restart_lock<T>(
+    f: impl FnOnce(Option<&File>) -> Result<T, RustyJackError>,
+) -> Result<T, RustyJackError> {
+    let Some(path) = eqmac_last_restart_path() else {
+        return f(None);
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(RustyJackError::Io)?;
+    }
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(RustyJackError::Io)?;
+    flock_exclusive(&file)?;
+    let result = f(Some(&file));
+    let _ = flock_unlock(&file);
+    result
+}
+
+fn flock_exclusive(file: &File) -> Result<(), RustyJackError> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        #[allow(unsafe_code)]
+        // SAFETY: `file` remains open for the duration of this flock call.
+        let status = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if status != 0 {
+            return Err(RustyJackError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Ok(())
+    }
+}
+
+fn flock_unlock(file: &File) -> Result<(), RustyJackError> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        #[allow(unsafe_code)]
+        // SAFETY: `file` remains open for the duration of this flock call.
+        let status = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        if status != 0 {
+            return Err(RustyJackError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EqMacLaunchAction {
+    Launched,
+    NotInstalled,
 }
 
 #[cfg(test)]
@@ -414,6 +593,7 @@ mod tests {
         });
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("Restarted eqMac"));
+        assert!(lines[0].contains("virtual default was missing"));
     }
 
     #[test]
@@ -440,6 +620,41 @@ mod tests {
             backup_dir,
             PathBuf::from("/Users/example/.config/rusty-jack/driver-backups")
         );
+    }
+
+    #[test]
+    fn test_eqmac_volume_control_healthy_requires_running_and_virtual_default() {
+        assert!(eqmac_volume_control_is_healthy(true, true));
+        assert!(!eqmac_volume_control_is_healthy(true, false));
+        assert!(!eqmac_volume_control_is_healthy(false, true));
+        assert!(!eqmac_volume_control_is_healthy(false, false));
+    }
+
+    #[test]
+    fn test_eqmac_restart_cooldown_reads_persisted_timestamp() {
+        with_state_dir(|| {
+            let path = eqmac_last_restart_path().expect("state dir set");
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            std::fs::write(&path, format!("{now}\n")).unwrap();
+            assert!(!eqmac_restart_cooldown_elapsed());
+            let old = now.saturating_sub(EQMAC_RESTART_COOLDOWN.as_secs() + 5);
+            std::fs::write(&path, format!("{old}\n")).unwrap();
+            assert!(eqmac_restart_cooldown_elapsed());
+        });
+    }
+
+    fn with_state_dir<T>(f: impl FnOnce() -> T) -> T {
+        use std::sync::{Mutex, MutexGuard};
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard: MutexGuard<'_, ()> = LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var(ENV_STATE_DIR, dir.path());
+        let result = f();
+        std::env::remove_var(ENV_STATE_DIR);
+        result
     }
 
     #[test]
