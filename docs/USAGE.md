@@ -206,7 +206,7 @@ On first-time interactive `install` or `config init`, Rusty Jack can configure [
 
 Rusty Jack targets **network speakers** for this flow. TV-class ScalarWebAPI endpoints (for example Bravia displays) are **not** proposed during install discovery even if they answer on the LAN. Re-run interactive `install` later to add ScalarWebAPI to an existing config or use the reconfigure prompts when updating an existing file.
 
-At runtime, wake resolves the JSON-RPC base URL in this order: in-memory cache, fresh on-disk discovery cache, SSDP/UPnP for the configured `host`, a stale on-disk cache entry, then config `host`/`port`/`path`. Set `port` to the device’s advertised ScalarWebAPI port (often `54480`) so wake still works when SSDP is blocked or flaky.
+At runtime, wake resolves the JSON-RPC base URL in this order: in-memory cache, fresh on-disk discovery cache, SSDP/UPnP for the configured `host`, a stale on-disk cache entry (unless a non-legacy config `port` disagrees — then config wins), then config `host`/`port`/`path`. Set `port` to the device’s advertised ScalarWebAPI port (often `54480`) so wake still works when SSDP is blocked or flaky.
 
 ### Native HDMI/DisplayPort Driver
 

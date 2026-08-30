@@ -216,6 +216,8 @@ const SSDP_PROBE_COUNT: u32 = 3;
 const SSDP_PROBE_INTERVAL_MS: u64 = 400;
 const SSDP_RECV_SLICE_MS: u64 = 250;
 const ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(300);
+/// Legacy placeholder JSON-RPC port from config defaults; prefer stale discovery over it.
+const LEGACY_SCALAR_WEBAPI_JSON_RPC_PORT: u16 = 10_000;
 pub const DISPLAY_POWER_TIMEOUT_MS: u64 = 750;
 const SCALAR_DISCOVERY_CACHE_FILE: &str = "scalar-discovery-cache.json";
 
@@ -796,12 +798,17 @@ pub(crate) fn display_endpoint_for_api(
         return Some(endpoint);
     }
     if let Some(cached) = load_scalar_endpoint_from_disk(&host_key) {
-        persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
+        // Memory only — do not re-stamp disk freshness (SSDP must still refresh later).
+        remember_scalar_endpoint_in_memory(
+            &host_key,
+            &cached.endpoint,
+            cached.speaker_model.clone(),
+        );
         return Some(cached.endpoint);
     }
     if let Some(cached) = load_scalar_endpoint_from_disk_allow_stale(&host_key) {
-        // Do not promote stale discovery entries to a fresh disk timestamp.
-        return Some(cached.endpoint);
+        let (endpoint, _, _) = resolve_stale_disk_vs_config(api, &cached);
+        return Some(endpoint);
     }
     endpoint_from_config(api).ok()
 }
@@ -844,7 +851,12 @@ pub(crate) fn resolve_scalar_webapi_device_endpoint(
         return Ok(Some(endpoint));
     }
     if let Some(cached) = load_scalar_endpoint_from_disk(&host_key) {
-        persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
+        // Memory only — do not re-stamp disk freshness (SSDP must still refresh later).
+        remember_scalar_endpoint_in_memory(
+            &host_key,
+            &cached.endpoint,
+            cached.speaker_model.clone(),
+        );
         return Ok(Some(cached.endpoint));
     }
 
@@ -872,20 +884,17 @@ fn endpoint_after_ssdp_miss(
     host_key: &str,
 ) -> Option<ScalarWebApiDeviceEndpoint> {
     if let Some(cached) = load_scalar_endpoint_from_disk_allow_stale(host_key) {
+        let (endpoint, speaker_model, source) = resolve_stale_disk_vs_config(api, &cached);
         tracing::warn!(
             target: "daemon",
-            "[scalar] SSDP found no JSON-RPC endpoint for {host_key}; using cached {}:{}{}",
-            cached.endpoint.host,
-            cached.endpoint.port,
-            cached.endpoint.path
+            "[scalar] SSDP found no JSON-RPC endpoint for {host_key}; using {source} {}:{}{}",
+            endpoint.host,
+            endpoint.port,
+            endpoint.path
         );
         // Memory-only: keep disk timestamp stale so SSDP can recover later.
-        remember_scalar_endpoint_in_memory(
-            host_key,
-            &cached.endpoint,
-            cached.speaker_model.clone(),
-        );
-        return Some(cached.endpoint);
+        remember_scalar_endpoint_in_memory(host_key, &endpoint, speaker_model);
+        return Some(endpoint);
     }
 
     match endpoint_from_config(api) {
@@ -909,6 +918,37 @@ fn endpoint_after_ssdp_miss(
             );
             None
         }
+    }
+}
+
+/// Choose between a stale on-disk discovery entry and config when SSDP misses.
+///
+/// A corrected non-legacy config port wins over a disagreeing stale entry. When config still
+/// uses the legacy placeholder port (`10000`), prefer the stale discovery endpoint so a prior
+/// SSDP hit can wake the device before the user updates `port`.
+fn resolve_stale_disk_vs_config(
+    api: &ScalarWebApiDeviceConfig,
+    stale: &CachedScalarEndpointOnDisk,
+) -> (ScalarWebApiDeviceEndpoint, Option<String>, &'static str) {
+    match endpoint_from_config(api) {
+        Ok(configured) if configured == stale.endpoint => (
+            stale.endpoint.clone(),
+            stale.speaker_model.clone(),
+            "cached",
+        ),
+        Ok(configured) if api.port != LEGACY_SCALAR_WEBAPI_JSON_RPC_PORT => {
+            (configured, None, "configured")
+        }
+        Ok(_) => (
+            stale.endpoint.clone(),
+            stale.speaker_model.clone(),
+            "cached",
+        ),
+        Err(_) => (
+            stale.endpoint.clone(),
+            stale.speaker_model.clone(),
+            "cached",
+        ),
     }
 }
 
@@ -1777,6 +1817,35 @@ mod tests {
     }
 
     #[test]
+    fn test_display_endpoint_prefers_non_legacy_config_over_disagreeing_stale() {
+        let _lock = discovery_cache_test_lock();
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let host_key = "display-stale-vs-config.test";
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        api.host = Some(host_key.into());
+        api.port = 54_480;
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.insert(
+            host_key.into(),
+            CachedScalarEndpointOnDisk {
+                endpoint: ScalarWebApiDeviceEndpoint {
+                    host: host_key.into(),
+                    port: 10_000,
+                    path: format!("/{}", protocol_path()),
+                },
+                speaker_model: Some("SRS-ZR5".into()),
+                cached_at_unix_ms: now_unix_ms()
+                    .saturating_sub(ENDPOINT_CACHE_TTL.as_millis() as u64 + 60_000),
+            },
+        );
+        write_scalar_discovery_cache_file(&cache);
+
+        let endpoint = display_endpoint_for_api(api).unwrap();
+        assert_eq!(endpoint.port, 54_480);
+    }
+
+    #[test]
     fn test_display_endpoint_uses_config_without_ssdp() {
         clear_scalar_webapi_endpoint_cache_for_tests();
         let mut config = config_for("line-out");
@@ -1819,7 +1888,40 @@ mod tests {
     }
 
     #[test]
-    fn test_endpoint_after_ssdp_miss_prefers_stale_cache_over_config() {
+    fn test_endpoint_after_ssdp_miss_prefers_non_legacy_config_over_stale() {
+        let _lock = discovery_cache_test_lock();
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        let host_key = "stale-vs-config.test";
+        api.host = Some(host_key.into());
+        api.port = 54_480;
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.insert(
+            host_key.into(),
+            CachedScalarEndpointOnDisk {
+                endpoint: ScalarWebApiDeviceEndpoint {
+                    host: host_key.into(),
+                    port: 10_000,
+                    path: format!("/{}", protocol_path()),
+                },
+                speaker_model: Some("SRS-ZR5".into()),
+                cached_at_unix_ms: now_unix_ms()
+                    .saturating_sub(ENDPOINT_CACHE_TTL.as_millis() as u64 + 60_000),
+            },
+        );
+        write_scalar_discovery_cache_file(&cache);
+
+        let resolved = endpoint_after_ssdp_miss(api, host_key).unwrap();
+        assert_eq!(resolved.port, 54_480);
+        assert!(
+            load_scalar_endpoint_from_disk(host_key).is_none(),
+            "config preference must not promote the stale disk timestamp"
+        );
+    }
+
+    #[test]
+    fn test_endpoint_after_ssdp_miss_prefers_stale_cache_over_legacy_config() {
         let _lock = discovery_cache_test_lock();
         clear_scalar_webapi_memory_endpoint_cache_for_tests();
         let mut config = config_for("line-out");
@@ -1872,6 +1974,46 @@ mod tests {
     }
 
     #[test]
+    fn test_fresh_disk_endpoint_read_does_not_restamp_disk() {
+        let _lock = discovery_cache_test_lock();
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let host_key = "fresh-no-restamp.test";
+        let stamped_at = now_unix_ms().saturating_sub(60_000);
+        let endpoint = ScalarWebApiDeviceEndpoint {
+            host: host_key.into(),
+            port: 54_480,
+            path: format!("/{}", protocol_path()),
+        };
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.insert(
+            host_key.into(),
+            CachedScalarEndpointOnDisk {
+                endpoint: endpoint.clone(),
+                speaker_model: Some("SRS-ZR5".into()),
+                cached_at_unix_ms: stamped_at,
+            },
+        );
+        write_scalar_discovery_cache_file(&cache);
+
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        api.host = Some(host_key.into());
+        api.port = 10_000;
+
+        let resolved = resolve_scalar_webapi_device_endpoint(api).unwrap().unwrap();
+        assert_eq!(resolved.port, 54_480);
+        let kept = load_scalar_endpoint_from_disk_allow_stale(host_key).unwrap();
+        assert_eq!(
+            kept.cached_at_unix_ms, stamped_at,
+            "fresh disk reads must not rewrite cached_at_unix_ms"
+        );
+        assert_eq!(
+            memory_cached_endpoint(host_key).map(|endpoint| endpoint.port),
+            Some(54_480)
+        );
+    }
+
+    #[test]
     fn test_load_scalar_endpoint_from_disk_keeps_stale_entries() {
         let _lock = discovery_cache_test_lock();
         clear_scalar_webapi_memory_endpoint_cache_for_tests();
@@ -1915,6 +2057,78 @@ mod tests {
             )
             .as_deref(),
             Some("SRS-ZR5")
+        );
+    }
+
+    #[test]
+    fn test_send_wake_command_to_posts_set_power_status_when_prime_fails() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel::<String>();
+        thread::spawn(move || {
+            for _ in 0..4 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut buf = [0_u8; 8192];
+                let len = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..len]).into_owned();
+                let _ = tx.send(req.clone());
+                if req.contains("Upgrade: websocket") {
+                    let response =
+                        "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes());
+                    continue;
+                }
+                let body = if req.contains("setPowerStatus") {
+                    r#"{"result":[],"id":1}"#
+                } else {
+                    // Prime guide call: omit "result" so priming fails.
+                    r#"{"id":1}"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        api.host = Some("127.0.0.1".into());
+        api.port = port;
+        api.request_timeout_ms = 1_000;
+        let endpoint = ScalarWebApiDeviceEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+            path: format!("/{}", protocol_path()),
+        };
+
+        let result = send_wake_command_to(api, &endpoint).expect("wake should succeed over HTTP");
+        assert!((200..300).contains(&result.status_code));
+
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            first.starts_with("POST ") && first.contains("getSupportedApiInfo"),
+            "expected priming HTTP POST first, got: {first}"
+        );
+
+        let second = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            second.starts_with("POST ")
+                && second.contains("setPowerStatus")
+                && second.contains(r#""id":1"#),
+            "expected HTTP POST setPowerStatus with id=1 before WebSocket, got: {second}"
+        );
+        assert!(
+            !second.contains("Upgrade: websocket"),
+            "wake must prefer HTTP POST before WebSocket, got: {second}"
         );
     }
 
