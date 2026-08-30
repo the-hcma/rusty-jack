@@ -5,6 +5,8 @@
 
 use crate::config::{load_config_optional, resolve_config_path, Config};
 #[cfg(target_os = "macos")]
+use crate::network::lan_connectivity_ready;
+#[cfg(target_os = "macos")]
 use crate::scalar_webapi_device::discover_scalar_webapi_devices_on_lan;
 use crate::RustyJackError;
 use serde::Serialize;
@@ -21,19 +23,46 @@ pub struct PrivacyPermissionStatus {
     /// `Some(true/false)` on macOS when Accessibility is required; otherwise `None`.
     pub accessibility_trusted: Option<bool>,
     pub force_daemon_restart: bool,
+    /// `Some(true)` when SSDP heard a device; `None` when unchecked/inconclusive
+    /// (no LAN route, empty SSDP, or probe skipped). Never claims permission is
+    /// missing solely because SSDP returned empty.
     pub local_network_ok: Option<bool>,
     pub local_network_required: bool,
     pub notes: Vec<String>,
 }
 
 /// Load optional config and ensure required privacy permissions for install/upgrade.
+///
+/// Config load/validation failures are tolerated: permission checks are skipped so
+/// `upgrade` can still refresh the LaunchAgent (matching pre-#216 behavior).
 pub fn ensure_privacy_permissions_for_setup(
     interactive: bool,
     config_cli_path: Option<&Path>,
 ) -> Result<PrivacyPermissionStatus, RustyJackError> {
     let path = resolve_config_path(config_cli_path);
     let config = match path.as_deref() {
-        Some(path) => load_config_optional(path, false)?,
+        Some(path) => match load_config_optional(path, false) {
+            Ok(config) => config,
+            Err(err) => {
+                tracing::warn!(
+                    target: "setup",
+                    "[privacy] skipping permission checks; could not load config {}: {}",
+                    path.display(),
+                    err.detail_message()
+                );
+                return Ok(PrivacyPermissionStatus {
+                    accessibility_required: false,
+                    accessibility_trusted: None,
+                    force_daemon_restart: false,
+                    local_network_ok: None,
+                    local_network_required: false,
+                    notes: vec![format!(
+                        "skipped privacy checks (config load failed: {})",
+                        err.detail_message()
+                    )],
+                });
+            }
+        },
         None => None,
     };
     match config.as_ref() {
@@ -75,6 +104,13 @@ pub fn ensure_privacy_permissions(
 pub fn check_privacy_permissions(
     config: &Config,
 ) -> Result<PrivacyPermissionStatus, RustyJackError> {
+    check_privacy_permissions_with(config, probe_local_network_permission)
+}
+
+fn check_privacy_permissions_with(
+    config: &Config,
+    local_network_probe: impl FnOnce() -> Option<bool>,
+) -> Result<PrivacyPermissionStatus, RustyJackError> {
     let accessibility_required = config.activity_monitor.eq_ignore_ascii_case("event_tap");
     let local_network_required = config
         .scalar_webapi_device
@@ -88,7 +124,7 @@ pub fn check_privacy_permissions(
     };
 
     let local_network_ok = if local_network_required {
-        Some(probe_local_network_permission()?)
+        local_network_probe()
     } else {
         None
     };
@@ -107,9 +143,12 @@ pub fn check_privacy_permissions(
         match local_network_ok {
             Some(true) => notes.push("Local Network SSDP probe found at least one device".into()),
             Some(false) => notes.push(
-                "Local Network may be missing or no ScalarWebAPI speakers answered SSDP".into(),
+                "Local Network may need a grant (see System Settings → Privacy & Security)".into(),
             ),
-            None => {}
+            None => notes.push(
+                "Local Network not confirmed (no LAN route or SSDP inconclusive; not treating as denied)"
+                    .into(),
+            ),
         }
     }
 
@@ -141,8 +180,8 @@ pub fn print_privacy_permission_status(status: &PrivacyPermissionStatus) {
     if status.local_network_required {
         let state = match status.local_network_ok {
             Some(true) => "ok (SSDP probe heard a device)",
-            Some(false) => "check System Settings (SSDP heard nothing)",
-            None => "unchecked",
+            Some(false) => "check System Settings",
+            None => "unchecked / inconclusive",
         };
         println!("  Local Network: {state}");
     }
@@ -165,24 +204,36 @@ fn accessibility_is_trusted() -> bool {
     }
 }
 
-fn probe_local_network_permission() -> Result<bool, RustyJackError> {
+/// Probe Local Network via a short SSDP scan.
+///
+/// Returns `Some(true)` only when at least one speaker answers. Empty SSDP or no
+/// LAN route is `None` (inconclusive) — never treated as a confirmed denial.
+fn probe_local_network_permission() -> Option<bool> {
     #[cfg(target_os = "macos")]
     {
+        if !lan_connectivity_ready() {
+            tracing::info!(
+                target: "setup",
+                "[privacy] skipping Local Network SSDP probe; LAN connectivity not ready"
+            );
+            return None;
+        }
         match discover_scalar_webapi_devices_on_lan(LOCAL_NETWORK_PROBE_TIMEOUT_MS) {
-            Ok(devices) => Ok(!devices.is_empty()),
+            Ok(devices) if !devices.is_empty() => Some(true),
+            Ok(_) => None,
             Err(err) => {
                 tracing::warn!(
                     target: "setup",
                     "[privacy] Local Network SSDP probe failed: {}",
                     err.detail_message()
                 );
-                Ok(false)
+                None
             }
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(false)
+        None
     }
 }
 
@@ -209,7 +260,7 @@ fn prompt_missing_permissions(status: &mut PrivacyPermissionStatus) -> Result<()
             .interact()
             .map_err(|err| RustyJackError::Config(format!("Accessibility prompt failed: {err}")))?
         {
-            open_privacy_pane(PrivacyPane::Accessibility)?;
+            open_privacy_pane(PrivacyPane::Accessibility);
         }
         let _ = Confirm::new()
             .with_prompt("Press Enter after granting Accessibility (or skip if already done)")
@@ -232,42 +283,26 @@ fn prompt_missing_permissions(status: &mut PrivacyPermissionStatus) -> Result<()
         }
     }
 
-    if status.local_network_required && status.local_network_ok == Some(false) {
+    // Local Network: only advisory when inconclusive. Do not force System Settings
+    // for empty SSDP (cannot distinguish permission denial from offline speaker).
+    if status.local_network_required && status.local_network_ok.is_none() {
         eprintln!(
             "{}",
-            style("Local Network permission may be missing (SSDP found 0 ScalarWebAPI speakers).")
-                .yellow()
+            style("Local Network could not be confirmed (no LAN route or SSDP heard no speakers).")
+                .dim()
         );
         eprintln!(
-            "If a speaker is on the LAN, grant Local Network for rusty-jack in \
-             System Settings → Privacy & Security → Local Network, then restart the daemon."
+            "If discovery stays empty while a speaker is on the LAN, grant Local Network for \
+             rusty-jack in System Settings → Privacy & Security → Local Network."
         );
         if Confirm::new()
-            .with_prompt("Open Local Network settings now?")
-            .default(true)
+            .with_prompt("Open Local Network settings now? (optional)")
+            .default(false)
             .interact()
             .map_err(|err| RustyJackError::Config(format!("Local Network prompt failed: {err}")))?
         {
-            open_privacy_pane(PrivacyPane::LocalNetwork)?;
-        }
-        let _ = Confirm::new()
-            .with_prompt("Press Enter after granting Local Network (or skip if already done)")
-            .default(true)
-            .interact()
-            .map_err(|err| {
-                RustyJackError::Config(format!("Local Network confirmation failed: {err}"))
-            })?;
-        let ok = probe_local_network_permission()?;
-        status.local_network_ok = Some(ok);
-        if ok {
-            status
-                .notes
-                .push("Local Network SSDP probe succeeded after prompt".into());
-        } else {
-            status.notes.push(
-                "SSDP still empty after prompt; wake can use cache/config port if set correctly"
-                    .into(),
-            );
+            open_privacy_pane(PrivacyPane::LocalNetwork);
+            status.local_network_ok = probe_local_network_permission();
         }
     }
 
@@ -280,9 +315,9 @@ fn push_noninteractive_notes(status: &mut PrivacyPermissionStatus) {
             .notes
             .push("grant Accessibility to rusty-jack, then run: rusty-jack upgrade --force".into());
     }
-    if status.local_network_required && status.local_network_ok == Some(false) {
+    if status.local_network_required && status.local_network_ok.is_none() {
         status.notes.push(
-            "grant Local Network to rusty-jack if SSDP is blocked, then: rusty-jack upgrade --force"
+            "if SSDP discovery stays empty, grant Local Network then: rusty-jack upgrade --force"
                 .into(),
         );
     }
@@ -294,7 +329,8 @@ enum PrivacyPane {
     LocalNetwork,
 }
 
-fn open_privacy_pane(pane: PrivacyPane) -> Result<(), RustyJackError> {
+/// Best-effort System Settings open; failures are non-fatal (note only).
+fn open_privacy_pane(pane: PrivacyPane) {
     let urls: &[&str] = match pane {
         PrivacyPane::Accessibility => &[
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
@@ -306,17 +342,14 @@ fn open_privacy_pane(pane: PrivacyPane) -> Result<(), RustyJackError> {
         ],
     };
     for url in urls {
-        let status = Command::new("open")
-            .arg(url)
-            .status()
-            .map_err(RustyJackError::Io)?;
-        if status.success() {
-            return Ok(());
+        match Command::new("open").arg(url).status() {
+            Ok(status) if status.success() => return,
+            Ok(_) | Err(_) => continue,
         }
     }
-    Err(RustyJackError::Config(format!(
-        "could not open System Settings for {pane:?}"
-    )))
+    eprintln!(
+        "note: could not open System Settings for {pane:?}; open Privacy & Security manually"
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -337,6 +370,29 @@ mod macos {
 mod tests {
     use super::*;
     use crate::config::{DeviceSelectorConfig, ScalarWebApiDeviceConfig};
+    use std::io::Write;
+
+    fn scalar_enabled_config() -> Config {
+        Config {
+            scalar_webapi_device: Some(ScalarWebApiDeviceConfig {
+                enabled: true,
+                model: "SRS-ZR5".into(),
+                host: Some("192.168.86.18".into()),
+                port: 54_480,
+                path: "sony/av".into(),
+                mac_output: DeviceSelectorConfig {
+                    name: None,
+                    uid: Some("uid".into()),
+                },
+                triggers: vec!["output_selected".into()],
+                wake_debounce_ms: 5_000,
+                request_timeout_ms: 3_000,
+                require_quick_start: true,
+                speaker_input: None,
+            }),
+            ..Config::default()
+        }
+    }
 
     #[test]
     fn test_check_privacy_permissions_idle_without_scalar_skips() {
@@ -361,30 +417,26 @@ mod tests {
     }
 
     #[test]
-    fn test_check_privacy_permissions_requires_local_network_for_scalar() {
-        let config = Config {
-            scalar_webapi_device: Some(ScalarWebApiDeviceConfig {
-                enabled: true,
-                model: "SRS-ZR5".into(),
-                host: Some("192.168.86.18".into()),
-                port: 54_480,
-                path: "sony/av".into(),
-                mac_output: DeviceSelectorConfig {
-                    name: None,
-                    uid: Some("uid".into()),
-                },
-                triggers: vec!["output_selected".into()],
-                wake_debounce_ms: 5_000,
-                request_timeout_ms: 3_000,
-                require_quick_start: true,
-                speaker_input: None,
-            }),
-            ..Config::default()
-        };
-        let status = check_privacy_permissions(&config).unwrap();
+    fn test_check_privacy_permissions_local_network_ok_when_probe_hears_device() {
+        let status =
+            check_privacy_permissions_with(&scalar_enabled_config(), || Some(true)).unwrap();
         assert!(status.local_network_required);
-        assert!(status.local_network_ok.is_some());
-        assert!(!status.accessibility_required);
+        assert_eq!(status.local_network_ok, Some(true));
+        assert!(status
+            .notes
+            .iter()
+            .any(|note| note.contains("found at least one device")));
+    }
+
+    #[test]
+    fn test_check_privacy_permissions_local_network_inconclusive_when_probe_empty() {
+        let status = check_privacy_permissions_with(&scalar_enabled_config(), || None).unwrap();
+        assert!(status.local_network_required);
+        assert!(status.local_network_ok.is_none());
+        assert!(status
+            .notes
+            .iter()
+            .any(|note| note.contains("inconclusive") || note.contains("not treating as denied")));
     }
 
     #[test]
@@ -399,5 +451,21 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("upgrade --force") || note.contains("Accessibility")));
+    }
+
+    #[test]
+    fn test_ensure_privacy_permissions_for_setup_tolerates_invalid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(file, "{{ \"version\": 1 }}").unwrap();
+        drop(file);
+
+        let status = ensure_privacy_permissions_for_setup(false, Some(&path)).unwrap();
+        assert!(!status.force_daemon_restart);
+        assert!(status
+            .notes
+            .iter()
+            .any(|note| note.contains("config load failed")));
     }
 }
