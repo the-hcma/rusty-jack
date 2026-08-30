@@ -24,8 +24,8 @@ pub struct PrivacyPermissionStatus {
     pub accessibility_trusted: Option<bool>,
     pub force_daemon_restart: bool,
     /// `Some(true)` when SSDP heard a device; `None` when unchecked/inconclusive
-    /// (no LAN route, empty SSDP, or probe skipped). Never claims permission is
-    /// missing solely because SSDP returned empty.
+    /// (no LAN route, empty SSDP, probe error, or skipped). The SSDP heuristic
+    /// never returns `Some(false)` — empty/error is inconclusive, not denial.
     pub local_network_ok: Option<bool>,
     pub local_network_required: bool,
     pub notes: Vec<String>,
@@ -152,10 +152,8 @@ fn check_privacy_permissions_with(
     if local_network_required {
         match local_network_ok {
             Some(true) => notes.push("Local Network SSDP probe found at least one device".into()),
-            Some(false) => notes.push(
-                "Local Network may need a grant (see System Settings → Privacy & Security)".into(),
-            ),
-            None => notes.push(
+            // Probe never emits Some(false); treat any other value as inconclusive.
+            _ => notes.push(
                 "Local Network not confirmed (no LAN route or SSDP inconclusive; not treating as denied)"
                     .into(),
             ),
@@ -190,8 +188,8 @@ pub fn print_privacy_permission_status(status: &PrivacyPermissionStatus) {
     if status.local_network_required {
         let state = match status.local_network_ok {
             Some(true) => "ok (SSDP probe heard a device)",
-            Some(false) => "check System Settings",
-            None => "unchecked / inconclusive",
+            // Probe never emits Some(false); empty/error stays inconclusive.
+            _ => "unchecked / inconclusive",
         };
         println!("  Local Network: {state}");
     }
@@ -214,6 +212,16 @@ fn accessibility_is_trusted() -> bool {
     }
 }
 
+/// Map SSDP discovery outcome to Local Network status.
+///
+/// `Ok(count > 0)` → `Some(true)`; empty or `Err` → `None` (never `Some(false)`).
+fn local_network_status_from_discovery(device_count: Result<usize, ()>) -> Option<bool> {
+    match device_count {
+        Ok(count) if count > 0 => Some(true),
+        Ok(_) | Err(()) => None,
+    }
+}
+
 /// Probe Local Network via a short SSDP scan.
 ///
 /// Returns `Some(true)` only when at least one speaker answers. Empty SSDP or no
@@ -229,15 +237,14 @@ fn probe_local_network_permission() -> Option<bool> {
             return None;
         }
         match discover_scalar_webapi_devices_on_lan(LOCAL_NETWORK_PROBE_TIMEOUT_MS) {
-            Ok(devices) if !devices.is_empty() => Some(true),
-            Ok(_) => None,
+            Ok(devices) => local_network_status_from_discovery(Ok(devices.len())),
             Err(err) => {
                 tracing::warn!(
                     target: "setup",
                     "[privacy] Local Network SSDP probe failed: {}",
                     err.detail_message()
                 );
-                None
+                local_network_status_from_discovery(Err(()))
             }
         }
     }
@@ -282,18 +289,13 @@ fn prompt_missing_permissions(
             .map_err(|err| {
                 RustyJackError::Config(format!("Accessibility confirmation failed: {err}"))
             })?;
-        let trusted = accessibility_is_trusted();
-        status.accessibility_trusted = Some(trusted);
-        if trusted {
-            status
-                .notes
-                .push("Accessibility permission confirmed after prompt".into());
-        } else {
-            status.notes.push(
-                "Accessibility still missing; daemon will start but event-tap wake may fall back"
-                    .into(),
-            );
-        }
+        // TCC Accessibility grants bind at process start; this CLI process cannot
+        // observe a fresh toggle via AXIsProcessTrusted. Leave the pre-prompt
+        // status and note that the force-restarted daemon will pick up the grant.
+        status.notes.push(
+            "Accessibility grant (if toggled) applies after daemon restart; not re-checked in this process"
+                .into(),
+        );
     }
 
     // Local Network: only advisory when inconclusive. Do not force System Settings
@@ -518,5 +520,13 @@ mod tests {
         let _ = load_config_readonly(&path).unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_local_network_status_from_discovery_maps_ssdp_outcomes() {
+        assert_eq!(local_network_status_from_discovery(Ok(1)), Some(true));
+        assert_eq!(local_network_status_from_discovery(Ok(3)), Some(true));
+        assert_eq!(local_network_status_from_discovery(Ok(0)), None);
+        assert_eq!(local_network_status_from_discovery(Err(())), None);
     }
 }

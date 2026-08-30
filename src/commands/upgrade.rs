@@ -9,12 +9,14 @@ use crate::privacy_permissions::{
 };
 use crate::setup::terminal_is_interactive;
 use anyhow::Result;
+use std::path::Path;
 
 /// Refresh the plist to the current binary path and restart the LaunchAgent when needed.
-pub fn run(json: bool, force_reload: bool) -> Result<()> {
+pub fn run(json: bool, force_reload: bool, config_path: Option<&Path>) -> Result<()> {
     let interactive = !json && terminal_is_interactive();
-    let privacy =
-        ensure_privacy_permissions_for_setup(interactive, None).map_err(anyhow::Error::new)?;
+    // Honor global `--config` so privacy checks match the daemon's config path.
+    let privacy = ensure_privacy_permissions_for_setup(interactive, config_path)
+        .map_err(anyhow::Error::new)?;
     let native_driver = upgrade_if_materially_changed(interactive).map_err(anyhow::Error::new)?;
     let force = force_reload || privacy.force_daemon_restart;
     let result = upgrade_daemon(force).map_err(anyhow::Error::new)?;

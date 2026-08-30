@@ -26,7 +26,7 @@ enum OrphanedEqMacDriverCleanupResult {
 }
 
 /// Install and start the per-user LaunchAgent.
-pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
+pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&std::path::Path>) -> Result<()> {
     let interactive = !json && terminal_is_interactive();
     let config = ensure_default_config(hal, interactive).map_err(anyhow::Error::new)?;
     let list = hal.list_outputs().ok();
@@ -53,8 +53,9 @@ pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
         None
     };
     // Config may have just been created/updated; reload from disk for permission gates.
-    let privacy =
-        ensure_privacy_permissions_for_setup(interactive, None).map_err(anyhow::Error::new)?;
+    // Honor global `--config` so privacy checks match the daemon's config path.
+    let privacy = ensure_privacy_permissions_for_setup(interactive, config_path)
+        .map_err(anyhow::Error::new)?;
     let result = install_daemon().map_err(anyhow::Error::new)?;
 
     if json {
