@@ -381,14 +381,7 @@ fn persist_scalar_endpoint_cache(
     endpoint: &ScalarWebApiDeviceEndpoint,
     speaker_model: Option<String>,
 ) {
-    if let Ok(mut guard) = endpoint_cache().lock() {
-        *guard = Some(CachedScalarEndpoint {
-            host_key: host_key.to_string(),
-            endpoint: endpoint.clone(),
-            speaker_model: speaker_model.clone(),
-            cached_at: Instant::now(),
-        });
-    }
+    remember_scalar_endpoint_in_memory(host_key, endpoint, speaker_model.clone());
 
     let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
     cache.hosts.insert(
@@ -400,6 +393,25 @@ fn persist_scalar_endpoint_cache(
         },
     );
     write_scalar_discovery_cache_file(&cache);
+}
+
+/// Cache an endpoint in memory only (do not write discovery disk cache).
+///
+/// Used for SSDP-miss fallbacks so a wrong config port cannot be pinned forever and
+/// block later SSDP recovery once the in-memory TTL expires.
+fn remember_scalar_endpoint_in_memory(
+    host_key: &str,
+    endpoint: &ScalarWebApiDeviceEndpoint,
+    speaker_model: Option<String>,
+) {
+    if let Ok(mut guard) = endpoint_cache().lock() {
+        *guard = Some(CachedScalarEndpoint {
+            host_key: host_key.to_string(),
+            endpoint: endpoint.clone(),
+            speaker_model,
+            cached_at: Instant::now(),
+        });
+    }
 }
 
 fn is_transient_network_error(err: &std::io::Error) -> bool {
@@ -788,7 +800,7 @@ pub(crate) fn display_endpoint_for_api(
         return Some(cached.endpoint);
     }
     if let Some(cached) = load_scalar_endpoint_from_disk_allow_stale(&host_key) {
-        persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
+        // Do not promote stale discovery entries to a fresh disk timestamp.
         return Some(cached.endpoint);
     }
     endpoint_from_config(api).ok()
@@ -867,7 +879,12 @@ fn endpoint_after_ssdp_miss(
             cached.endpoint.port,
             cached.endpoint.path
         );
-        persist_scalar_endpoint_cache(host_key, &cached.endpoint, cached.speaker_model.clone());
+        // Memory-only: keep disk timestamp stale so SSDP can recover later.
+        remember_scalar_endpoint_in_memory(
+            host_key,
+            &cached.endpoint,
+            cached.speaker_model.clone(),
+        );
         return Some(cached.endpoint);
     }
 
@@ -880,7 +897,8 @@ fn endpoint_after_ssdp_miss(
                 endpoint.port,
                 endpoint.path
             );
-            persist_scalar_endpoint_cache(host_key, &endpoint, None);
+            // Memory-only: never pin an unverified config port on disk.
+            remember_scalar_endpoint_in_memory(host_key, &endpoint, None);
             Some(endpoint)
         }
         Err(err) => {
@@ -894,28 +912,37 @@ fn endpoint_after_ssdp_miss(
     }
 }
 
+/// JSON-RPC id for `setPowerStatus` after optional service priming.
+fn set_power_status_rpc_id(prime: Result<u64, RustyJackError>) -> u64 {
+    prime.unwrap_or(1)
+}
+
+/// Preferred transports for `setPowerStatus` (HTTP first, WebSocket fallback).
+fn set_power_status_transport_order() -> &'static [&'static str] {
+    &["http_post", "websocket"]
+}
+
 fn send_wake_command_to(
     api: &ScalarWebApiDeviceConfig,
     api_endpoint: &ScalarWebApiDeviceEndpoint,
 ) -> Result<ScalarWebApiDeviceWakeResult, RustyJackError> {
     let endpoint = api_endpoint.service_endpoint(SYSTEM_SERVICE);
     let path = api_endpoint.service_path(SYSTEM_SERVICE);
-    let wake_id = match prime_scalar_webapi_device_services(api, api_endpoint) {
-        Ok(id) => id,
-        Err(err) => {
-            tracing::warn!(
-                target: "daemon",
-                "[scalar] service priming failed at {}: {}; sending setPowerStatus without prime",
-                api_endpoint.base_url(),
-                err.detail_message()
-            );
-            1
-        }
-    };
+    let prime = prime_scalar_webapi_device_services(api, api_endpoint);
+    if let Err(err) = &prime {
+        tracing::warn!(
+            target: "daemon",
+            "[scalar] service priming failed at {}: {}; sending setPowerStatus without prime",
+            api_endpoint.base_url(),
+            err.detail_message()
+        );
+    }
+    let wake_id = set_power_status_rpc_id(prime);
     let payload = wake_payload(wake_id);
 
     // Prefer HTTP POST for power-on: WebSocket wake can report success while the
     // device stays in standby; POST matches the reliable manual curl path.
+    debug_assert_eq!(set_power_status_transport_order()[0], "http_post");
     let response = post_json(
         &api_endpoint.host,
         api_endpoint.port,
@@ -1762,6 +1789,36 @@ mod tests {
     }
 
     #[test]
+    fn test_endpoint_after_ssdp_miss_does_not_pin_config_on_disk() {
+        let _lock = discovery_cache_test_lock();
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let host_key = "no-pin-config.test";
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.remove(host_key);
+        write_scalar_discovery_cache_file(&cache);
+
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        api.host = Some(host_key.into());
+        api.port = 10_000;
+
+        let resolved = endpoint_after_ssdp_miss(api, host_key).unwrap();
+        assert_eq!(resolved.port, 10_000);
+        assert!(
+            load_scalar_endpoint_from_disk(host_key).is_none(),
+            "config fallback must not become a fresh disk cache entry"
+        );
+        assert!(
+            load_scalar_endpoint_from_disk_allow_stale(host_key).is_none(),
+            "config fallback must not write discovery disk cache"
+        );
+        assert_eq!(
+            memory_cached_endpoint(host_key).map(|endpoint| endpoint.port),
+            Some(10_000)
+        );
+    }
+
+    #[test]
     fn test_endpoint_after_ssdp_miss_prefers_stale_cache_over_config() {
         let _lock = discovery_cache_test_lock();
         clear_scalar_webapi_memory_endpoint_cache_for_tests();
@@ -1793,6 +1850,10 @@ mod tests {
         let resolved = endpoint_after_ssdp_miss(api, host_key).unwrap();
         assert_eq!(resolved.port, 54_480);
         assert_eq!(resolved.host, host_key);
+        assert!(
+            load_scalar_endpoint_from_disk(host_key).is_none(),
+            "stale fallback must not be promoted to a fresh disk timestamp"
+        );
     }
 
     #[test]
@@ -1854,6 +1915,21 @@ mod tests {
             )
             .as_deref(),
             Some("SRS-ZR5")
+        );
+    }
+
+    #[test]
+    fn test_set_power_status_rpc_id_falls_back_to_one_when_prime_fails() {
+        let err = RustyJackError::Speaker("prime failed".into());
+        assert_eq!(set_power_status_rpc_id(Err(err)), 1);
+        assert_eq!(set_power_status_rpc_id(Ok(7)), 7);
+    }
+
+    #[test]
+    fn test_set_power_status_transport_order_prefers_http_post() {
+        assert_eq!(
+            set_power_status_transport_order(),
+            &["http_post", "websocket"]
         );
     }
 
