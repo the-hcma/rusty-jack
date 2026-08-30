@@ -73,7 +73,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
         },
         cli::Commands::Install(args) => {
             let hal = coreaudio::platform_hal()?;
-            commands::install::run(hal.as_ref(), args.json, cli.config.as_deref())?;
+            commands::install::run(hal.as_ref(), args.json)?;
         }
         cli::Commands::List(args) => {
             let hal = coreaudio::platform_hal()?;
@@ -117,9 +117,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             args.purge,
             cli.config.as_deref(),
         )?,
-        cli::Commands::Upgrade(args) => {
-            commands::upgrade::run(args.json, args.force, cli.config.as_deref())?
-        }
+        cli::Commands::Upgrade(args) => commands::upgrade::run(args.json, args.force)?,
     }
 
     Ok(())

@@ -1,5 +1,6 @@
 //! `rusty-jack upgrade` — refresh the per-user LaunchAgent when needed.
 
+use crate::config::default_config_path;
 use crate::launchd::{print_upgrade_result, upgrade_daemon};
 use crate::native_driver::{
     print_upgrade_result as print_driver_upgrade_result, upgrade_if_materially_changed,
@@ -9,14 +10,15 @@ use crate::privacy_permissions::{
 };
 use crate::setup::terminal_is_interactive;
 use anyhow::Result;
-use std::path::Path;
 
 /// Refresh the plist to the current binary path and restart the LaunchAgent when needed.
-pub fn run(json: bool, force_reload: bool, config_path: Option<&Path>) -> Result<()> {
+pub fn run(json: bool, force_reload: bool) -> Result<()> {
     let interactive = !json && terminal_is_interactive();
-    // Honor global `--config` so privacy checks match the daemon's config path.
-    let privacy = ensure_privacy_permissions_for_setup(interactive, config_path)
-        .map_err(anyhow::Error::new)?;
+    // LaunchAgent runs `daemon` without `--config`; check the default path only
+    // (ignore CLI `--config` / RUSTY_JACK_CONFIG so we match the installed daemon).
+    let privacy =
+        ensure_privacy_permissions_for_setup(interactive, default_config_path().as_deref())
+            .map_err(anyhow::Error::new)?;
     let native_driver = upgrade_if_materially_changed(interactive).map_err(anyhow::Error::new)?;
     let force = force_reload || privacy.force_daemon_restart;
     let result = upgrade_daemon(force).map_err(anyhow::Error::new)?;
