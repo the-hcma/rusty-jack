@@ -952,10 +952,15 @@ fn resolve_stale_disk_vs_config(
     }
 }
 
-/// True when an HTTP `setPowerStatus` response is a 2xx with a JSON-RPC `result`.
+/// True when an HTTP `setPowerStatus` response is a 2xx with a top-level JSON-RPC `result`.
 fn set_power_status_http_response_ok(response: &str) -> bool {
-    matches!(parse_http_status(response), Ok(code) if (200..300).contains(&code))
-        && response.contains("\"result\"")
+    if !matches!(parse_http_status(response), Ok(code) if (200..300).contains(&code)) {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(response_body(response)) else {
+        return false;
+    };
+    value.get("error").is_none() && value.get("result").is_some()
 }
 
 /// JSON-RPC id for `setPowerStatus` after optional service priming.
@@ -1872,6 +1877,36 @@ mod tests {
     }
 
     #[test]
+    fn test_display_endpoint_prefers_stale_over_legacy_config() {
+        let _lock = discovery_cache_test_lock();
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let host_key = "display-stale-over-legacy.test";
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        api.host = Some(host_key.into());
+        api.port = 10_000;
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.insert(
+            host_key.into(),
+            CachedScalarEndpointOnDisk {
+                endpoint: ScalarWebApiDeviceEndpoint {
+                    host: host_key.into(),
+                    port: 54_480,
+                    path: format!("/{}", protocol_path()),
+                },
+                speaker_model: Some("SRS-ZR5".into()),
+                cached_at_unix_ms: now_unix_ms()
+                    .saturating_sub(ENDPOINT_CACHE_TTL.as_millis() as u64 + 60_000),
+            },
+        );
+        write_scalar_discovery_cache_file(&cache);
+
+        let endpoint = display_endpoint_for_api(api).unwrap();
+        assert_eq!(endpoint.port, 54_480);
+        assert_eq!(endpoint.host, host_key);
+    }
+
+    #[test]
     fn test_display_endpoint_uses_config_without_ssdp() {
         clear_scalar_webapi_endpoint_cache_for_tests();
         let mut config = config_for("line-out");
@@ -2087,6 +2122,30 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_stale_disk_vs_config_reports_cached_when_endpoints_match() {
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        let host_key = "stale-equals-config.test";
+        api.host = Some(host_key.into());
+        api.port = 54_480;
+        let endpoint = ScalarWebApiDeviceEndpoint {
+            host: host_key.into(),
+            port: 54_480,
+            path: format!("/{}", protocol_path()),
+        };
+        let stale = CachedScalarEndpointOnDisk {
+            endpoint: endpoint.clone(),
+            speaker_model: Some("SRS-ZR5".into()),
+            cached_at_unix_ms: now_unix_ms()
+                .saturating_sub(ENDPOINT_CACHE_TTL.as_millis() as u64 + 1),
+        };
+        let (resolved, model, source) = resolve_stale_disk_vs_config(api, &stale);
+        assert_eq!(resolved, endpoint);
+        assert_eq!(model.as_deref(), Some("SRS-ZR5"));
+        assert_eq!(source, "cached");
+    }
+
+    #[test]
     fn test_send_wake_command_to_falls_back_to_websocket_when_http_rejects() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -2241,6 +2300,12 @@ mod tests {
         assert!(!set_power_status_http_response_ok(
             "HTTP/1.1 200 OK\r\n\r\n{\"error\":{\"message\":\"no\"},\"id\":1}"
         ));
+        assert!(
+            !set_power_status_http_response_ok(
+                "HTTP/1.1 200 OK\r\n\r\n{\"error\":{\"code\":-1,\"message\":\"result\"},\"id\":1}"
+            ),
+            "substring \"result\" inside an error message must not count as success"
+        );
     }
 
     #[test]
