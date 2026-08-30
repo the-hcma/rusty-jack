@@ -3,7 +3,7 @@
 //! - **Accessibility** — required when `activity_monitor` is `event_tap` (keyboard/mouse wake).
 //! - **Local Network** — required when ScalarWebAPI is enabled (SSDP discovery).
 
-use crate::config::{load_config_optional, resolve_config_path, Config};
+use crate::config::{load_config_readonly, resolve_config_path, Config};
 #[cfg(target_os = "macos")]
 use crate::network::lan_connectivity_ready;
 #[cfg(target_os = "macos")]
@@ -35,14 +35,16 @@ pub struct PrivacyPermissionStatus {
 ///
 /// Config load/validation failures are tolerated: permission checks are skipped so
 /// `upgrade` can still refresh the LaunchAgent (matching pre-#216 behavior).
+/// Reads config without rewriting the file (preserves hand-edits and symlinks).
 pub fn ensure_privacy_permissions_for_setup(
     interactive: bool,
     config_cli_path: Option<&Path>,
 ) -> Result<PrivacyPermissionStatus, RustyJackError> {
     let path = resolve_config_path(config_cli_path);
     let config = match path.as_deref() {
-        Some(path) => match load_config_optional(path, false) {
-            Ok(config) => config,
+        Some(path) => match load_config_readonly(path) {
+            Ok(config) => Some(config),
+            Err(RustyJackError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => {
                 tracing::warn!(
                     target: "setup",
@@ -83,7 +85,15 @@ pub fn ensure_privacy_permissions(
     config: &Config,
     interactive: bool,
 ) -> Result<PrivacyPermissionStatus, RustyJackError> {
-    let mut status = check_privacy_permissions(config)?;
+    ensure_privacy_permissions_with(config, interactive, probe_local_network_permission)
+}
+
+fn ensure_privacy_permissions_with(
+    config: &Config,
+    interactive: bool,
+    local_network_probe: impl Fn() -> Option<bool>,
+) -> Result<PrivacyPermissionStatus, RustyJackError> {
+    let mut status = check_privacy_permissions_with(config, &local_network_probe)?;
     if !(status.accessibility_required || status.local_network_required) {
         return Ok(status);
     }
@@ -92,7 +102,7 @@ pub fn ensure_privacy_permissions(
     status.force_daemon_restart = true;
 
     if interactive {
-        prompt_missing_permissions(&mut status)?;
+        prompt_missing_permissions(&mut status, &local_network_probe)?;
     } else {
         push_noninteractive_notes(&mut status);
     }
@@ -109,7 +119,7 @@ pub fn check_privacy_permissions(
 
 fn check_privacy_permissions_with(
     config: &Config,
-    local_network_probe: impl FnOnce() -> Option<bool>,
+    local_network_probe: impl Fn() -> Option<bool>,
 ) -> Result<PrivacyPermissionStatus, RustyJackError> {
     let accessibility_required = config.activity_monitor.eq_ignore_ascii_case("event_tap");
     let local_network_required = config
@@ -237,7 +247,10 @@ fn probe_local_network_permission() -> Option<bool> {
     }
 }
 
-fn prompt_missing_permissions(status: &mut PrivacyPermissionStatus) -> Result<(), RustyJackError> {
+fn prompt_missing_permissions(
+    status: &mut PrivacyPermissionStatus,
+    local_network_probe: &impl Fn() -> Option<bool>,
+) -> Result<(), RustyJackError> {
     use dialoguer::console::style;
     use dialoguer::Confirm;
 
@@ -302,7 +315,19 @@ fn prompt_missing_permissions(status: &mut PrivacyPermissionStatus) -> Result<()
             .map_err(|err| RustyJackError::Config(format!("Local Network prompt failed: {err}")))?
         {
             open_privacy_pane(PrivacyPane::LocalNetwork);
-            status.local_network_ok = probe_local_network_permission();
+            let _ = Confirm::new()
+                .with_prompt("Press Enter after granting Local Network (or skip if already done)")
+                .default(true)
+                .interact()
+                .map_err(|err| {
+                    RustyJackError::Config(format!("Local Network confirmation failed: {err}"))
+                })?;
+            status.local_network_ok = local_network_probe();
+            if status.local_network_ok == Some(true) {
+                status
+                    .notes
+                    .push("Local Network SSDP probe succeeded after grant".into());
+            }
         }
     }
 
@@ -440,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_privacy_permissions_forces_restart_when_features_configured() {
+    fn test_ensure_privacy_permissions_forces_restart_for_event_tap() {
         let config = Config {
             activity_monitor: "event_tap".into(),
             ..Config::default()
@@ -451,6 +476,14 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("upgrade --force") || note.contains("Accessibility")));
+    }
+
+    #[test]
+    fn test_ensure_privacy_permissions_forces_restart_for_scalar_webapi() {
+        let status =
+            ensure_privacy_permissions_with(&scalar_enabled_config(), false, || None).unwrap();
+        assert!(status.local_network_required);
+        assert!(status.force_daemon_restart);
     }
 
     #[test]
@@ -467,5 +500,23 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("config load failed")));
+    }
+
+    #[test]
+    fn test_load_config_readonly_does_not_rewrite_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // Intentionally unsorted keys so rewrite_config_if_needed would change it.
+        let original = r#"{
+  "version": 1,
+  "preferred_device": { "uid": "uid-1" },
+  "auto_switch": true
+}
+"#;
+        std::fs::write(&path, original).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let _ = load_config_readonly(&path).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(before, after);
     }
 }
