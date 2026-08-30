@@ -952,6 +952,12 @@ fn resolve_stale_disk_vs_config(
     }
 }
 
+/// True when an HTTP `setPowerStatus` response is a 2xx with a JSON-RPC `result`.
+fn set_power_status_http_response_ok(response: &str) -> bool {
+    matches!(parse_http_status(response), Ok(code) if (200..300).contains(&code))
+        && response.contains("\"result\"")
+}
+
 /// JSON-RPC id for `setPowerStatus` after optional service priming.
 fn set_power_status_rpc_id(prime: Result<u64, RustyJackError>) -> u64 {
     prime.unwrap_or(1)
@@ -982,28 +988,48 @@ fn send_wake_command_to(
 
     // Prefer HTTP POST for power-on: WebSocket wake can report success while the
     // device stays in standby; POST matches the reliable manual curl path.
+    // Fall back to WebSocket on transport failures *and* HTTP/JSON-RPC rejects.
     debug_assert_eq!(set_power_status_transport_order()[0], "http_post");
-    let response = post_json(
+    let response = match post_json(
         &api_endpoint.host,
         api_endpoint.port,
         &path,
         &payload,
         api.request_timeout_ms,
-    )
-    .or_else(|err| {
-        tracing::warn!(
-            target: "daemon",
-            "[scalar] HTTP setPowerStatus failed at {endpoint}: {}; trying WebSocket",
-            err.detail_message()
-        );
-        websocket_json(
-            &api_endpoint.host,
-            api_endpoint.port,
-            &path,
-            &payload,
-            api.request_timeout_ms,
-        )
-    })?;
+    ) {
+        Ok(response) if set_power_status_http_response_ok(&response) => Ok(response),
+        Ok(response) => {
+            let detail = match parse_http_status(&response) {
+                Ok(code) if !(200..300).contains(&code) => format!("HTTP {code}"),
+                _ => "unsuccessful JSON-RPC body".to_string(),
+            };
+            tracing::warn!(
+                target: "daemon",
+                "[scalar] HTTP setPowerStatus failed at {endpoint}: {detail}; trying WebSocket"
+            );
+            websocket_json(
+                &api_endpoint.host,
+                api_endpoint.port,
+                &path,
+                &payload,
+                api.request_timeout_ms,
+            )
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "daemon",
+                "[scalar] HTTP setPowerStatus failed at {endpoint}: {}; trying WebSocket",
+                err.detail_message()
+            );
+            websocket_json(
+                &api_endpoint.host,
+                api_endpoint.port,
+                &path,
+                &payload,
+                api.request_timeout_ms,
+            )
+        }
+    }?;
 
     ensure_success_json(&response, &endpoint)?;
     let status_code = parse_http_status(&response)?;
@@ -2061,6 +2087,84 @@ mod tests {
     }
 
     #[test]
+    fn test_send_wake_command_to_falls_back_to_websocket_when_http_rejects() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::thread;
+        use tungstenite::accept;
+        use tungstenite::protocol::Message;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel::<String>();
+        thread::spawn(move || {
+            for _ in 0..3 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut peek = [0_u8; 8192];
+                let peeked = stream.peek(&mut peek).unwrap_or(0);
+                let preview = String::from_utf8_lossy(&peek[..peeked]).into_owned();
+                let _ = tx.send(preview.clone());
+                if preview.contains("Upgrade: websocket") {
+                    let mut socket = accept(stream).expect("websocket accept");
+                    socket
+                        .send(Message::Text(r#"{"result":[],"id":1}"#.into()))
+                        .expect("websocket send");
+                    let _ = socket.close(None);
+                    break;
+                }
+                let mut buf = [0_u8; 8192];
+                let len = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..len]);
+                let response = if req.contains("setPowerStatus") {
+                    "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                        .to_string()
+                } else {
+                    let body = r#"{"id":1}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        api.host = Some("127.0.0.1".into());
+        api.port = port;
+        api.request_timeout_ms = 1_000;
+        let endpoint = ScalarWebApiDeviceEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+            path: format!("/{}", protocol_path()),
+        };
+
+        let result =
+            send_wake_command_to(api, &endpoint).expect("wake should succeed over WebSocket");
+        assert!((200..300).contains(&result.status_code));
+
+        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            first.starts_with("POST ") && first.contains("getSupportedApiInfo"),
+            "expected priming HTTP POST first, got: {first}"
+        );
+        let second = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            second.starts_with("POST ") && second.contains("setPowerStatus"),
+            "expected HTTP POST setPowerStatus before WebSocket, got: {second}"
+        );
+        let third = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            third.contains("Upgrade: websocket"),
+            "expected WebSocket fallback after HTTP reject, got: {third}"
+        );
+    }
+
+    #[test]
     fn test_send_wake_command_to_posts_set_power_status_when_prime_fails() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -2071,7 +2175,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = mpsc::channel::<String>();
         thread::spawn(move || {
-            for _ in 0..4 {
+            for _ in 0..2 {
                 let Ok((mut stream, _)) = listener.accept() else {
                     break;
                 };
@@ -2079,12 +2183,6 @@ mod tests {
                 let len = stream.read(&mut buf).unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..len]).into_owned();
                 let _ = tx.send(req.clone());
-                if req.contains("Upgrade: websocket") {
-                    let response =
-                        "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-                    let _ = stream.write_all(response.as_bytes());
-                    continue;
-                }
                 let body = if req.contains("setPowerStatus") {
                     r#"{"result":[],"id":1}"#
                 } else {
@@ -2130,6 +2228,19 @@ mod tests {
             !second.contains("Upgrade: websocket"),
             "wake must prefer HTTP POST before WebSocket, got: {second}"
         );
+    }
+
+    #[test]
+    fn test_set_power_status_http_response_ok_requires_2xx_and_result() {
+        assert!(set_power_status_http_response_ok(
+            "HTTP/1.1 200 OK\r\n\r\n{\"result\":[],\"id\":1}"
+        ));
+        assert!(!set_power_status_http_response_ok(
+            "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+        ));
+        assert!(!set_power_status_http_response_ok(
+            "HTTP/1.1 200 OK\r\n\r\n{\"error\":{\"message\":\"no\"},\"id\":1}"
+        ));
     }
 
     #[test]
