@@ -24,6 +24,7 @@ pub mod output_device;
 pub mod passthrough;
 pub mod picker;
 pub mod policy;
+pub mod privacy_permissions;
 pub mod process_detect;
 pub mod scalar_webapi_device;
 pub mod setup;
