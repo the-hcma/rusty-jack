@@ -351,14 +351,22 @@ fn cache_entry_is_fresh(cached_at_unix_ms: u64) -> bool {
 }
 
 fn load_scalar_endpoint_from_disk(host_key: &str) -> Option<CachedScalarEndpointOnDisk> {
-    let mut cache = load_scalar_discovery_cache_file()?;
-    let entry = cache.hosts.get(host_key)?.clone();
-    if cache_entry_is_fresh(entry.cached_at_unix_ms) {
-        return Some(entry);
-    }
-    cache.hosts.remove(host_key);
-    write_scalar_discovery_cache_file(&cache);
-    None
+    let entry = load_scalar_endpoint_from_disk_allow_stale(host_key)?;
+    cache_entry_is_fresh(entry.cached_at_unix_ms).then_some(entry)
+}
+
+fn load_scalar_endpoint_from_disk_allow_stale(
+    host_key: &str,
+) -> Option<CachedScalarEndpointOnDisk> {
+    let cache = load_scalar_discovery_cache_file()?;
+    cache.hosts.get(host_key).cloned()
+}
+
+fn memory_cached_endpoint(host_key: &str) -> Option<ScalarWebApiDeviceEndpoint> {
+    let guard = endpoint_cache().lock().ok()?;
+    let cached = guard.as_ref()?;
+    (cached.host_key == host_key && cached.cached_at.elapsed() < ENDPOINT_CACHE_TTL)
+        .then(|| cached.endpoint.clone())
 }
 
 fn persist_scalar_endpoint_cache(
@@ -501,9 +509,9 @@ fn try_wake_scalar_webapi_device(
     let endpoint = match resolve_scalar_webapi_device_endpoint(api)? {
         Some(endpoint) => endpoint,
         None => {
-            tracing::debug!(
+            tracing::warn!(
                 target: "daemon",
-                "[scalar] SSDP discovery found no JSON-RPC endpoint for {}; skipping wake (configured port {} is not used)",
+                "[scalar] no JSON-RPC endpoint for {}; skipping wake (SSDP miss and no usable cache/config port {})",
                 scalar_webapi_device_host(api)?,
                 api.port
             );
@@ -721,7 +729,7 @@ pub fn current_power_status(api: &ScalarWebApiDeviceConfig) -> Result<String, Ru
         scalar_speaker_err(
             &scalar_ssdp_url(),
             format!(
-                "host={host}: SSDP discovery found no JSON-RPC endpoint (configured port {} is not used)",
+                "host={host}: no JSON-RPC endpoint (SSDP miss and no usable cache/config port {})",
                 api.port
             ),
         )
@@ -765,14 +773,14 @@ pub(crate) fn display_endpoint_for_api(
     api: &ScalarWebApiDeviceConfig,
 ) -> Option<ScalarWebApiDeviceEndpoint> {
     let host_key = scalar_webapi_device_host(api).ok()?.to_string();
-    if let Ok(guard) = endpoint_cache().lock() {
-        if let Some(cached) = guard.as_ref() {
-            if cached.host_key == host_key && cached.cached_at.elapsed() < ENDPOINT_CACHE_TTL {
-                return Some(cached.endpoint.clone());
-            }
-        }
+    if let Some(endpoint) = memory_cached_endpoint(&host_key) {
+        return Some(endpoint);
     }
     if let Some(cached) = load_scalar_endpoint_from_disk(&host_key) {
+        persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
+        return Some(cached.endpoint);
+    }
+    if let Some(cached) = load_scalar_endpoint_from_disk_allow_stale(&host_key) {
         persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
         return Some(cached.endpoint);
     }
@@ -813,19 +821,70 @@ pub(crate) fn resolve_scalar_webapi_device_endpoint(
     api: &ScalarWebApiDeviceConfig,
 ) -> Result<Option<ScalarWebApiDeviceEndpoint>, RustyJackError> {
     let host_key = scalar_webapi_device_host(api)?.to_string();
-    if let Ok(guard) = endpoint_cache().lock() {
-        if let Some(cached) = guard.as_ref() {
-            if cached.host_key == host_key && cached.cached_at.elapsed() < ENDPOINT_CACHE_TTL {
-                return Ok(Some(cached.endpoint.clone()));
-            }
+    if let Some(endpoint) = memory_cached_endpoint(&host_key) {
+        return Ok(Some(endpoint));
+    }
+    if let Some(cached) = load_scalar_endpoint_from_disk(&host_key) {
+        persist_scalar_endpoint_cache(&host_key, &cached.endpoint, cached.speaker_model.clone());
+        return Ok(Some(cached.endpoint));
+    }
+
+    match discover_scalar_webapi_device_ssdp_hit(api) {
+        Ok(Some(hit)) => {
+            persist_scalar_endpoint_cache(&host_key, &hit.endpoint, hit.model.clone());
+            return Ok(Some(hit.endpoint));
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(
+                target: "daemon",
+                "[scalar] SSDP discovery failed for {host_key}: {}; trying cache/config endpoint",
+                err.detail_message()
+            );
         }
     }
 
-    let discovered = discover_scalar_webapi_device_ssdp_hit(api)?;
-    if let Some(hit) = discovered.as_ref() {
-        persist_scalar_endpoint_cache(&host_key, &hit.endpoint, hit.model.clone());
+    Ok(endpoint_after_ssdp_miss(api, &host_key))
+}
+
+/// Prefer a prior discovery cache entry, then config `host`/`port`/`path`, when SSDP misses.
+fn endpoint_after_ssdp_miss(
+    api: &ScalarWebApiDeviceConfig,
+    host_key: &str,
+) -> Option<ScalarWebApiDeviceEndpoint> {
+    if let Some(cached) = load_scalar_endpoint_from_disk_allow_stale(host_key) {
+        tracing::warn!(
+            target: "daemon",
+            "[scalar] SSDP found no JSON-RPC endpoint for {host_key}; using cached {}:{}{}",
+            cached.endpoint.host,
+            cached.endpoint.port,
+            cached.endpoint.path
+        );
+        persist_scalar_endpoint_cache(host_key, &cached.endpoint, cached.speaker_model.clone());
+        return Some(cached.endpoint);
     }
-    Ok(discovered.map(|hit| hit.endpoint))
+
+    match endpoint_from_config(api) {
+        Ok(endpoint) => {
+            tracing::warn!(
+                target: "daemon",
+                "[scalar] SSDP found no JSON-RPC endpoint for {host_key}; using configured {}:{}{}",
+                endpoint.host,
+                endpoint.port,
+                endpoint.path
+            );
+            persist_scalar_endpoint_cache(host_key, &endpoint, None);
+            Some(endpoint)
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "daemon",
+                "[scalar] SSDP found no JSON-RPC endpoint for {host_key} and config endpoint is unusable: {}",
+                err.detail_message()
+            );
+            None
+        }
+    }
 }
 
 fn send_wake_command_to(
@@ -1576,6 +1635,12 @@ mod tests {
         }
     }
 
+    fn clear_scalar_webapi_memory_endpoint_cache_for_tests() {
+        if let Ok(mut guard) = endpoint_cache().lock() {
+            *guard = None;
+        }
+    }
+
     fn config_for(uid: &str) -> Config {
         Config {
             version: 1,
@@ -1670,6 +1735,83 @@ mod tests {
         assert_eq!(endpoint.host, "offline.test");
         assert_eq!(endpoint.port, 10_000);
         assert!(endpoint.path.ends_with(&protocol_path()));
+    }
+
+    #[test]
+    fn test_endpoint_after_ssdp_miss_prefers_stale_cache_over_config() {
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        let host_key = "stale-cache.test";
+        api.host = Some(host_key.into());
+        api.port = 10_000;
+        let stale = ScalarWebApiDeviceEndpoint {
+            host: host_key.into(),
+            port: 54_480,
+            path: format!("/{}", protocol_path()),
+        };
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.insert(
+            host_key.into(),
+            CachedScalarEndpointOnDisk {
+                endpoint: stale.clone(),
+                speaker_model: Some("SRS-ZR5".into()),
+                cached_at_unix_ms: now_unix_ms()
+                    .saturating_sub(ENDPOINT_CACHE_TTL.as_millis() as u64 + 60_000),
+            },
+        );
+        write_scalar_discovery_cache_file(&cache);
+
+        assert!(load_scalar_endpoint_from_disk(host_key).is_none());
+        assert!(load_scalar_endpoint_from_disk_allow_stale(host_key).is_some());
+
+        let resolved = endpoint_after_ssdp_miss(api, host_key).unwrap();
+        assert_eq!(resolved.port, 54_480);
+        assert_eq!(resolved.host, host_key);
+    }
+
+    #[test]
+    fn test_endpoint_after_ssdp_miss_uses_configured_port() {
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let mut config = config_for("line-out");
+        let api = config.scalar_webapi_device.as_mut().unwrap();
+        let host_key = "config-fallback.test";
+        api.host = Some(host_key.into());
+        api.port = 54_480;
+        let resolved = endpoint_after_ssdp_miss(api, host_key).unwrap();
+        assert_eq!(resolved.host, host_key);
+        assert_eq!(resolved.port, 54_480);
+        assert!(resolved.path.ends_with(&protocol_path()));
+    }
+
+    #[test]
+    fn test_load_scalar_endpoint_from_disk_keeps_stale_entries() {
+        clear_scalar_webapi_memory_endpoint_cache_for_tests();
+        let host_key = "keep-stale.test";
+        let endpoint = ScalarWebApiDeviceEndpoint {
+            host: host_key.into(),
+            port: 54_480,
+            path: format!("/{}", protocol_path()),
+        };
+        let mut cache = load_scalar_discovery_cache_file().unwrap_or_default();
+        cache.hosts.insert(
+            host_key.into(),
+            CachedScalarEndpointOnDisk {
+                endpoint: endpoint.clone(),
+                speaker_model: Some("SRS-ZR5".into()),
+                cached_at_unix_ms: now_unix_ms()
+                    .saturating_sub(ENDPOINT_CACHE_TTL.as_millis() as u64 + 1),
+            },
+        );
+        write_scalar_discovery_cache_file(&cache);
+
+        assert!(load_scalar_endpoint_from_disk(host_key).is_none());
+        let kept = load_scalar_endpoint_from_disk_allow_stale(host_key).unwrap();
+        assert_eq!(kept.endpoint.port, 54_480);
+        assert!(load_scalar_discovery_cache_file()
+            .unwrap()
+            .hosts
+            .contains_key(host_key));
     }
 
     #[test]
