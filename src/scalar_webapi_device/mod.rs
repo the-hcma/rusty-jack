@@ -246,10 +246,17 @@ fn endpoint_cache() -> &'static Mutex<Option<CachedScalarEndpoint>> {
 
 #[cfg(test)]
 pub(crate) fn clear_scalar_webapi_endpoint_cache_for_tests() {
+    let _lock = discovery_cache_test_lock();
     if let Ok(mut guard) = endpoint_cache().lock() {
         *guard = None;
     }
     let _ = std::fs::remove_file(scalar_discovery_cache_path());
+}
+
+#[cfg(test)]
+fn discovery_cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1739,6 +1746,7 @@ mod tests {
 
     #[test]
     fn test_endpoint_after_ssdp_miss_prefers_stale_cache_over_config() {
+        let _lock = discovery_cache_test_lock();
         clear_scalar_webapi_memory_endpoint_cache_for_tests();
         let mut config = config_for("line-out");
         let api = config.scalar_webapi_device.as_mut().unwrap();
@@ -1772,6 +1780,7 @@ mod tests {
 
     #[test]
     fn test_endpoint_after_ssdp_miss_uses_configured_port() {
+        let _lock = discovery_cache_test_lock();
         clear_scalar_webapi_memory_endpoint_cache_for_tests();
         let mut config = config_for("line-out");
         let api = config.scalar_webapi_device.as_mut().unwrap();
@@ -1786,6 +1795,7 @@ mod tests {
 
     #[test]
     fn test_load_scalar_endpoint_from_disk_keeps_stale_entries() {
+        let _lock = discovery_cache_test_lock();
         clear_scalar_webapi_memory_endpoint_cache_for_tests();
         let host_key = "keep-stale.test";
         let endpoint = ScalarWebApiDeviceEndpoint {
