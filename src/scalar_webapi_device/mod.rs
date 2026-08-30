@@ -900,10 +900,23 @@ fn send_wake_command_to(
 ) -> Result<ScalarWebApiDeviceWakeResult, RustyJackError> {
     let endpoint = api_endpoint.service_endpoint(SYSTEM_SERVICE);
     let path = api_endpoint.service_path(SYSTEM_SERVICE);
-    let wake_id = prime_scalar_webapi_device_services(api, api_endpoint)?;
+    let wake_id = match prime_scalar_webapi_device_services(api, api_endpoint) {
+        Ok(id) => id,
+        Err(err) => {
+            tracing::warn!(
+                target: "daemon",
+                "[scalar] service priming failed at {}: {}; sending setPowerStatus without prime",
+                api_endpoint.base_url(),
+                err.detail_message()
+            );
+            1
+        }
+    };
     let payload = wake_payload(wake_id);
 
-    let response = websocket_json(
+    // Prefer HTTP POST for power-on: WebSocket wake can report success while the
+    // device stays in standby; POST matches the reliable manual curl path.
+    let response = post_json(
         &api_endpoint.host,
         api_endpoint.port,
         &path,
@@ -911,8 +924,12 @@ fn send_wake_command_to(
         api.request_timeout_ms,
     )
     .or_else(|err| {
-        eprintln!("warning: ScalarWebAPI WebSocket wake failed: {err}");
-        post_json(
+        tracing::warn!(
+            target: "daemon",
+            "[scalar] HTTP setPowerStatus failed at {endpoint}: {}; trying WebSocket",
+            err.detail_message()
+        );
+        websocket_json(
             &api_endpoint.host,
             api_endpoint.port,
             &path,
