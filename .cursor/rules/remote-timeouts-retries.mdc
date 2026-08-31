@@ -1,0 +1,106 @@
+---
+description: All remote/network I/O must use explicit timeouts and bounded retries
+alwaysApply: true
+---
+
+# Remote timeouts and retries
+
+Any code that talks to a network peer — the Sony Scalar Web API over raw
+`TcpStream` (`src/scalar_webapi_device/`), SSDP/UDP discovery, the `tungstenite`
+WebSocket notify channel, any `gh`/`curl` helper — must not hang indefinitely
+and must not retry without a bound. Org template sync: repository-helpers#570.
+
+## Timeouts (required)
+
+- Set an **explicit timeout** on every remote call. For a raw `TcpStream`, call
+  both `set_read_timeout(Some(..))` and `set_write_timeout(Some(..))` (and use a
+  connect timeout via `TcpStream::connect_timeout`) — a bare `TcpStream::connect`
+  / `read` blocks forever.
+- **Bound name resolution too.** `to_socket_addrs()` (called before
+  `connect_timeout` at `src/scalar_webapi_device/mod.rs:1579` / `:1637`) can
+  block on DNS well past the TCP timeout. Resolve on a worker with a join
+  deadline, cache resolved `SocketAddr`s, or prefer literal IPs from discovery so
+  the lookup is not on the hot path.
+- Reuse the existing knob: `request_timeout_ms` on `ScalarWebApiDeviceConfig`
+  (`src/config.rs`), clamped with `.max(1_000)` / `.clamp(500, 3_000)` as the
+  discovery code already does. Discovery/msearch already build an
+  `Instant::now() + total_timeout` deadline — keep that shape.
+- WebSocket (`tungstenite`): bound the handshake and each read; do not park on a
+  read with no deadline.
+- Agent / shell wrappers that hit the network should use the helpers'
+  `--timeout` / `run_command … --timeout` patterns when available.
+
+## Retries (required when retrying)
+
+- Retries are for **transient** failures only: connect/read timeouts, connection
+  reset / `ErrorKind::WouldBlock` / `TimedOut`, and HTTP `429` / `502` / `503` /
+  `504`. Do **not** retry a permanent `4xx` (`400` / `401` / `403` / `404`) or a
+  malformed-response / parse error.
+- Cap attempts (small fixed `N`, 2–5) **or** bound the whole retry sequence by
+  the `Instant` deadline (as `send_scalar_webapi_msearch_retry` already does).
+  Never write an **unbounded** `loop { … }` around a network call.
+- **Each attempt gets a fresh connection and the *remaining* deadline.** A
+  per-op `set_read_timeout` is not a sequence bound — an attempt started near
+  `deadline` can still block for the full timeout. Recompute
+  `remaining = deadline.saturating_duration_since(Instant::now())` and set each
+  attempt's connect/read/write timeout to `min(per_op, remaining)`. Reconnect
+  (`TcpStream::connect_timeout`) per attempt — a reset or partial write leaves
+  the old socket in a broken protocol state.
+- Back off between attempts (exponential with **jitter**, `std::thread::sleep` /
+  `tokio::time::sleep`); clamp the sleep to `remaining`. Honor `Retry-After` when
+  the peer sends it, clamped to a ceiling that still fits the deadline.
+- **Retry only idempotent requests.** Status polls / `GET`-style reads are safe.
+  Do **not** retry a non-idempotent request — a power / input / volume command —
+  after an ambiguous timeout unless the device documents duplicate-safe handling.
+  Gate the retry on the request kind, not just on the error being transient.
+- Surface a clear timeout / retry-exhaustion error (`Error` variant, non-zero
+  exit) — never spin silently.
+
+## Anti-patterns
+
+```rust
+// bad — no timeout
+let stream = TcpStream::connect(addr)?;          // blocks forever
+stream.read_to_end(&mut buf)?;                    // no read timeout
+
+// bad — unbounded retry
+loop {
+    match send(&req) {
+        Ok(resp) => return Ok(resp),
+        Err(_) => continue,                       // no cap, no deadline, no backoff
+    }
+}
+```
+
+```rust
+// good — fresh connection per attempt, each bounded by the REMAINING deadline,
+// jittered backoff, retry only when the request is idempotent
+let deadline = Instant::now() + total_timeout;
+let per_op = Duration::from_millis(api.request_timeout_ms.max(1_000));
+let mut backoff = Duration::from_millis(200);
+
+loop {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() { break Err(Error::Timeout); }
+    let op_to = per_op.min(remaining);
+
+    let attempt = (|| -> Result<Resp, Error> {
+        let stream = TcpStream::connect_timeout(&addr, op_to)?;   // reconnect each time
+        stream.set_read_timeout(Some(op_to))?;
+        stream.set_write_timeout(Some(op_to))?;
+        send_request(&stream, &req)
+    })();
+
+    match attempt {
+        Ok(resp) => break Ok(resp),
+        Err(e) if e.is_transient() && req.is_idempotent() => {
+            let jitter = Duration::from_millis(fastrand::u64(0..=backoff.as_millis() as u64));
+            let sleep = (backoff + jitter).min(deadline.saturating_duration_since(Instant::now()));
+            if sleep.is_zero() { break Err(e); }
+            std::thread::sleep(sleep);
+            backoff = (backoff * 2).min(Duration::from_secs(5));
+        }
+        Err(e) => break Err(e),   // permanent, non-idempotent, or budget exhausted
+    }
+}
+```

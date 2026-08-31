@@ -57,6 +57,15 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - Build/test jobs run on macOS runners; non-macOS stubs only support editor and limited CI wiring checks.
 - Keep dependencies in `Cargo.toml`; commit `Cargo.lock`.
 - Avoid `unsafe`; the repo has `unsafe_code = "warn"`.
+- **Remote timeouts and bounded retries:** `.cursor/rules/remote-timeouts-retries.mdc`
+  (`alwaysApply`, org rule — template sync
+  [repository-helpers#570](https://github.com/the-hcma/repository-helpers/issues/570)).
+  Every `TcpStream` must set connect/read/write timeouts (reusing
+  `request_timeout_ms`) and bound name resolution; every retry is capped **or**
+  `Instant`-deadline-bounded, reconnects per attempt with the remaining budget,
+  backs off with jitter, retries transient failures only, and re-sends only
+  idempotent requests — never a device command. See the rule for the exact
+  policy.
 
 ---
 
