@@ -60,10 +60,12 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - **Remote timeouts and bounded retries:** `.cursor/rules/remote-timeouts-retries.mdc`
   (`alwaysApply`, org rule — template sync
   [repository-helpers#570](https://github.com/the-hcma/repository-helpers/issues/570)).
-  Every `TcpStream` sets read/write (and connect) timeouts, reusing
-  `request_timeout_ms`; SSDP/msearch and any retry is bounded by an `Instant`
-  deadline, backed off, transient-only, and never re-sends a non-idempotent
-  device command.
+  Every `TcpStream` must set connect/read/write timeouts (reusing
+  `request_timeout_ms`) and bound name resolution; every retry is capped **or**
+  `Instant`-deadline-bounded, reconnects per attempt with the remaining budget,
+  backs off with jitter, retries transient failures only, and re-sends only
+  idempotent requests — never a device command. See the rule for the exact
+  policy.
 
 ---
 
