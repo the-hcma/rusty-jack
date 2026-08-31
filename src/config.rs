@@ -309,6 +309,21 @@ pub fn load_config(path: &Path) -> Result<Config, RustyJackError> {
     Ok(config)
 }
 
+/// Load and validate config without rewriting the file (safe for symlinked configs).
+///
+/// # Errors
+///
+/// Returns an error when the file exists but cannot be read or parsed.
+pub fn load_config_readonly(path: &Path) -> Result<Config, RustyJackError> {
+    let raw = std::fs::read_to_string(path).map_err(RustyJackError::Io)?;
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+    let config: Config = serde_json::from_value(value)
+        .map_err(|err| RustyJackError::Config(format!("{}: {err}", path.display())))?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
 /// Render JSON with all object keys sorted lexicographically at every level.
 pub fn render_lexicographic_json(value: &Value) -> Result<String, RustyJackError> {
     let mut value = value.clone();
