@@ -49,10 +49,10 @@ and must not retry without a bound. Org template sync: repository-helpers#570.
 - Back off between attempts (exponential with **jitter**, `std::thread::sleep` /
   `tokio::time::sleep`); clamp the sleep to `remaining`. Honor `Retry-After` when
   the peer sends it, clamped to a ceiling that still fits the deadline.
-- **Retry only idempotent requests.** Status polls / `GET`-style reads are safe;
-  a power / input / volume command is **not** — do not re-send it after an
-  ambiguous timeout unless the device documents duplicate-safe handling. Gate the
-  retry on the request kind, not just on the error being transient.
+- **Retry only idempotent requests.** Status polls / `GET`-style reads are safe.
+  Do **not** retry a non-idempotent request — a power / input / volume command —
+  after an ambiguous timeout unless the device documents duplicate-safe handling.
+  Gate the retry on the request kind, not just on the error being transient.
 - Surface a clear timeout / retry-exhaustion error (`Error` variant, non-zero
   exit) — never spin silently.
 
