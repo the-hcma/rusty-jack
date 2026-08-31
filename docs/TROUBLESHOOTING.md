@@ -167,8 +167,10 @@ If the daemon wakes your ScalarWebAPI speaker when you are away, check for overn
 1. Confirm the selected Mac output matches `scalar_webapi_device.mac_output`.
 2. Confirm `scalar_webapi_device.triggers` includes `keyboard` and `mouse` if you expect wake on screen unlock (re-run interactive `install` to upgrade a partial trigger list).
 3. Confirm the device is reachable by hostname/IP and has its network standby/wake option enabled.
-4. Run `rusty-jack picker` and look for the ScalarWebAPI power-state note on the configured output.
-5. Check daemon logs for wake errors or discovery warnings. `No route to host` right after unlock usually means Wi-Fi was not ready yet; the daemon defers wake until macOS reports the host reachable and retries after network changes.
+4. Set `scalar_webapi_device.port` to the device’s advertised ScalarWebAPI port (often `54480`). Wake falls back to this port (and any on-disk discovery cache) when SSDP misses; leaving the legacy default `10000` often fails.
+5. Run `rusty-jack picker` and look for the ScalarWebAPI power-state note on the configured output.
+6. Check daemon logs for wake errors or discovery warnings (`SSDP found no JSON-RPC endpoint … using configured` / `using cached`). `No route to host` right after unlock usually means Wi-Fi was not ready yet; the daemon defers wake until macOS reports the host reachable and retries after network changes.
+7. If `rusty-jack scalar-webapi-device discover` finds 0 speakers while a manual SSDP probe on the same Mac succeeds, grant **Local Network** permission to `rusty-jack` (System Settings → Privacy & Security) and restart the daemon. Multicast discovery can fail even when unicast HTTP to the speaker works.
 
 ### Event tap permission and silent tap fallback
 
@@ -183,7 +185,7 @@ When `activity_monitor` is `event_tap` (set automatically when ScalarWebAPI wake
 
 On daemon startup or after `upgrade`, a wake may still occur via the `output_selected` trigger even when activity detection is broken — that is separate from idle→active keyboard/mouse wakes.
 
-Rusty Jack uses ScalarWebAPI directly. `port` is only a fallback; SSDP discovery may find a different advertised port.
+Rusty Jack prefers the SSDP-advertised ScalarWebAPI port, then falls back to a discovery cache entry or config `port`/`path`.
 
 `rusty-jack status` does not run LAN discovery; it only uses cached/configured endpoint details. Refresh cache with `rusty-jack list --discover` before troubleshooting stale host/model metadata.
 
