@@ -16,8 +16,8 @@ and must not retry without a bound. Org template sync: repository-helpers#570.
   both `set_read_timeout(Some(..))` and `set_write_timeout(Some(..))` (and use a
   connect timeout via `TcpStream::connect_timeout`) — a bare `TcpStream::connect`
   / `read` blocks forever.
-- Reuse the existing knob: `request_timeout_ms` on the API config
-  (`ScalarWebApi`), clamped with `.max(1_000)` / `.clamp(500, 3_000)` as the
+- Reuse the existing knob: `request_timeout_ms` on `ScalarWebApiDeviceConfig`
+  (`src/config.rs`), clamped with `.max(1_000)` / `.clamp(500, 3_000)` as the
   discovery code already does. Discovery/msearch already build an
   `Instant::now() + total_timeout` deadline — keep that shape.
 - WebSocket (`tungstenite`): bound the handshake and each read; do not park on a
