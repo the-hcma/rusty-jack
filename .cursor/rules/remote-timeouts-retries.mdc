@@ -1,0 +1,80 @@
+---
+description: All remote/network I/O must use explicit timeouts and bounded retries
+alwaysApply: true
+---
+
+# Remote timeouts and retries
+
+Any code that talks to a network peer — the Sony Scalar Web API over raw
+`TcpStream` (`src/scalar_webapi_device/`), SSDP/UDP discovery, the `tungstenite`
+WebSocket notify channel, any `gh`/`curl` helper — must not hang indefinitely
+and must not retry without a bound. Org template sync: repository-helpers#570.
+
+## Timeouts (required)
+
+- Set an **explicit timeout** on every remote call. For a raw `TcpStream`, call
+  both `set_read_timeout(Some(..))` and `set_write_timeout(Some(..))` (and use a
+  connect timeout via `TcpStream::connect_timeout`) — a bare `TcpStream::connect`
+  / `read` blocks forever.
+- Reuse the existing knob: `request_timeout_ms` on the API config
+  (`ScalarWebApi`), clamped with `.max(1_000)` / `.clamp(500, 3_000)` as the
+  discovery code already does. Discovery/msearch already build an
+  `Instant::now() + total_timeout` deadline — keep that shape.
+- WebSocket (`tungstenite`): bound the handshake and each read; do not park on a
+  read with no deadline.
+- Agent / shell wrappers that hit the network should use the helpers'
+  `--timeout` / `run_command … --timeout` patterns when available.
+
+## Retries (required when retrying)
+
+- Retries are for **transient** failures only: connect/read timeouts, connection
+  reset / `ErrorKind::WouldBlock` / `TimedOut`, and HTTP `429` / `502` / `503` /
+  `504`. Do **not** retry a permanent `4xx` (`400` / `401` / `403` / `404`) or a
+  malformed-response / parse error.
+- Cap attempts (small fixed `N`, 2–5) **or** bound the whole retry sequence by
+  the `Instant` deadline (as `send_scalar_webapi_msearch_retry` already does).
+  Never write an **unbounded** `loop { … }` around a network call.
+- Back off between attempts (exponential with a jitter, `std::thread::sleep` /
+  `tokio::time::sleep`). Honor `Retry-After` when the peer sends it, clamped to a
+  ceiling that still fits the deadline.
+- Do **not** retry a non-idempotent write (a power / input / volume command that
+  is not safe to re-send) unless the device tolerates duplicates. Idempotent
+  reads (status polls) are safe to retry within budget.
+- Surface a clear timeout / retry-exhaustion error (`Error` variant, non-zero
+  exit) — never spin silently.
+
+## Anti-patterns
+
+```rust
+// bad — no timeout
+let stream = TcpStream::connect(addr)?;          // blocks forever
+stream.read_to_end(&mut buf)?;                    // no read timeout
+
+// bad — unbounded retry
+loop {
+    match send(&req) {
+        Ok(resp) => return Ok(resp),
+        Err(_) => continue,                       // no cap, no deadline, no backoff
+    }
+}
+```
+
+```rust
+// good — explicit timeouts + a deadline-bounded, backed-off retry
+let stream = TcpStream::connect_timeout(&addr, connect_to)?;
+stream.set_read_timeout(Some(Duration::from_millis(api.request_timeout_ms.max(1_000))))?;
+stream.set_write_timeout(Some(Duration::from_millis(api.request_timeout_ms.max(1_000))))?;
+
+let deadline = Instant::now() + total_timeout;
+let mut backoff = Duration::from_millis(200);
+loop {
+    match send_request(&stream, &req) {
+        Ok(resp) => break Ok(resp),
+        Err(e) if e.is_transient() && Instant::now() + backoff < deadline => {
+            std::thread::sleep(backoff);
+            backoff *= 2;
+        }
+        Err(e) => break Err(e),                   // permanent, or budget exhausted
+    }
+}
+```
