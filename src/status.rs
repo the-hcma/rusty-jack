@@ -436,7 +436,7 @@ fn daemon_display_rows(
                 .filter(|code| *code != "(never exited)")
             {
                 rows.push(DaemonDisplayRow {
-                    error: true,
+                    error: !process_running,
                     label: "last exit code".into(),
                     value: code.clone(),
                 });
@@ -503,17 +503,17 @@ fn daemon_display_rows(
         }
         DaemonStatus::NotInstalled { plist_path } => {
             rows.push(DaemonDisplayRow {
-                error: true,
+                error: false,
                 label: "state".into(),
                 value: "not installed".into(),
             });
             rows.push(DaemonDisplayRow {
-                error: true,
+                error: false,
                 label: "installed".into(),
                 value: "no".into(),
             });
             rows.push(DaemonDisplayRow {
-                error: true,
+                error: false,
                 label: "running".into(),
                 value: "no".into(),
             });

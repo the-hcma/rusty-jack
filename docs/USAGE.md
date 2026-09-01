@@ -384,7 +384,7 @@ Policy block fields (aligned columns):
 
 HDMI/DisplayPort Volume Control block fields include whether a connected HDMI/DP output is detected, whether the Rusty Jack native driver is installed, whether the driver is recommended for the current hardware, whether eqMac fallback is installed, any managed eqMac backup created by `rusty-jack driver swap-in`, and a recommendation when a connected HDMI/DP route needs volume control.
 
-Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, PID when available, and the daemon log file path. When the daemon is not healthy (not installed, paused, loaded without a PID, or unknown), `status` prints an **`error`** row and exits non-zero. In a terminal, error rows are shown in **red**. State values:
+Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, PID when available, and the daemon log file path. When the LaunchAgent is installed but unhealthy (paused, loaded without a PID, or unknown), `status` prints an **`error`** row and exits non-zero. A missing LaunchAgent is informational (exit 0). In a terminal, error rows are shown in **red**. State values:
 
 - `running` — LaunchAgent plist exists, launchd reports the job loaded, **and** a live daemon PID is present.
 - `not running` — plist exists and launchd has the job loaded, but no daemon PID (check `launchd state`, `last exit code`, and the `error` row; try `rusty-jack upgrade --force` or `rusty-jack resume`).
