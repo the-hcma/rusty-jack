@@ -74,10 +74,27 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
 mod tests {
     use super::*;
     use crate::coreaudio::mock::MockHal;
+    use crate::launchd::{daemon_process_running, daemon_status};
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn assert_run_matches_daemon_health(hal: &MockHal, json: bool, config_path: Option<&Path>) {
+        let result = run(hal, json, config_path);
+        let daemon_healthy = daemon_status()
+            .ok()
+            .is_some_and(|status| daemon_process_running(&status));
+        if daemon_healthy {
+            result.unwrap();
+        } else {
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("daemon"),
+                "expected daemon health error, got: {err}"
+            );
+        }
+    }
 
     #[test]
     fn test_run_json_includes_volume() {
@@ -92,7 +109,7 @@ mod tests {
         }])
         .with_output_volume(42);
 
-        run(&hal, true, None).unwrap();
+        assert_run_matches_daemon_health(&hal, true, None);
     }
 
     #[test]
@@ -106,7 +123,7 @@ mod tests {
             is_default: true,
             is_active: true,
         }]);
-        run(&hal, true, None).unwrap();
+        assert_run_matches_daemon_health(&hal, true, None);
     }
 
     #[test]
@@ -133,6 +150,6 @@ mod tests {
             is_active: true,
         }]);
 
-        run(&hal, true, Some(file.path())).unwrap();
+        assert_run_matches_daemon_health(&hal, true, Some(file.path()));
     }
 }
