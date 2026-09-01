@@ -356,7 +356,7 @@ fn format_driver_recommended(status: &HdmiDisplayPortVolumeControlStatus) -> Str
 }
 
 fn format_daemon_log_follow_command(log_path: &str) -> String {
-    format!("tail --follow=name --retry {log_path}")
+    format!("tail -F {log_path}")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1384,7 +1384,7 @@ mod tests {
         assert!(has_row(
             &running,
             "log follow",
-            "tail --follow=name --retry /tmp/rusty-jack.log"
+            "tail -F /tmp/rusty-jack.log"
         ));
 
         let loaded_not_running = format_daemon_block(

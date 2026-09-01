@@ -7,7 +7,8 @@ use crate::hdmi_displayport_volume_control::{
     native_driver_info, route_needs_hdmi_displayport_volume_control,
 };
 use crate::launchd::{
-    daemon_process_running, daemon_status, pause_daemon_with_reason, DaemonPauseReason, PauseResult,
+    daemon_launch_agent_loaded, daemon_status, pause_daemon_with_reason, DaemonPauseReason,
+    PauseResult,
 };
 use crate::native_driver::{
     install_for_connected_hdmi_displayport, print_install_result as print_driver_install_result,
@@ -242,7 +243,7 @@ fn maybe_pause_daemon_for_override(
         return Ok(PickerOverridePause::Continue(None));
     }
 
-    if !daemon_process_running(&daemon_status().map_err(anyhow::Error::new)?) {
+    if !daemon_launch_agent_loaded(&daemon_status().map_err(anyhow::Error::new)?) {
         return Ok(PickerOverridePause::Continue(None));
     }
 

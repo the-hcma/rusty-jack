@@ -136,6 +136,18 @@ pub fn log_privacy_permissions_for_daemon(config: &Config, context: &str) {
     }
 }
 
+/// Log privacy permissions on idle→active wake without blocking on SSDP (Accessibility only).
+pub fn log_privacy_permissions_on_wake_for_daemon(config: &Config, context: &str) {
+    match check_privacy_permissions_with(config, || None) {
+        Ok(status) => log_privacy_permission_status(&status, context),
+        Err(err) => tracing::warn!(
+            target: "daemon",
+            "[privacy] {context}: permission check failed: {}",
+            err.detail_message()
+        ),
+    }
+}
+
 /// Emit human-readable privacy lines to the daemon log.
 pub fn log_privacy_permission_status(status: &PrivacyPermissionStatus, context: &str) {
     if !(status.accessibility_required || status.local_network_required) {

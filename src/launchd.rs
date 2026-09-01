@@ -736,16 +736,23 @@ pub fn daemon_process_running(status: &DaemonStatus) -> bool {
     matches!(status, DaemonStatus::Running { pid: Some(_), .. })
 }
 
+/// True when the LaunchAgent plist is loaded in launchd (including loaded-but-not-running).
+#[must_use]
+pub fn daemon_launch_agent_loaded(status: &DaemonStatus) -> bool {
+    matches!(status, DaemonStatus::Running { .. })
+}
+
 /// Human-readable remediation when the supervisor is not healthy.
+///
+/// Returns `None` when the daemon is not installed (informational only) or when a live
+/// process is running. Installed-but-not-running, paused, and unknown states are errors.
 #[must_use]
 pub fn daemon_supervisor_error_message(status: &DaemonStatus) -> Option<String> {
     if daemon_process_running(status) {
         return None;
     }
     Some(match status {
-        DaemonStatus::NotInstalled { .. } => {
-            "daemon not installed; run `rusty-jack install`".into()
-        }
+        DaemonStatus::NotInstalled { .. } => return None,
         DaemonStatus::Paused { .. } => "daemon paused; run `rusty-jack resume`".into(),
         DaemonStatus::Unknown { message, .. } => {
             format!("daemon state unknown: {message}")
@@ -1163,6 +1170,16 @@ mod tests {
         assert!(daemon_process_running(&running));
         assert!(!daemon_process_running(&loaded));
         assert!(daemon_supervisor_error_message(&loaded).is_some());
+        assert!(
+            daemon_supervisor_error_message(&DaemonStatus::NotInstalled {
+                plist_path: "/tmp/test.plist".into(),
+            })
+            .is_none()
+        );
+        assert!(daemon_launch_agent_loaded(&loaded));
+        assert!(!daemon_launch_agent_loaded(&DaemonStatus::NotInstalled {
+            plist_path: "/tmp/test.plist".into(),
+        }));
     }
 
     #[test]
