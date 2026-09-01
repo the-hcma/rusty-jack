@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.12.0...rusty-jack-v0.12.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* fall back to idle monitor when event tap lacks Accessibility ([#223](https://github.com/the-hcma/rusty-jack/issues/223)) ([beeb0da](https://github.com/the-hcma/rusty-jack/commit/beeb0da413f938d5812e6fab734b1d4a1dc77c0f))
+
 ## [0.12.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.7...rusty-jack-v0.12.0) (2026-09-01)
 
 
