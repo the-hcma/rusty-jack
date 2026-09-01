@@ -123,7 +123,32 @@ pub const TAP_RECREATE_COOLDOWN: Duration = Duration::from_secs(600);
 const TAP_RECREATE_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Minimum interval between `AXIsProcessTrusted()` probes on the silent-tap path.
-const ACCESSIBILITY_TRUST_PROBE_COOLDOWN: Duration = Duration::from_secs(60);
+pub const ACCESSIBILITY_TRUST_PROBE_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// Whether a cached Accessibility-trust value may be reused without re-probing.
+#[must_use]
+pub fn accessibility_trust_probe_cache_hit(
+    now_unix_nanos: u64,
+    last_probe_unix_nanos: u64,
+    probe_cooldown: Duration,
+) -> bool {
+    now_unix_nanos.saturating_sub(last_probe_unix_nanos) < probe_cooldown.as_nanos() as u64
+}
+
+/// Resolve cached vs freshly probed Accessibility trust (pure logic for tests and caching).
+#[must_use]
+pub fn resolve_accessibility_trust_probe(
+    now_unix_nanos: u64,
+    last_probe_unix_nanos: u64,
+    cached_trusted: bool,
+    probe_cooldown: Duration,
+    probed_trusted: bool,
+) -> (bool, u64) {
+    if accessibility_trust_probe_cache_hit(now_unix_nanos, last_probe_unix_nanos, probe_cooldown) {
+        return (cached_trusted, last_probe_unix_nanos);
+    }
+    (probed_trusted, now_unix_nanos)
+}
 
 /// When mouse-move is excluded, the same signature can mean either a healthy tap ignoring pointer
 /// jitter or a deaf tap; callers fall back to platform idle when Accessibility is missing, or
@@ -345,8 +370,10 @@ impl EventTapActivityMonitor {
         let last_probe = self
             .accessibility_trust_probed_at_unix_nanos
             .load(Ordering::Acquire);
-        if now.saturating_sub(last_probe) < ACCESSIBILITY_TRUST_PROBE_COOLDOWN.as_nanos() as u64 {
-            return self.accessibility_trusted_cache.load(Ordering::Acquire);
+        let cached = self.accessibility_trusted_cache.load(Ordering::Acquire);
+        if accessibility_trust_probe_cache_hit(now, last_probe, ACCESSIBILITY_TRUST_PROBE_COOLDOWN)
+        {
+            return cached;
         }
 
         let trusted = crate::privacy_permissions::accessibility_is_trusted();
@@ -772,6 +799,47 @@ mod tests {
             K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
         ));
         assert!(!is_event_tap_disabled_notification(K_CG_EVENT_KEY_DOWN));
+    }
+
+    #[test]
+    fn accessibility_trust_probe_cache_hit_respects_cooldown_boundary() {
+        let cooldown = ACCESSIBILITY_TRUST_PROBE_COOLDOWN;
+        let last_probe = 100_000_000_000;
+        assert!(accessibility_trust_probe_cache_hit(
+            last_probe + cooldown.as_nanos() as u64 - 1,
+            last_probe,
+            cooldown,
+        ));
+        assert!(!accessibility_trust_probe_cache_hit(
+            last_probe + cooldown.as_nanos() as u64,
+            last_probe,
+            cooldown,
+        ));
+    }
+
+    #[test]
+    fn resolve_accessibility_trust_probe_returns_cached_value_within_cooldown() {
+        let cooldown = ACCESSIBILITY_TRUST_PROBE_COOLDOWN;
+        let last_probe = 100_000_000_000;
+        assert_eq!(
+            resolve_accessibility_trust_probe(last_probe + 1, last_probe, true, cooldown, false,),
+            (true, last_probe)
+        );
+    }
+
+    #[test]
+    fn resolve_accessibility_trust_probe_refreshes_after_cooldown() {
+        let cooldown = ACCESSIBILITY_TRUST_PROBE_COOLDOWN;
+        let last_probe = 100_000_000_000;
+        let now = last_probe + cooldown.as_nanos() as u64;
+        assert_eq!(
+            resolve_accessibility_trust_probe(now, last_probe, true, cooldown, false),
+            (false, now)
+        );
+        assert_eq!(
+            resolve_accessibility_trust_probe(now, last_probe, true, cooldown, true),
+            (true, now)
+        );
     }
 
     #[test]
