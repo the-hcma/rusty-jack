@@ -803,6 +803,12 @@ pub fn run_forever(
                             "[activity] could not persist activity snapshot: {err}"
                         );
                     }
+                    if observation.became_active {
+                        crate::privacy_permissions::log_privacy_permissions_for_daemon(
+                            &config,
+                            "idle→active wake",
+                        );
+                    }
                     if should_attempt_scalar_wake(&observation) {
                         let network_change = if observation.became_active {
                             match load_config(config_path) {

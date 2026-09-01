@@ -70,5 +70,6 @@ pub fn run(hal: &dyn AudioHal, config_path: Option<&Path>) -> Result<()> {
     );
 
     let activity = daemon_activity_monitor(&config);
+    crate::privacy_permissions::log_privacy_permissions_for_daemon(&config, "startup");
     crate::daemon::run_forever(hal, &path, activity.as_ref()).map_err(anyhow::Error::new)
 }

@@ -127,6 +127,12 @@ pub enum DaemonStatus {
         service: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
+        /// launchd `state` from `launchctl print` (for example `running`, `spawn scheduled`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        launch_job_state: Option<String>,
+        /// launchd `last exit code` when the job is loaded but the process is not running.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_exit_code: Option<String>,
     },
     Paused {
         label: String,
@@ -724,6 +730,47 @@ pub fn daemon_version_check(
     })
 }
 
+/// True when launchd reports a live daemon PID (not merely a loaded job).
+#[must_use]
+pub fn daemon_process_running(status: &DaemonStatus) -> bool {
+    matches!(status, DaemonStatus::Running { pid: Some(_), .. })
+}
+
+/// Human-readable remediation when the supervisor is not healthy.
+#[must_use]
+pub fn daemon_supervisor_error_message(status: &DaemonStatus) -> Option<String> {
+    if daemon_process_running(status) {
+        return None;
+    }
+    Some(match status {
+        DaemonStatus::NotInstalled { .. } => {
+            "daemon not installed; run `rusty-jack install`".into()
+        }
+        DaemonStatus::Paused { .. } => "daemon paused; run `rusty-jack resume`".into(),
+        DaemonStatus::Unknown { message, .. } => {
+            format!("daemon state unknown: {message}")
+        }
+        DaemonStatus::Running {
+            last_exit_code,
+            launch_job_state,
+            ..
+        } => {
+            let mut detail = String::from("daemon not running");
+            if let Some(state) = launch_job_state {
+                detail.push_str(&format!(" (launchd state={state})"));
+            }
+            if let Some(code) = last_exit_code
+                .as_ref()
+                .filter(|code| *code != "(never exited)")
+            {
+                detail.push_str(&format!(" (last exit code={code})"));
+            }
+            detail.push_str("; run `rusty-jack upgrade --force` or `rusty-jack resume`");
+            detail
+        }
+    })
+}
+
 /// Inspect whether the per-user LaunchAgent is installed, running, or paused.
 pub fn daemon_status() -> Result<DaemonStatus, RustyJackError> {
     let plist_path = plist_path_or_err()?;
@@ -742,6 +789,8 @@ pub fn daemon_status() -> Result<DaemonStatus, RustyJackError> {
             plist_path: plist_display,
             service,
             pid: parse_launchctl_pid(&output),
+            launch_job_state: parse_launchctl_field(&output, "state ="),
+            last_exit_code: parse_launchctl_field(&output, "last exit code ="),
         }),
         Ok(None) => Ok(DaemonStatus::Paused {
             label: LAUNCH_AGENT_LABEL.into(),
@@ -757,12 +806,18 @@ pub fn daemon_status() -> Result<DaemonStatus, RustyJackError> {
     }
 }
 
-fn parse_launchctl_pid(output: &str) -> Option<u32> {
+fn parse_launchctl_field(output: &str, prefix: &str) -> Option<String> {
     output.lines().find_map(|line| {
         line.trim()
-            .strip_prefix("pid = ")
-            .and_then(|value| value.parse::<u32>().ok())
+            .strip_prefix(prefix)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
     })
+}
+
+fn parse_launchctl_pid(output: &str) -> Option<u32> {
+    parse_launchctl_field(output, "pid =").and_then(|value| value.parse::<u32>().ok())
 }
 
 fn running_daemon_pid(domain: &str) -> Option<u32> {
@@ -1068,6 +1123,47 @@ pub fn print_resume_result(result: &ResumeResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_launchctl_field_reads_job_metadata() {
+        let output = r#"
+	state = spawn scheduled
+	pid = 20890
+	last exit code = 78: EX_CONFIG
+"#;
+        assert_eq!(
+            parse_launchctl_field(output, "state =").as_deref(),
+            Some("spawn scheduled")
+        );
+        assert_eq!(parse_launchctl_pid(output), Some(20_890));
+        assert_eq!(
+            parse_launchctl_field(output, "last exit code =").as_deref(),
+            Some("78: EX_CONFIG")
+        );
+    }
+
+    #[test]
+    fn test_daemon_process_running_requires_pid() {
+        let running = DaemonStatus::Running {
+            label: LAUNCH_AGENT_LABEL.into(),
+            plist_path: "/tmp/test.plist".into(),
+            service: "gui/501/com.example.rusty-jack".into(),
+            pid: Some(42),
+            launch_job_state: None,
+            last_exit_code: None,
+        };
+        let loaded = DaemonStatus::Running {
+            pid: None,
+            launch_job_state: Some("spawn scheduled".into()),
+            last_exit_code: Some("78: EX_CONFIG".into()),
+            label: LAUNCH_AGENT_LABEL.into(),
+            plist_path: "/tmp/test.plist".into(),
+            service: "gui/501/com.example.rusty-jack".into(),
+        };
+        assert!(daemon_process_running(&running));
+        assert!(!daemon_process_running(&loaded));
+        assert!(daemon_supervisor_error_message(&loaded).is_some());
+    }
 
     #[test]
     fn test_launch_agent_plist_path_ends_with_label() {

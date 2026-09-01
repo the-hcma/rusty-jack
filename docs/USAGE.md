@@ -116,7 +116,7 @@ macOS requires **Accessibility** permission for the tap to receive events. **Res
 launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"
 ```
 
-If permission is missing at startup, macOS may disable the tap immediately or leave it silent. When `activity_event_tap_include_mouse_move` is `true`, Rusty Jack **falls back to the `idle` monitor** if the tap stops receiving events while the session is active. With the default `activity_event_tap_include_mouse_move: false`, a silent tap is **recreated** automatically (rate-limited) instead of falling back, so Bluetooth pointer jitter does not trigger speaker wakes. Look for `[activity] event tap using idle monitor fallback`, `[activity] event tap disabled by macOS`, `[activity] event tap appears silent`, or `event tap recreated after silent stall` in `~/Library/Logs/rusty-jack.log`. Interactive ScalarWebAPI install with `keyboard`/`mouse` wake triggers sets `event_tap` automatically.
+If permission is missing at startup, macOS may disable the tap immediately or leave it silent. When `activity_event_tap_include_mouse_move` is `true`, Rusty Jack **falls back to the `idle` monitor** if the tap stops receiving events while the session is active. With the default `activity_event_tap_include_mouse_move: false`, a silent tap is **recreated** automatically (rate-limited) instead of falling back, so Bluetooth pointer jitter does not trigger speaker wakes. Look for `[activity] event tap using idle monitor fallback`, `[activity] event tap disabled by macOS`, `[activity] event tap appears silent`, or `event tap recreated after silent stall` in `~/Library/Logs/rusty-jack.log`. The daemon also logs `[privacy]` lines on **startup** and on each **idle→active wake** (Accessibility and Local Network probe results). Interactive ScalarWebAPI install with `keyboard`/`mouse` wake triggers sets `event_tap` automatically.
 
 `rusty-jack status` Activity block shows idle time, state, and the last idle→active transition. When the tap is working, `idle` stays low while you use the Mac; if `idle` climbs for hours while you are active, grant Accessibility permission and restart the daemon (or wait for an automatic tap recreate when `include_mouse_move` is `false`).
 
@@ -384,11 +384,14 @@ Policy block fields (aligned columns):
 
 HDMI/DisplayPort Volume Control block fields include whether a connected HDMI/DP output is detected, whether the Rusty Jack native driver is installed, whether the driver is recommended for the current hardware, whether eqMac fallback is installed, any managed eqMac backup created by `rusty-jack driver swap-in`, and a recommendation when a connected HDMI/DP route needs volume control.
 
-Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, PID when available, and the daemon log file path. State values:
+Daemon block fields include `installed`, `running`, and `paused` booleans, plus the launchd label, service, plist path, PID when available, and the daemon log file path. When the daemon is not healthy (not installed, paused, loaded without a PID, or unknown), `status` prints an **`error`** row and exits non-zero. In a terminal, error rows are shown in **red**. State values:
 
-- `running` — LaunchAgent plist exists and launchd reports the job loaded; PID is shown when available.
+- `running` — LaunchAgent plist exists, launchd reports the job loaded, **and** a live daemon PID is present.
+- `not running` — plist exists and launchd has the job loaded, but no daemon PID (check `launchd state`, `last exit code`, and the `error` row; try `rusty-jack upgrade --force` or `rusty-jack resume`).
 - `paused` — plist exists but launchd does not currently have the job loaded. If picker paused the daemon for a manual output override, `status` includes a `reason` and a note telling you to run `rusty-jack resume`.
 - `not_installed` — plist is not present under `~/Library/LaunchAgents`.
+
+The **`log follow`** row shows the recommended live tail command: `tail --follow=name --retry <log-path>` (GNU/BSD `tail` on macOS 12+).
 
 When the daemon has run at least one activity poll, an **Activity** block shows the latest idle sample, console and daemon users, configured keyboard/mouse wake triggers, and the last idle→active transition (proxy for recent keyboard/mouse activity). Activity polls log at `debug`; transitions log at `info`.
 

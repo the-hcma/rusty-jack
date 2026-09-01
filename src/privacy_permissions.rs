@@ -117,6 +117,43 @@ pub fn check_privacy_permissions(
     check_privacy_permissions_with(config, probe_local_network_permission)
 }
 
+/// Probe required permissions for the daemon log (SSDP probe logs under `daemon`).
+pub fn check_privacy_permissions_for_daemon(
+    config: &Config,
+) -> Result<PrivacyPermissionStatus, RustyJackError> {
+    check_privacy_permissions_with(config, probe_local_network_permission_for_daemon)
+}
+
+/// Write privacy permission results to the daemon log (non-interactive; no prompts).
+pub fn log_privacy_permissions_for_daemon(config: &Config, context: &str) {
+    match check_privacy_permissions_for_daemon(config) {
+        Ok(status) => log_privacy_permission_status(&status, context),
+        Err(err) => tracing::warn!(
+            target: "daemon",
+            "[privacy] {context}: permission check failed: {}",
+            err.detail_message()
+        ),
+    }
+}
+
+/// Emit human-readable privacy lines to the daemon log.
+pub fn log_privacy_permission_status(status: &PrivacyPermissionStatus, context: &str) {
+    if !(status.accessibility_required || status.local_network_required) {
+        return;
+    }
+    tracing::info!(
+        target: "daemon",
+        "[privacy] {context}: checking macOS privacy permissions for configured features"
+    );
+    for note in &status.notes {
+        if note.contains("missing") {
+            tracing::warn!(target: "daemon", "[privacy] {context}: {note}");
+        } else {
+            tracing::info!(target: "daemon", "[privacy] {context}: {note}");
+        }
+    }
+}
+
 fn check_privacy_permissions_with(
     config: &Config,
     local_network_probe: impl Fn() -> Option<bool>,
@@ -222,34 +259,54 @@ fn local_network_status_from_discovery(device_count: Result<usize, ()>) -> Optio
     }
 }
 
-/// Probe Local Network via a short SSDP scan.
-///
 /// Returns `Some(true)` only when at least one speaker answers. Empty SSDP or no
 /// LAN route is `None` (inconclusive) — never treated as a confirmed denial.
 fn probe_local_network_permission() -> Option<bool> {
+    probe_local_network_permission_logged("setup")
+}
+
+fn probe_local_network_permission_for_daemon() -> Option<bool> {
+    probe_local_network_permission_logged("daemon")
+}
+
+fn probe_local_network_permission_logged(log_target: &'static str) -> Option<bool> {
     #[cfg(target_os = "macos")]
     {
         if !lan_connectivity_ready() {
-            tracing::info!(
-                target: "setup",
-                "[privacy] skipping Local Network SSDP probe; LAN connectivity not ready"
-            );
+            match log_target {
+                "daemon" => tracing::info!(
+                    target: "daemon",
+                    "[privacy] skipping Local Network SSDP probe; LAN connectivity not ready"
+                ),
+                _ => tracing::info!(
+                    target: "setup",
+                    "[privacy] skipping Local Network SSDP probe; LAN connectivity not ready"
+                ),
+            }
             return None;
         }
         match discover_scalar_webapi_devices_on_lan(LOCAL_NETWORK_PROBE_TIMEOUT_MS) {
             Ok(devices) => local_network_status_from_discovery(Ok(devices.len())),
             Err(err) => {
-                tracing::warn!(
-                    target: "setup",
-                    "[privacy] Local Network SSDP probe failed: {}",
-                    err.detail_message()
-                );
+                match log_target {
+                    "daemon" => tracing::warn!(
+                        target: "daemon",
+                        "[privacy] Local Network SSDP probe failed: {}",
+                        err.detail_message()
+                    ),
+                    _ => tracing::warn!(
+                        target: "setup",
+                        "[privacy] Local Network SSDP probe failed: {}",
+                        err.detail_message()
+                    ),
+                }
                 local_network_status_from_discovery(Err(()))
             }
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = log_target;
         None
     }
 }
@@ -502,6 +559,41 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("config load failed")));
+    }
+
+    #[test]
+    fn test_log_privacy_permission_status_emits_notes_for_required_features() {
+        let status = PrivacyPermissionStatus {
+            accessibility_required: true,
+            accessibility_trusted: Some(false),
+            force_daemon_restart: false,
+            local_network_ok: None,
+            local_network_required: true,
+            notes: vec![
+                "Accessibility permission missing (required for activity_monitor=event_tap)".into(),
+                "Local Network not confirmed (no LAN route or SSDP inconclusive; not treating as denied)"
+                    .into(),
+            ],
+        };
+        assert!(status.notes.iter().any(|note| note.contains("missing")));
+        assert!(status
+            .notes
+            .iter()
+            .any(|note| note.contains("inconclusive")));
+        log_privacy_permission_status(&status, "startup");
+    }
+
+    #[test]
+    fn test_log_privacy_permission_status_skips_when_nothing_required() {
+        let status = PrivacyPermissionStatus {
+            accessibility_required: false,
+            accessibility_trusted: None,
+            force_daemon_restart: false,
+            local_network_ok: None,
+            local_network_required: false,
+            notes: vec![],
+        };
+        log_privacy_permission_status(&status, "startup");
     }
 
     #[test]

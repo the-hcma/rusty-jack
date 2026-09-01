@@ -2,6 +2,7 @@
 
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
+use crate::launchd::daemon_supervisor_error_message;
 use crate::scalar_webapi_device::ScalarDiscoveryFeedback;
 use crate::status::{build_status, print_json, print_text, StatusDaemonContext};
 use anyhow::Result;
@@ -55,6 +56,15 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         print_json(&snapshot)?;
     } else {
         print_text(&snapshot)?;
+    }
+
+    match &snapshot.daemon {
+        None => anyhow::bail!("could not inspect LaunchAgent status"),
+        Some(daemon) => {
+            if let Some(message) = daemon_supervisor_error_message(daemon) {
+                anyhow::bail!(message);
+            }
+        }
     }
 
     Ok(())
