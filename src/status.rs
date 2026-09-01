@@ -5,7 +5,7 @@ use crate::hdmi_displayport_volume_control::{
     hdmi_displayport_volume_control_status_for_target, HdmiDisplayPortVolumeControlStatus,
 };
 use crate::launchd::{DaemonLogPaths, DaemonStatus, DaemonVersionCheck};
-use crate::list_fmt::{self, format_detail_rows};
+use crate::list_fmt::{self, format_detail_rows, terminal_supports_color};
 use crate::policy::evaluate_policy;
 use crate::scalar_webapi_device::{self, ScalarDiscoveryFeedback, ScalarWebApiMacOutputLink};
 use crate::state::ActivitySnapshot;
@@ -14,8 +14,9 @@ use crate::version::BinaryVersion;
 use anyhow::Result;
 use chrono::{Local, TimeZone};
 use dialoguer::console::style;
+use serde::ser::Serializer;
 use serde::Serialize;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 /// Policy evaluation for the current routing state.
@@ -60,6 +61,106 @@ pub struct StatusDaemonContext {
     pub daemon_logs: Option<DaemonLogPaths>,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum StatusDaemonJson<'a> {
+    Running {
+        label: &'a str,
+        plist_path: &'a str,
+        service: &'a str,
+        pid: u32,
+    },
+    NotRunning {
+        label: &'a str,
+        plist_path: &'a str,
+        service: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        launch_job_state: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_exit_code: Option<&'a str>,
+    },
+    Paused {
+        label: &'a str,
+        plist_path: &'a str,
+        service: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pause_reason: Option<&'a crate::launchd::DaemonPauseReason>,
+    },
+    NotInstalled {
+        plist_path: &'a str,
+    },
+    Unknown {
+        label: &'a str,
+        plist_path: &'a str,
+        message: &'a str,
+    },
+}
+
+fn status_daemon_json(status: &DaemonStatus) -> StatusDaemonJson<'_> {
+    match status {
+        DaemonStatus::Running {
+            label,
+            plist_path,
+            service,
+            pid: Some(pid),
+            ..
+        } => StatusDaemonJson::Running {
+            label,
+            plist_path,
+            service,
+            pid: *pid,
+        },
+        DaemonStatus::Running {
+            label,
+            plist_path,
+            service,
+            launch_job_state,
+            last_exit_code,
+            ..
+        } => StatusDaemonJson::NotRunning {
+            label,
+            plist_path,
+            service,
+            launch_job_state: launch_job_state.as_deref(),
+            last_exit_code: last_exit_code.as_deref(),
+        },
+        DaemonStatus::Paused {
+            label,
+            plist_path,
+            service,
+            pause_reason,
+        } => StatusDaemonJson::Paused {
+            label,
+            plist_path,
+            service,
+            pause_reason: pause_reason.as_ref(),
+        },
+        DaemonStatus::NotInstalled { plist_path } => StatusDaemonJson::NotInstalled { plist_path },
+        DaemonStatus::Unknown {
+            label,
+            plist_path,
+            message,
+        } => StatusDaemonJson::Unknown {
+            label,
+            plist_path,
+            message,
+        },
+    }
+}
+
+fn serialize_status_daemon<S>(
+    daemon: &Option<DaemonStatus>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match daemon {
+        None => serializer.serialize_none(),
+        Some(status) => status_daemon_json(status).serialize(serializer),
+    }
+}
+
 /// Snapshot returned by `rusty-jack status`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StatusSnapshot {
@@ -75,7 +176,10 @@ pub struct StatusSnapshot {
     pub scalar_webapi: Option<ScalarWebApiStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scalar_webapi_mac_output: Option<ScalarWebApiMacOutputLink>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        serialize_with = "serialize_status_daemon",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub daemon: Option<DaemonStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_version: Option<DaemonVersionCheck>,
@@ -637,7 +741,7 @@ fn format_daemon_block(
 
 fn write_daemon_block(out: &mut impl Write, rows: &[DaemonDisplayRow]) -> Result<()> {
     writeln!(out, "Daemon")?;
-    let use_color = io::stdout().is_terminal();
+    let use_color = terminal_supports_color();
     let width = rows.iter().map(|row| row.label.len()).max().unwrap_or(0);
     for row in rows {
         let line = format!("  {:width$}: {}", row.label, row.value, width = width);
@@ -1603,5 +1707,36 @@ mod tests {
         assert!(json.contains("\"daemon\""));
         assert!(json.contains("\"daemon_logs\""));
         assert!(json.contains("\"state\":\"running\""));
+    }
+
+    #[test]
+    fn test_print_json_serializes_loaded_without_pid_as_not_running() {
+        let snapshot = build_status(
+            DeviceList {
+                devices: vec![],
+                system_default: None,
+                scalar_webapi_mac_output: None,
+            },
+            None,
+            None,
+            None,
+            StatusDaemonContext {
+                daemon: Some(DaemonStatus::Running {
+                    label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                    plist_path: "/tmp/test.plist".into(),
+                    service: "gui/501/com.example.rusty-jack".into(),
+                    pid: None,
+                    launch_job_state: Some("spawn scheduled".into()),
+                    last_exit_code: Some("78: EX_CONFIG".into()),
+                }),
+                daemon_version: None,
+                daemon_logs: None,
+            },
+            None,
+            ScalarDiscoveryFeedback::Silent,
+        );
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("\"state\":\"not_running\""));
+        assert!(!json.contains("\"state\":\"running\""));
     }
 }
