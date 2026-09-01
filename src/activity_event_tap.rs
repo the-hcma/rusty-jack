@@ -18,13 +18,45 @@ pub const EVENT_TAP_PRIVACY_NOTE: &str =
 pub const EVENT_TAP_PERMISSION_HINT: &str =
     "grant Accessibility permission to rusty-jack (listen-only: timing and event-type labels only, no keystroke logging); restart the daemon after granting permission";
 
+/// Whether the daemon should attempt an event-tap activity monitor for this config.
+#[must_use]
+pub fn should_try_event_tap_activity_monitor(config: &Config, accessibility_trusted: bool) -> bool {
+    config.activity_monitor.eq_ignore_ascii_case("event_tap") && accessibility_trusted
+}
+
+/// Action to take when the event tap looks silent while the session is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SilentTapIdleAction {
+    RecreateTap,
+    UsePlatformIdleUntrustedAccessibility,
+    UsePlatformIdleWithMouseMove,
+}
+
+/// Decide how to handle a silent event tap (pure logic for tests and `idle_duration`).
+#[must_use]
+pub fn silent_tap_idle_action(
+    include_mouse_move: bool,
+    accessibility_trusted: bool,
+) -> SilentTapIdleAction {
+    if include_mouse_move {
+        SilentTapIdleAction::UsePlatformIdleWithMouseMove
+    } else if !accessibility_trusted {
+        SilentTapIdleAction::UsePlatformIdleUntrustedAccessibility
+    } else {
+        SilentTapIdleAction::RecreateTap
+    }
+}
+
 /// Build the daemon activity monitor selected by config.
 #[must_use]
 pub fn daemon_activity_monitor(config: &Config) -> Box<dyn ActivityMonitor> {
     #[cfg(target_os = "macos")]
     {
         if config.activity_monitor.eq_ignore_ascii_case("event_tap") {
-            if !crate::privacy_permissions::accessibility_is_trusted() {
+            if !should_try_event_tap_activity_monitor(
+                config,
+                crate::privacy_permissions::accessibility_is_trusted(),
+            ) {
                 tracing::warn!(
                     target: "daemon",
                     "[activity] Accessibility not granted for daemon; using idle monitor instead of event tap ({EVENT_TAP_PERMISSION_HINT})"
@@ -90,18 +122,9 @@ pub const TAP_RECREATE_COOLDOWN: Duration = Duration::from_secs(600);
 
 const TAP_RECREATE_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 
-/// When `activity_event_tap_include_mouse_move` is `true`, or Accessibility is missing for the
-/// daemon, a silent tap should fall back to platform idle instead of recreate-only.
-#[must_use]
-pub fn event_tap_silent_should_use_platform_idle(
-    include_mouse_move: bool,
-    accessibility_trusted: bool,
-) -> bool {
-    include_mouse_move || !accessibility_trusted
-}
+/// Minimum interval between `AXIsProcessTrusted()` probes on the silent-tap path.
+const ACCESSIBILITY_TRUST_PROBE_COOLDOWN: Duration = Duration::from_secs(60);
 
-/// Detect a listen-only tap that stopped receiving HID events while the session is active.
-///
 /// When mouse-move is excluded, the same signature can mean either a healthy tap ignoring pointer
 /// jitter or a deaf tap; callers fall back to platform idle when Accessibility is missing, or
 /// recreate the tap when it is granted.
@@ -198,6 +221,8 @@ struct EventTapActivityMonitor {
     logged_platform_fallback: Arc<AtomicBool>,
     recreate_requested: Arc<AtomicBool>,
     last_recreate_unix_nanos: Arc<AtomicU64>,
+    accessibility_trusted_cache: Arc<AtomicBool>,
+    accessibility_trust_probed_at_unix_nanos: Arc<AtomicU64>,
     include_mouse_move: bool,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -212,6 +237,8 @@ impl EventTapActivityMonitor {
         let logged_platform_fallback = Arc::new(AtomicBool::new(false));
         let recreate_requested = Arc::new(AtomicBool::new(false));
         let last_recreate_unix_nanos = Arc::new(AtomicU64::new(0));
+        let accessibility_trusted_cache = Arc::new(AtomicBool::new(true));
+        let accessibility_trust_probed_at_unix_nanos = Arc::new(AtomicU64::new(now_unix_nanos()));
         let fallback_on_disable = Arc::new(AtomicBool::new(include_mouse_move));
         let startup_failed = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -240,6 +267,8 @@ impl EventTapActivityMonitor {
             logged_platform_fallback,
             recreate_requested,
             last_recreate_unix_nanos,
+            accessibility_trusted_cache,
+            accessibility_trust_probed_at_unix_nanos,
             include_mouse_move,
             shutdown,
             thread: Some(thread),
@@ -310,6 +339,29 @@ impl EventTapActivityMonitor {
             platform_idle.as_secs_f64(),
         );
     }
+
+    fn cached_accessibility_trusted(&self) -> bool {
+        let now = now_unix_nanos();
+        let last_probe = self
+            .accessibility_trust_probed_at_unix_nanos
+            .load(Ordering::Acquire);
+        if now.saturating_sub(last_probe) < ACCESSIBILITY_TRUST_PROBE_COOLDOWN.as_nanos() as u64 {
+            return self.accessibility_trusted_cache.load(Ordering::Acquire);
+        }
+
+        let trusted = crate::privacy_permissions::accessibility_is_trusted();
+        self.accessibility_trusted_cache
+            .store(trusted, Ordering::Release);
+        self.accessibility_trust_probed_at_unix_nanos
+            .store(now, Ordering::Release);
+        trusted
+    }
+
+    fn latch_platform_idle_fallback(&self, reason: &str, platform_idle: Duration) -> Duration {
+        self.use_platform_idle.store(true, Ordering::Release);
+        self.log_platform_fallback(reason);
+        platform_idle
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -353,20 +405,28 @@ impl ActivityMonitor for EventTapActivityMonitor {
 
         if let Ok(platform_idle) = crate::activity::macos_platform_idle_duration() {
             if event_tap_appears_silent(tap_idle, platform_idle) {
-                if event_tap_silent_should_use_platform_idle(
-                    self.include_mouse_move,
-                    crate::privacy_permissions::accessibility_is_trusted(),
-                ) {
-                    self.use_platform_idle.store(true, Ordering::Release);
-                    let reason = if self.include_mouse_move {
-                        "tap stopped receiving events while the session is active (grant Accessibility permission and restart the daemon to restore event-tap mode)"
-                    } else {
-                        "tap silent while Accessibility is missing for the daemon (using platform idle until permission is granted and the daemon is restarted)"
-                    };
-                    self.log_platform_fallback(reason);
-                    return Ok(platform_idle);
+                let accessibility_trusted = if self.include_mouse_move {
+                    true
+                } else {
+                    self.cached_accessibility_trusted()
+                };
+                match silent_tap_idle_action(self.include_mouse_move, accessibility_trusted) {
+                    SilentTapIdleAction::UsePlatformIdleWithMouseMove => {
+                        return Ok(self.latch_platform_idle_fallback(
+                            "tap stopped receiving events while the session is active (grant Accessibility permission and restart the daemon to restore event-tap mode)",
+                            platform_idle,
+                        ));
+                    }
+                    SilentTapIdleAction::UsePlatformIdleUntrustedAccessibility => {
+                        return Ok(self.latch_platform_idle_fallback(
+                            "tap silent while Accessibility is missing for the daemon (using platform idle until permission is granted and the daemon is restarted)",
+                            platform_idle,
+                        ));
+                    }
+                    SilentTapIdleAction::RecreateTap => {
+                        self.request_tap_recreate_if_allowed(tap_idle, platform_idle);
+                    }
                 }
-                self.request_tap_recreate_if_allowed(tap_idle, platform_idle);
             }
         }
 
@@ -715,11 +775,53 @@ mod tests {
     }
 
     #[test]
-    fn event_tap_silent_should_use_platform_idle_when_mouse_move_or_untrusted() {
-        assert!(event_tap_silent_should_use_platform_idle(true, true));
-        assert!(event_tap_silent_should_use_platform_idle(true, false));
-        assert!(event_tap_silent_should_use_platform_idle(false, false));
-        assert!(!event_tap_silent_should_use_platform_idle(false, true));
+    fn should_try_event_tap_activity_monitor_requires_event_tap_and_trust() {
+        let event_tap = Config {
+            activity_monitor: "event_tap".into(),
+            ..Default::default()
+        };
+        assert!(should_try_event_tap_activity_monitor(&event_tap, true));
+        assert!(!should_try_event_tap_activity_monitor(&event_tap, false));
+        let idle = Config {
+            activity_monitor: "idle".into(),
+            ..Default::default()
+        };
+        assert!(!should_try_event_tap_activity_monitor(&idle, true));
+    }
+
+    #[test]
+    fn silent_tap_idle_action_selects_platform_idle_or_recreate() {
+        assert_eq!(
+            silent_tap_idle_action(true, true),
+            SilentTapIdleAction::UsePlatformIdleWithMouseMove
+        );
+        assert_eq!(
+            silent_tap_idle_action(false, false),
+            SilentTapIdleAction::UsePlatformIdleUntrustedAccessibility
+        );
+        assert_eq!(
+            silent_tap_idle_action(false, true),
+            SilentTapIdleAction::RecreateTap
+        );
+    }
+
+    #[test]
+    fn silent_tap_idle_action_latches_platform_idle_for_untrusted_accessibility() {
+        let use_platform_idle = AtomicBool::new(false);
+        let action = silent_tap_idle_action(false, false);
+        assert_eq!(
+            action,
+            SilentTapIdleAction::UsePlatformIdleUntrustedAccessibility
+        );
+        use_platform_idle.store(
+            matches!(
+                action,
+                SilentTapIdleAction::UsePlatformIdleUntrustedAccessibility
+                    | SilentTapIdleAction::UsePlatformIdleWithMouseMove
+            ),
+            Ordering::Release,
+        );
+        assert!(use_platform_idle.load(Ordering::Acquire));
     }
 
     #[test]
