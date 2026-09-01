@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.7...rusty-jack-v0.12.0) (2026-09-01)
+
+
+### Features
+
+* re-check Accessibility/Local Network on install/upgrade ([#217](https://github.com/the-hcma/rusty-jack/issues/217)) ([81bb6fd](https://github.com/the-hcma/rusty-jack/commit/81bb6fd85eb0a1a2874d92d91e1c45dbff29d011))
+* surface daemon health errors and log privacy on wake ([#220](https://github.com/the-hcma/rusty-jack/issues/220)) ([55b0830](https://github.com/the-hcma/rusty-jack/commit/55b08300a8f4eab67deeb31f555641016c233407))
+
+
+### Bug Fixes
+
+* fall back to cache/config when ScalarWebAPI SSDP misses ([#215](https://github.com/the-hcma/rusty-jack/issues/215)) ([8b23274](https://github.com/the-hcma/rusty-jack/commit/8b232742a0e534c706c7980e5a38855d975c7fbc))
+
 ## [0.11.7](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.11.6...rusty-jack-v0.11.7) (2026-08-29)
 
 
