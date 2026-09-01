@@ -460,7 +460,8 @@ fn format_driver_recommended(status: &HdmiDisplayPortVolumeControlStatus) -> Str
 }
 
 fn format_daemon_log_follow_command(log_path: &str) -> String {
-    format!("tail -F {log_path}")
+    let quoted_path = log_path.replace('\'', "'\"'\"'");
+    format!("tail -F '{quoted_path}'")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1488,7 +1489,7 @@ mod tests {
         assert!(has_row(
             &running,
             "log follow",
-            "tail -F /tmp/rusty-jack.log"
+            "tail -F '/tmp/rusty-jack.log'"
         ));
 
         let loaded_not_running = format_daemon_block(
@@ -1738,5 +1739,13 @@ mod tests {
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"state\":\"not_running\""));
         assert!(!json.contains("\"state\":\"running\""));
+    }
+
+    #[test]
+    fn test_format_daemon_log_follow_command_quotes_paths_with_spaces() {
+        assert_eq!(
+            format_daemon_log_follow_command("/Users/Example User/rusty-jack.log"),
+            "tail -F '/Users/Example User/rusty-jack.log'"
+        );
     }
 }
