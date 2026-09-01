@@ -25,7 +25,8 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         .find(|d| d.is_active)
         .map(|d| d.uid.as_str());
     let volume_percent = active_uid.and_then(|uid| hal.output_volume_percent(uid));
-    let daemon = crate::launchd::daemon_status().ok();
+    let daemon_status_result = crate::launchd::daemon_status();
+    let daemon = daemon_status_result.as_ref().ok().cloned();
     let running_pid = daemon.as_ref().and_then(|status| match status {
         crate::launchd::DaemonStatus::Running { pid, .. } => *pid,
         _ => None,
@@ -59,7 +60,12 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     }
 
     match &snapshot.daemon {
-        None => anyhow::bail!("could not inspect LaunchAgent status"),
+        None => {
+            if let Err(err) = daemon_status_result {
+                anyhow::bail!("could not inspect daemon status: {}", err.detail_message());
+            }
+            anyhow::bail!("could not inspect daemon LaunchAgent status");
+        }
         Some(daemon) => {
             if let Some(message) = daemon_supervisor_error_message(daemon) {
                 anyhow::bail!(message);
@@ -82,11 +88,12 @@ mod tests {
 
     fn assert_run_matches_daemon_health(hal: &MockHal, json: bool, config_path: Option<&Path>) {
         let result = run(hal, json, config_path);
+        let inspect_failed = daemon_status().is_err();
         let supervisor_unhealthy = daemon_status()
             .ok()
             .and_then(|status| daemon_supervisor_error_message(&status))
             .is_some();
-        if supervisor_unhealthy {
+        if inspect_failed || supervisor_unhealthy {
             let err = result.unwrap_err().to_string();
             assert!(
                 err.contains("daemon"),
