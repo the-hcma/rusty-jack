@@ -228,11 +228,17 @@ pub fn print_privacy_permission_status(status: &PrivacyPermissionStatus) {
     println!("Privacy permissions");
     if status.accessibility_required {
         let state = match status.accessibility_trusted {
-            Some(true) => "granted",
+            Some(true) => "granted (CLI only)",
             Some(false) => "missing",
             None => "unchecked",
         };
         println!("  Accessibility: {state}");
+        if status.accessibility_trusted == Some(true) {
+            println!(
+                "  note: keyboard wake needs Accessibility for the LaunchAgent; \
+                 confirm `[privacy] startup` in ~/Library/Logs/rusty-jack.log after upgrade"
+            );
+        }
     }
     if status.local_network_required {
         let state = match status.local_network_ok {
@@ -250,7 +256,11 @@ pub fn print_privacy_permission_status(status: &PrivacyPermissionStatus) {
     }
 }
 
-fn accessibility_is_trusted() -> bool {
+/// Whether the **current process** is Accessibility-trusted (macOS TCC).
+///
+/// Foreground CLI and LaunchAgent daemon may differ; upgrade probes the CLI only.
+#[must_use]
+pub fn accessibility_is_trusted() -> bool {
     #[cfg(target_os = "macos")]
     {
         macos::ax_is_process_trusted()

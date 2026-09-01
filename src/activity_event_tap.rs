@@ -24,6 +24,13 @@ pub fn daemon_activity_monitor(config: &Config) -> Box<dyn ActivityMonitor> {
     #[cfg(target_os = "macos")]
     {
         if config.activity_monitor.eq_ignore_ascii_case("event_tap") {
+            if !crate::privacy_permissions::accessibility_is_trusted() {
+                tracing::warn!(
+                    target: "daemon",
+                    "[activity] Accessibility not granted for daemon; using idle monitor instead of event tap ({EVENT_TAP_PERMISSION_HINT})"
+                );
+                return Box::new(crate::activity::PlatformActivityMonitor);
+            }
             match EventTapActivityMonitor::try_new(config.activity_event_tap_include_mouse_move) {
                 Ok(monitor) => {
                     tracing::info!(
@@ -83,11 +90,21 @@ pub const TAP_RECREATE_COOLDOWN: Duration = Duration::from_secs(600);
 
 const TAP_RECREATE_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 
+/// When `activity_event_tap_include_mouse_move` is `true`, or Accessibility is missing for the
+/// daemon, a silent tap should fall back to platform idle instead of recreate-only.
+#[must_use]
+pub fn event_tap_silent_should_use_platform_idle(
+    include_mouse_move: bool,
+    accessibility_trusted: bool,
+) -> bool {
+    include_mouse_move || !accessibility_trusted
+}
+
 /// Detect a listen-only tap that stopped receiving HID events while the session is active.
 ///
-/// When `activity_event_tap_include_mouse_move` is `true`, this divergence triggers a fallback
-/// to platform idle. When mouse-move is excluded, the same signature can mean either a healthy
-/// tap ignoring pointer jitter or a deaf tap; callers recreate the tap instead of falling back.
+/// When mouse-move is excluded, the same signature can mean either a healthy tap ignoring pointer
+/// jitter or a deaf tap; callers fall back to platform idle when Accessibility is missing, or
+/// recreate the tap when it is granted.
 #[must_use]
 pub fn event_tap_appears_silent(tap_idle: Duration, platform_idle: Duration) -> bool {
     const SILENT_TAP_IDLE_FLOOR: Duration = Duration::from_secs(90);
@@ -336,11 +353,17 @@ impl ActivityMonitor for EventTapActivityMonitor {
 
         if let Ok(platform_idle) = crate::activity::macos_platform_idle_duration() {
             if event_tap_appears_silent(tap_idle, platform_idle) {
-                if self.include_mouse_move {
+                if event_tap_silent_should_use_platform_idle(
+                    self.include_mouse_move,
+                    crate::privacy_permissions::accessibility_is_trusted(),
+                ) {
                     self.use_platform_idle.store(true, Ordering::Release);
-                    self.log_platform_fallback(
-                        "tap stopped receiving events while the session is active (grant Accessibility permission and restart the daemon to restore event-tap mode)",
-                    );
+                    let reason = if self.include_mouse_move {
+                        "tap stopped receiving events while the session is active (grant Accessibility permission and restart the daemon to restore event-tap mode)"
+                    } else {
+                        "tap silent while Accessibility is missing for the daemon (using platform idle until permission is granted and the daemon is restarted)"
+                    };
+                    self.log_platform_fallback(reason);
                     return Ok(platform_idle);
                 }
                 self.request_tap_recreate_if_allowed(tap_idle, platform_idle);
@@ -689,6 +712,14 @@ mod tests {
             K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
         ));
         assert!(!is_event_tap_disabled_notification(K_CG_EVENT_KEY_DOWN));
+    }
+
+    #[test]
+    fn event_tap_silent_should_use_platform_idle_when_mouse_move_or_untrusted() {
+        assert!(event_tap_silent_should_use_platform_idle(true, true));
+        assert!(event_tap_silent_should_use_platform_idle(true, false));
+        assert!(event_tap_silent_should_use_platform_idle(false, false));
+        assert!(!event_tap_silent_should_use_platform_idle(false, true));
     }
 
     #[test]
