@@ -145,9 +145,10 @@ launchctl print "gui/$(id -u)/com.example.rusty-jack"
 
 ```bash
 tail -n 100 "$HOME/Library/Logs/rusty-jack.log"
+tail -F "$HOME/Library/Logs/rusty-jack.log"
 ```
 
-`rusty-jack status` shows the log path in the Daemon block and the latest activity poll in the Activity block (idle time, console user, last idle→active transition, and last wake event when `event_tap` is active). Set `RUSTY_JACK_LOG_LEVEL=debug` before starting the daemon to log every activity poll; transitions log at `info` by default.
+`rusty-jack status` shows the log path and a **`log follow`** row with the recommended live tail command (`tail -F`). It also surfaces daemon health in the Daemon block; when the LaunchAgent is installed but not running (or paused), **`error`** is printed (in red in a terminal) and `status` exits non-zero. A missing LaunchAgent is informational only (exit 0). The Activity block shows the latest activity poll when available (idle time, console user, last idle→active transition, and last wake event when `event_tap` is active). Set `RUSTY_JACK_LOG_LEVEL=debug` before starting the daemon to log every activity poll; transitions log at `info` by default.
 
 If the daemon wakes your ScalarWebAPI speaker when you are away, check for overnight `[activity] idle→active transition` lines without real use. Set `activity_monitor` to `event_tap`, keep `activity_event_tap_include_mouse_move` at `false`, and leave `activity_active_confirm_ms` at `5000` or higher. Grant Accessibility permission to `rusty-jack` when using `event_tap`. **Rusty Jack does not log keystrokes** — the tap only detects that input occurred (timing and coarse labels like `KeyDown`, not typed text). **Restart the daemon** after granting permission (`launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"`). If permission was missing at startup, the daemon falls back to the idle monitor automatically once it detects a silent tap. Bluetooth mice that micro-move can still count as activity when `activity_event_tap_include_mouse_move` is `true`.
 

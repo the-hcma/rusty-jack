@@ -5,7 +5,7 @@ use crate::hdmi_displayport_volume_control::{
     hdmi_displayport_volume_control_status_for_target, HdmiDisplayPortVolumeControlStatus,
 };
 use crate::launchd::{DaemonLogPaths, DaemonStatus, DaemonVersionCheck};
-use crate::list_fmt::{self, format_labeled_section};
+use crate::list_fmt::{self, format_detail_rows, terminal_supports_color};
 use crate::policy::evaluate_policy;
 use crate::scalar_webapi_device::{self, ScalarDiscoveryFeedback, ScalarWebApiMacOutputLink};
 use crate::state::ActivitySnapshot;
@@ -13,6 +13,8 @@ use crate::system_default::DeviceList;
 use crate::version::BinaryVersion;
 use anyhow::Result;
 use chrono::{Local, TimeZone};
+use dialoguer::console::style;
+use serde::ser::Serializer;
 use serde::Serialize;
 use std::io::{self, Write};
 use std::path::Path;
@@ -59,6 +61,106 @@ pub struct StatusDaemonContext {
     pub daemon_logs: Option<DaemonLogPaths>,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum StatusDaemonJson<'a> {
+    Running {
+        label: &'a str,
+        plist_path: &'a str,
+        service: &'a str,
+        pid: u32,
+    },
+    NotRunning {
+        label: &'a str,
+        plist_path: &'a str,
+        service: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        launch_job_state: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_exit_code: Option<&'a str>,
+    },
+    Paused {
+        label: &'a str,
+        plist_path: &'a str,
+        service: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pause_reason: Option<&'a crate::launchd::DaemonPauseReason>,
+    },
+    NotInstalled {
+        plist_path: &'a str,
+    },
+    Unknown {
+        label: &'a str,
+        plist_path: &'a str,
+        message: &'a str,
+    },
+}
+
+fn status_daemon_json(status: &DaemonStatus) -> StatusDaemonJson<'_> {
+    match status {
+        DaemonStatus::Running {
+            label,
+            plist_path,
+            service,
+            pid: Some(pid),
+            ..
+        } => StatusDaemonJson::Running {
+            label,
+            plist_path,
+            service,
+            pid: *pid,
+        },
+        DaemonStatus::Running {
+            label,
+            plist_path,
+            service,
+            launch_job_state,
+            last_exit_code,
+            ..
+        } => StatusDaemonJson::NotRunning {
+            label,
+            plist_path,
+            service,
+            launch_job_state: launch_job_state.as_deref(),
+            last_exit_code: last_exit_code.as_deref(),
+        },
+        DaemonStatus::Paused {
+            label,
+            plist_path,
+            service,
+            pause_reason,
+        } => StatusDaemonJson::Paused {
+            label,
+            plist_path,
+            service,
+            pause_reason: pause_reason.as_ref(),
+        },
+        DaemonStatus::NotInstalled { plist_path } => StatusDaemonJson::NotInstalled { plist_path },
+        DaemonStatus::Unknown {
+            label,
+            plist_path,
+            message,
+        } => StatusDaemonJson::Unknown {
+            label,
+            plist_path,
+            message,
+        },
+    }
+}
+
+fn serialize_status_daemon<S>(
+    daemon: &Option<DaemonStatus>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match daemon {
+        None => serializer.serialize_none(),
+        Some(status) => status_daemon_json(status).serialize(serializer),
+    }
+}
+
 /// Snapshot returned by `rusty-jack status`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StatusSnapshot {
@@ -74,7 +176,10 @@ pub struct StatusSnapshot {
     pub scalar_webapi: Option<ScalarWebApiStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scalar_webapi_mac_output: Option<ScalarWebApiMacOutputLink>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        serialize_with = "serialize_status_daemon",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub daemon: Option<DaemonStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_version: Option<DaemonVersionCheck>,
@@ -354,29 +459,98 @@ fn format_driver_recommended(status: &HdmiDisplayPortVolumeControlStatus) -> Str
         .map_or_else(|| value.into(), |reason| format!("{value} ({reason})"))
 }
 
-fn format_daemon_block(
+fn format_daemon_log_follow_command(log_path: &str) -> String {
+    let quoted_path = log_path.replace('\'', "'\"'\"'");
+    format!("tail -F '{quoted_path}'")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaemonDisplayRow {
+    error: bool,
+    label: String,
+    value: String,
+}
+
+fn daemon_display_rows(
     daemon: &DaemonStatus,
     daemon_version: Option<&DaemonVersionCheck>,
     daemon_logs: Option<&DaemonLogPaths>,
-) -> String {
-    let mut rows: Vec<(&str, String)> = vec![];
+) -> Vec<DaemonDisplayRow> {
+    let mut rows: Vec<DaemonDisplayRow> = Vec::new();
+    let supervisor_error = crate::launchd::daemon_supervisor_error_message(daemon);
     match daemon {
         DaemonStatus::Running {
             label,
             plist_path,
             service,
             pid,
+            launch_job_state,
+            last_exit_code,
         } => {
-            rows.push(("state", "running".into()));
-            rows.push(("installed", "yes".into()));
-            rows.push(("running", "yes".into()));
-            rows.push(("paused", "no".into()));
-            rows.push(("label", label.clone()));
-            rows.push(("service", service.clone()));
+            let process_running = pid.is_some();
+            rows.push(DaemonDisplayRow {
+                error: !process_running,
+                label: "state".into(),
+                value: if process_running {
+                    "running".into()
+                } else {
+                    "not running".into()
+                },
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "installed".into(),
+                value: "yes".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: !process_running,
+                label: "running".into(),
+                value: if process_running { "yes" } else { "no" }.into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "paused".into(),
+                value: "no".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "label".into(),
+                value: label.clone(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "service".into(),
+                value: service.clone(),
+            });
             if let Some(pid) = pid {
-                rows.push(("pid", pid.to_string()));
+                rows.push(DaemonDisplayRow {
+                    error: false,
+                    label: "pid".into(),
+                    value: pid.to_string(),
+                });
             }
-            rows.push(("plist", plist_path.clone()));
+            if let Some(state) = launch_job_state {
+                rows.push(DaemonDisplayRow {
+                    error: !process_running,
+                    label: "launchd state".into(),
+                    value: state.clone(),
+                });
+            }
+            if let Some(code) = last_exit_code
+                .as_ref()
+                .filter(|code| *code != "(never exited)")
+            {
+                rows.push(DaemonDisplayRow {
+                    error: !process_running,
+                    label: "last exit code".into(),
+                    value: code.clone(),
+                });
+            }
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "plist".into(),
+                value: plist_path.clone(),
+            });
         }
         DaemonStatus::Paused {
             label,
@@ -384,42 +558,143 @@ fn format_daemon_block(
             service,
             pause_reason,
         } => {
-            rows.push(("state", "paused".into()));
-            rows.push(("installed", "yes".into()));
-            rows.push(("running", "no".into()));
-            rows.push(("paused", "yes".into()));
+            rows.push(DaemonDisplayRow {
+                error: true,
+                label: "state".into(),
+                value: "paused".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "installed".into(),
+                value: "yes".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: true,
+                label: "running".into(),
+                value: "no".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "paused".into(),
+                value: "yes".into(),
+            });
             if let Some(reason) = pause_reason {
-                rows.push(("reason", reason.label().into()));
-                rows.push(("note", reason.message()));
+                rows.push(DaemonDisplayRow {
+                    error: false,
+                    label: "reason".into(),
+                    value: reason.label().into(),
+                });
+                rows.push(DaemonDisplayRow {
+                    error: false,
+                    label: "note".into(),
+                    value: reason.message(),
+                });
             }
-            rows.push(("label", label.clone()));
-            rows.push(("service", service.clone()));
-            rows.push(("plist", plist_path.clone()));
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "label".into(),
+                value: label.clone(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "service".into(),
+                value: service.clone(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "plist".into(),
+                value: plist_path.clone(),
+            });
         }
         DaemonStatus::NotInstalled { plist_path } => {
-            rows.push(("state", "not installed".into()));
-            rows.push(("installed", "no".into()));
-            rows.push(("running", "no".into()));
-            rows.push(("paused", "no".into()));
-            rows.push(("expected plist", plist_path.clone()));
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "state".into(),
+                value: "not installed".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "installed".into(),
+                value: "no".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "running".into(),
+                value: "no".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "paused".into(),
+                value: "no".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "expected plist".into(),
+                value: plist_path.clone(),
+            });
         }
         DaemonStatus::Unknown {
             label,
             plist_path,
             message,
         } => {
-            rows.push(("state", "unknown".into()));
-            rows.push(("installed", "unknown".into()));
-            rows.push(("running", "unknown".into()));
-            rows.push(("paused", "unknown".into()));
-            rows.push(("label", label.clone()));
-            rows.push(("plist", plist_path.clone()));
-            rows.push(("note", message.clone()));
+            rows.push(DaemonDisplayRow {
+                error: true,
+                label: "state".into(),
+                value: "unknown".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: true,
+                label: "installed".into(),
+                value: "unknown".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: true,
+                label: "running".into(),
+                value: "unknown".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "paused".into(),
+                value: "unknown".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "label".into(),
+                value: label.clone(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "plist".into(),
+                value: plist_path.clone(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: true,
+                label: "note".into(),
+                value: message.clone(),
+            });
         }
     }
 
+    if let Some(message) = supervisor_error {
+        rows.push(DaemonDisplayRow {
+            error: true,
+            label: "error".into(),
+            value: message,
+        });
+    }
+
     if let Some(logs) = daemon_logs {
-        rows.push(("log", logs.file.clone()));
+        rows.push(DaemonDisplayRow {
+            error: false,
+            label: "log".into(),
+            value: logs.file.clone(),
+        });
+        rows.push(DaemonDisplayRow {
+            error: false,
+            label: "log follow".into(),
+            value: format_daemon_log_follow_command(&logs.file),
+        });
     }
 
     if let Some(check) = daemon_version {
@@ -428,16 +703,62 @@ fn format_daemon_block(
             .as_ref()
             .or(check.plist_binary_version.as_ref())
         {
-            rows.push(("daemon binary", version.display()));
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "daemon binary".into(),
+                value: version.display(),
+            });
         }
         if check.stale {
-            rows.push(("daemon stale", "yes".into()));
-            rows.push(("note", daemon_stale_note(check)));
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "daemon stale".into(),
+                value: "yes".into(),
+            });
+            rows.push(DaemonDisplayRow {
+                error: false,
+                label: "note".into(),
+                value: daemon_stale_note(check),
+            });
         }
     }
 
-    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    rows
+}
+
+#[cfg(test)]
+fn format_daemon_block(
+    daemon: &DaemonStatus,
+    daemon_version: Option<&DaemonVersionCheck>,
+    daemon_logs: Option<&DaemonLogPaths>,
+) -> String {
+    let rows = daemon_display_rows(daemon, daemon_version, daemon_logs);
+    let borrowed: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|row| (row.label.as_str(), row.value.as_str()))
+        .collect();
     format_labeled_section("Daemon", "  ", &borrowed)
+}
+
+fn write_daemon_block(out: &mut impl Write, rows: &[DaemonDisplayRow]) -> Result<()> {
+    writeln!(out, "Daemon")?;
+    let use_color = terminal_supports_color();
+    let width = rows.iter().map(|row| row.label.len()).max().unwrap_or(0);
+    for row in rows {
+        let line = format!("  {:width$}: {}", row.label, row.value, width = width);
+        if use_color && row.error {
+            writeln!(out, "{}", style(line).red().bold())?;
+        } else {
+            writeln!(out, "{line}")?;
+        }
+    }
+    Ok(())
+}
+
+fn format_labeled_section(title: &str, indent: &str, rows: &[(&str, &str)]) -> String {
+    let mut lines = vec![title.to_string()];
+    lines.extend(format_detail_rows(indent, rows));
+    lines.join("\n")
 }
 
 fn daemon_stale_note(check: &DaemonVersionCheck) -> String {
@@ -489,7 +810,17 @@ fn daemon_stale_note(check: &DaemonVersionCheck) -> String {
 }
 
 fn format_daemon_logs_block(logs: &DaemonLogPaths) -> String {
-    format_labeled_section("Daemon", "  ", &[("log", logs.file.as_str())])
+    format_labeled_section(
+        "Daemon",
+        "  ",
+        &[
+            ("log", logs.file.as_str()),
+            (
+                "log follow",
+                format_daemon_log_follow_command(&logs.file).as_str(),
+            ),
+        ],
+    )
 }
 
 fn format_activity_block(snapshot: &ActivitySnapshot) -> String {
@@ -654,14 +985,13 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
     }
     if let Some(daemon) = &snapshot.daemon {
         writeln!(out)?;
-        writeln!(
-            out,
-            "{}",
-            format_daemon_block(
+        write_daemon_block(
+            &mut out,
+            &daemon_display_rows(
                 daemon,
                 snapshot.daemon_version.as_ref(),
                 snapshot.daemon_logs.as_ref(),
-            )
+            ),
         )?;
     } else if let Some(logs) = &snapshot.daemon_logs {
         writeln!(out)?;
@@ -1073,6 +1403,8 @@ mod tests {
                 plist_path: "/tmp/test.plist".into(),
                 service: "gui/501/com.example.rusty-jack".into(),
                 pid: Some(123),
+                launch_job_state: None,
+                last_exit_code: None,
             },
             Some(&check),
             None,
@@ -1111,6 +1443,8 @@ mod tests {
                 plist_path: "/tmp/test.plist".into(),
                 service: "gui/503/com.example.rusty-jack".into(),
                 pid: Some(2952),
+                launch_job_state: None,
+                last_exit_code: None,
             },
             Some(&check),
             None,
@@ -1142,6 +1476,8 @@ mod tests {
                 plist_path: "/tmp/test.plist".into(),
                 service: "gui/501/com.example.rusty-jack".into(),
                 pid: Some(123),
+                launch_job_state: None,
+                last_exit_code: None,
             },
             None,
             Some(&logs),
@@ -1150,6 +1486,41 @@ mod tests {
         assert!(has_row(&running, "running", "yes"));
         assert!(has_row(&running, "paused", "no"));
         assert!(has_row(&running, "log", "/tmp/rusty-jack.log"));
+        assert!(has_row(
+            &running,
+            "log follow",
+            "tail -F '/tmp/rusty-jack.log'"
+        ));
+
+        let loaded_not_running = format_daemon_block(
+            &DaemonStatus::Running {
+                label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                plist_path: "/tmp/test.plist".into(),
+                service: "gui/501/com.example.rusty-jack".into(),
+                pid: None,
+                launch_job_state: Some("spawn scheduled".into()),
+                last_exit_code: Some("78: EX_CONFIG".into()),
+            },
+            None,
+            Some(&logs),
+        );
+        assert!(has_row(&loaded_not_running, "state", "not running"));
+        assert!(has_row(&loaded_not_running, "running", "no"));
+        assert!(has_row(
+            &loaded_not_running,
+            "launchd state",
+            "spawn scheduled"
+        ));
+        assert!(has_row(
+            &loaded_not_running,
+            "last exit code",
+            "78: EX_CONFIG"
+        ));
+        assert!(has_row(
+            &loaded_not_running,
+            "error",
+            "daemon not running (launchd state=spawn scheduled) (last exit code=78: EX_CONFIG); run `rusty-jack upgrade --force` or `rusty-jack resume`"
+        ));
 
         let paused = format_daemon_block(
             &DaemonStatus::Paused {
@@ -1170,6 +1541,11 @@ mod tests {
         assert!(has_row(&paused, "paused", "yes"));
         assert!(has_row(&paused, "reason", "picker override"));
         assert!(paused.contains("daemon is paused until `rusty-jack resume`"));
+        assert!(has_row(
+            &paused,
+            "error",
+            "daemon paused; run `rusty-jack resume`"
+        ));
 
         let not_installed = format_daemon_block(
             &DaemonStatus::NotInstalled {
@@ -1316,6 +1692,8 @@ mod tests {
                     plist_path: "/tmp/test.plist".into(),
                     service: "gui/501/com.example.rusty-jack".into(),
                     pid: Some(123),
+                    launch_job_state: None,
+                    last_exit_code: None,
                 }),
                 daemon_version: None,
                 daemon_logs: Some(crate::launchd::DaemonLogPaths {
@@ -1330,5 +1708,44 @@ mod tests {
         assert!(json.contains("\"daemon\""));
         assert!(json.contains("\"daemon_logs\""));
         assert!(json.contains("\"state\":\"running\""));
+    }
+
+    #[test]
+    fn test_print_json_serializes_loaded_without_pid_as_not_running() {
+        let snapshot = build_status(
+            DeviceList {
+                devices: vec![],
+                system_default: None,
+                scalar_webapi_mac_output: None,
+            },
+            None,
+            None,
+            None,
+            StatusDaemonContext {
+                daemon: Some(DaemonStatus::Running {
+                    label: crate::launchd::LAUNCH_AGENT_LABEL.into(),
+                    plist_path: "/tmp/test.plist".into(),
+                    service: "gui/501/com.example.rusty-jack".into(),
+                    pid: None,
+                    launch_job_state: Some("spawn scheduled".into()),
+                    last_exit_code: Some("78: EX_CONFIG".into()),
+                }),
+                daemon_version: None,
+                daemon_logs: None,
+            },
+            None,
+            ScalarDiscoveryFeedback::Silent,
+        );
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("\"state\":\"not_running\""));
+        assert!(!json.contains("\"state\":\"running\""));
+    }
+
+    #[test]
+    fn test_format_daemon_log_follow_command_quotes_paths_with_spaces() {
+        assert_eq!(
+            format_daemon_log_follow_command("/Users/Example User/rusty-jack.log"),
+            "tail -F '/Users/Example User/rusty-jack.log'"
+        );
     }
 }

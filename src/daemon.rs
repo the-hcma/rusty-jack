@@ -803,14 +803,20 @@ pub fn run_forever(
                             "[activity] could not persist activity snapshot: {err}"
                         );
                     }
+                    if observation.became_active {
+                        match load_config(config_path) {
+                            Ok(updated) => config = updated,
+                            Err(err) => {
+                                tracing::warn!(target: "daemon", "[config] could not reload config: {err}")
+                            }
+                        }
+                        crate::privacy_permissions::log_privacy_permissions_on_wake_for_daemon(
+                            &config,
+                            "idle→active wake",
+                        );
+                    }
                     if should_attempt_scalar_wake(&observation) {
                         let network_change = if observation.became_active {
-                            match load_config(config_path) {
-                                Ok(updated) => config = updated,
-                                Err(err) => {
-                                    tracing::warn!(target: "daemon", "[config] could not reload config: {err}")
-                                }
-                            }
                             let network_change = observe_current_network_access(&mut state);
                             if network_change == NetworkAccessChange::Changed {
                                 crate::scalar_webapi_device::reset_wake_debounce();

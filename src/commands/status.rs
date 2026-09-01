@@ -2,6 +2,7 @@
 
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::coreaudio::AudioHal;
+use crate::launchd::daemon_supervisor_error_message;
 use crate::scalar_webapi_device::ScalarDiscoveryFeedback;
 use crate::status::{build_status, print_json, print_text, StatusDaemonContext};
 use anyhow::Result;
@@ -24,7 +25,8 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         .find(|d| d.is_active)
         .map(|d| d.uid.as_str());
     let volume_percent = active_uid.and_then(|uid| hal.output_volume_percent(uid));
-    let daemon = crate::launchd::daemon_status().ok();
+    let daemon_status_result = crate::launchd::daemon_status();
+    let daemon = daemon_status_result.as_ref().ok().cloned();
     let running_pid = daemon.as_ref().and_then(|status| match status {
         crate::launchd::DaemonStatus::Running { pid, .. } => *pid,
         _ => None,
@@ -57,6 +59,20 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         print_text(&snapshot)?;
     }
 
+    match &snapshot.daemon {
+        None => {
+            if let Err(err) = daemon_status_result {
+                anyhow::bail!("could not inspect daemon status: {}", err.detail_message());
+            }
+            anyhow::bail!("could not inspect daemon LaunchAgent status");
+        }
+        Some(daemon) => {
+            if let Some(message) = daemon_supervisor_error_message(daemon) {
+                anyhow::bail!(message);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -64,10 +80,29 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
 mod tests {
     use super::*;
     use crate::coreaudio::mock::MockHal;
+    use crate::launchd::{daemon_status, daemon_supervisor_error_message};
     use crate::output_device::OutputDevice;
     use crate::transport::TransportKind;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn assert_run_matches_daemon_health(hal: &MockHal, json: bool, config_path: Option<&Path>) {
+        let result = run(hal, json, config_path);
+        let inspect_failed = daemon_status().is_err();
+        let supervisor_unhealthy = daemon_status()
+            .ok()
+            .and_then(|status| daemon_supervisor_error_message(&status))
+            .is_some();
+        if inspect_failed || supervisor_unhealthy {
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("daemon"),
+                "expected daemon health error, got: {err}"
+            );
+        } else {
+            result.unwrap();
+        }
+    }
 
     #[test]
     fn test_run_json_includes_volume() {
@@ -82,7 +117,7 @@ mod tests {
         }])
         .with_output_volume(42);
 
-        run(&hal, true, None).unwrap();
+        assert_run_matches_daemon_health(&hal, true, None);
     }
 
     #[test]
@@ -96,7 +131,7 @@ mod tests {
             is_default: true,
             is_active: true,
         }]);
-        run(&hal, true, None).unwrap();
+        assert_run_matches_daemon_health(&hal, true, None);
     }
 
     #[test]
@@ -123,6 +158,6 @@ mod tests {
             is_active: true,
         }]);
 
-        run(&hal, true, Some(file.path())).unwrap();
+        assert_run_matches_daemon_health(&hal, true, Some(file.path()));
     }
 }
