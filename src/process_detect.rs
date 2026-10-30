@@ -7,9 +7,9 @@ use std::ffi::OsString;
 pub fn process_exe_path(pid: u32) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
 
-        let mut system = System::new();
+        let mut system = new_system()?;
         let pid = Pid::from_u32(pid);
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[pid]),
@@ -44,9 +44,9 @@ pub fn process_exe_path(pid: u32) -> Option<String> {
 pub fn process_environ(pid: u32) -> Option<Vec<OsString>> {
     #[cfg(target_os = "macos")]
     {
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
 
-        let mut system = System::new();
+        let mut system = new_system()?;
         let pid = Pid::from_u32(pid);
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[pid]),
@@ -85,7 +85,9 @@ pub fn any_process_with_exact_name(name: &str) -> bool {
 pub fn any_process_cmdline_contains(needle: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        let mut system = sysinfo::System::new();
+        let Some(mut system) = new_system() else {
+            return false;
+        };
         refresh_all_processes(&mut system);
         system
             .processes()
@@ -103,9 +105,9 @@ pub fn any_process_cmdline_contains(needle: &str) -> bool {
 pub fn kill_processes_with_exact_name(name: &str) {
     #[cfg(target_os = "macos")]
     {
-        use sysinfo::System;
-
-        let mut system = System::new();
+        let Some(mut system) = new_system() else {
+            return;
+        };
         for pid in process_pids_with_exact_name_on(&mut system, name) {
             if let Some(process) = system.process(pid) {
                 let _ = process.kill();
@@ -119,8 +121,15 @@ pub fn kill_processes_with_exact_name(name: &str) {
 }
 
 #[cfg(target_os = "macos")]
+fn new_system() -> Option<sysinfo::System> {
+    sysinfo::System::new().ok()
+}
+
+#[cfg(target_os = "macos")]
 fn process_pids_with_exact_name(name: &str) -> Vec<sysinfo::Pid> {
-    let mut system = sysinfo::System::new();
+    let Some(mut system) = new_system() else {
+        return Vec::new();
+    };
     process_pids_with_exact_name_on(&mut system, name)
 }
 
