@@ -671,7 +671,7 @@ Provide `scripts/build-universal` that runs both builds, `lipo`, and optional `c
 3. Upload arch-specific tarballs + universal asset.
 4. Run `cargo test` on host arch (unit tests); tag manual “audio matrix” for hardware.
 
-`ci.yml` on every PR: **`macos-14` runner only** — `fmt`, `clippy`, `test`, and compile both Apple targets (`cargo build --target ...`) to catch cross-compile breakage. No Linux job (project is macOS-only).
+`ci.yml` on every PR: **`macos-15` runner only** — `fmt`, `clippy`, `test`, and compile both Apple targets (`cargo build --target ...`) to catch cross-compile breakage. No Linux job (project is macOS-only).
 
 ### Verify on old hardware
 
