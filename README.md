@@ -110,7 +110,7 @@ For explicit eqMac replacement testing, use `rusty-jack driver swap-in` and `rus
 - **macOS 12 Monterey** or later (Intel and Apple Silicon)
 - **macOS only** — CoreAudio; not built for Linux
 - **Rust 1.85+** (`rust-version` in `Cargo.toml`)
-- CI: **`macos-14`** — rustfmt, clippy, tests, release builds ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+- CI: **`macos-15`** — rustfmt, clippy, tests, release builds ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
 
 ---
 

@@ -80,7 +80,7 @@ jobs:
     name: Test (macOS)
     needs: guard
     if: needs.guard.outputs.skip != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -118,7 +118,7 @@ jobs:
     name: Build release (aarch64-apple-darwin)
     needs: guard
     if: needs.guard.outputs.skip != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -139,7 +139,7 @@ jobs:
     name: Build release (x86_64-apple-darwin)
     needs: guard
     if: needs.guard.outputs.skip != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7.0.1
         with:
