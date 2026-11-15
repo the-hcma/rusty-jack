@@ -664,14 +664,14 @@ Provide `scripts/build-universal` that runs both builds, `lipo`, and optional `c
 
 ### CI (GitHub Actions)
 
-`release.yml` matrix on `macos-13` or `macos-14` runner:
+`release.yml` matrix on `macos-15` runner:
 
 1. Install Rust stable + both targets.
 2. Build `aarch64-apple-darwin` and `x86_64-apple-darwin` release binaries.
 3. Upload arch-specific tarballs + universal asset.
 4. Run `cargo test` on host arch (unit tests); tag manual “audio matrix” for hardware.
 
-`ci.yml` on every PR: **`macos-14` runner only** — `fmt`, `clippy`, `test`, and compile both Apple targets (`cargo build --target ...`) to catch cross-compile breakage. No Linux job (project is macOS-only).
+`ci.yml` on every PR: **`macos-15` runner only** — `fmt`, `clippy`, `test`, and compile both Apple targets (`cargo build --target ...`) to catch cross-compile breakage. No Linux job (project is macOS-only).
 
 ### Verify on old hardware
 
@@ -1089,7 +1089,7 @@ fn test_policy_prefers_connected_hdmi_over_builtin() {
 - run: cargo llvm-cov --all-features --lcov --output-path lcov.info  # optional
 ```
 
-Run on **`macos-13` or `macos-14` only** — rusty-jack targets macOS CoreAudio and does not support Linux CI runners.
+Run on **`macos-15` only** — rusty-jack targets macOS CoreAudio and does not support Linux CI runners.
 
 ### 15.5 Manual / hardware matrix (not unit tests)
 
