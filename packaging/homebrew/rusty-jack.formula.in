@@ -45,8 +45,8 @@ class RustyJack < Formula
       Check routing, daemon state, activity polling, and log path:
         rusty-jack status
 
-      If something is not working (missing Accessibility / Local Network
-      permission, stale daemon), diagnose it with:
+      If keyboard/mouse wake or speaker discovery is not working, check the
+      macOS privacy permissions (Accessibility, Local Network) with:
         rusty-jack doctor
 
       `status` flags a stale daemon when the running LaunchAgent binary does not

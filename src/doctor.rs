@@ -155,12 +155,19 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
     let mut launch_denied = false;
     for line in log.lines() {
         let logged_at = || line.split(" | ").next().unwrap_or("").trim().to_string();
-        if line.contains("[activity] event tap unavailable") {
+        // Startup failure, or a runtime fallback (silent stall, failed recreate, thread exit):
+        // in every case the daemon is on the idle monitor.
+        if line.contains("[activity] event tap unavailable")
+            || line.contains("[activity] event tap using idle monitor fallback")
+            || line.contains("[activity] event tap thread exited")
+        {
             tap_unavailable = Some(logged_at());
             launch_denied = false;
             continue;
         }
-        if line.contains("[activity] event tap active") {
+        if line.contains("[activity] event tap active")
+            || line.contains("[activity] event tap recreated")
+        {
             tap_unavailable = None;
             launch_denied = false;
             continue;
@@ -361,10 +368,10 @@ pub fn privacy_checks(
                 label: "Accessibility (daemon)",
                 state: CheckState::Warn,
                 detail: format!(
-                    "granted, but the event tap failed to start ({logged_at}); the daemon is on the idle monitor"
+                    "granted, but the event tap is not running ({logged_at}); the daemon is on the idle monitor"
                 ),
                 fix: Some(
-                    "see `[activity] event tap unavailable` in the daemon log for the reason, then: rusty-jack upgrade --force"
+                    "see the `[activity] event tap …` lines in the daemon log for the reason, then: rusty-jack upgrade --force"
                         .into(),
                 ),
             },
@@ -844,6 +851,34 @@ mod tests {
             .map(|c| c["state"].as_str().unwrap())
             .collect();
         assert_eq!(states, ["ok", "warn", "fail", "skipped", "unchecked"]);
+    }
+
+    #[test]
+    fn test_runtime_idle_monitor_fallback_warns_until_tap_recreated() {
+        let base = "20261122-10:54:19.051 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted";
+        for fallback in [
+            "[activity] event tap using idle monitor fallback (silent stall; listen-only)",
+            "[activity] event tap using idle monitor fallback after recreate failure (listen-only)",
+            "[activity] event tap thread exited: boom",
+        ] {
+            let log =
+                format!("{base}\n20261122-12:00:00.000 | WARN     | daemon       | {fallback}");
+            assert!(
+                matches!(
+                    parse_daemon_accessibility(&log),
+                    DaemonAccessibility::TapUnavailable { .. }
+                ),
+                "{fallback}"
+            );
+        }
+        let recovered = format!(
+            "{base}\n20261122-12:00:00.000 | WARN     | daemon       | [activity] event tap using idle monitor fallback (silent stall)\n\
+20261122-12:05:00.000 | INFO     | daemon       | [activity] event tap recreated after silent stall (listen-only)"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&recovered),
+            DaemonAccessibility::Granted { .. }
+        ));
     }
 
     #[test]
