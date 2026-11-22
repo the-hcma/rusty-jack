@@ -188,6 +188,9 @@ pub struct StatusSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivitySnapshot>,
     pub binary_version: BinaryVersion,
+    /// Privacy-permission checks (filled in by `rusty-jack status`; see `doctor`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<crate::doctor::PrivacyReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -264,6 +267,7 @@ pub fn build_status(
         daemon_logs: daemon_context.daemon_logs,
         activity,
         binary_version: BinaryVersion::current(),
+        privacy: None,
     }
 }
 
@@ -1005,6 +1009,10 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
         writeln!(out)?;
         writeln!(out, "{}", format_activity_block(activity))?;
     }
+    if let Some(privacy) = &snapshot.privacy {
+        writeln!(out)?;
+        writeln!(out, "{}", format_privacy_block(privacy))?;
+    }
     writeln!(out)?;
     writeln!(
         out,
@@ -1012,6 +1020,14 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
         format_binary_version_block(&snapshot.binary_version)
     )?;
     Ok(())
+}
+
+fn format_privacy_block(privacy: &crate::doctor::PrivacyReport) -> String {
+    let mut block = privacy.format("Privacy");
+    if privacy.has_failures() || privacy.has_warnings() {
+        block.push_str("\n  run `rusty-jack doctor` for details");
+    }
+    block
 }
 
 fn format_binary_version_block(version: &BinaryVersion) -> String {
@@ -1653,6 +1669,54 @@ mod tests {
         assert!(block.contains("eqMac backup"));
         assert!(block.contains("driver-backups/eqMac.driver"));
         assert!(block.contains("rusty-jack driver swap-out"));
+    }
+
+    fn sample_privacy_report() -> crate::doctor::PrivacyReport {
+        use crate::doctor::{CheckState, DoctorCheck, PrivacyReport};
+        PrivacyReport {
+            checks: vec![DoctorCheck {
+                id: "accessibility_daemon",
+                label: "Accessibility (daemon)",
+                state: CheckState::Fail,
+                detail: "missing".into(),
+                fix: Some("grant it".into()),
+            }],
+        }
+    }
+
+    #[test]
+    fn test_status_json_includes_privacy_when_set() {
+        let mut snapshot = build_status(
+            DeviceList {
+                devices: vec![hdmi_device(true)],
+                system_default: None,
+                scalar_webapi_mac_output: None,
+            },
+            None,
+            None,
+            None,
+            empty_daemon_context(),
+            None,
+            ScalarDiscoveryFeedback::Silent,
+        );
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert!(value.get("privacy").is_none());
+
+        snapshot.privacy = Some(sample_privacy_report());
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["privacy"]["checks"][0]["id"], "accessibility_daemon");
+        assert_eq!(value["privacy"]["checks"][0]["state"], "fail");
+    }
+
+    #[test]
+    fn test_format_privacy_block_points_to_doctor_on_problems() {
+        let block = format_privacy_block(&sample_privacy_report());
+        assert!(block.starts_with("Privacy\n"));
+        assert!(block.contains("[FAIL] Accessibility (daemon): missing"));
+        assert!(block.contains("rusty-jack doctor"));
+
+        let ok = crate::doctor::PrivacyReport { checks: vec![] };
+        assert!(!format_privacy_block(&ok).contains("rusty-jack doctor"));
     }
 
     #[test]

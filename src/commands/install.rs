@@ -1,14 +1,13 @@
 //! `rusty-jack install` — install the per-user launchd LaunchAgent.
 
 use crate::coreaudio::AudioHal;
+use crate::doctor::{print_report, privacy_report_after_restart, LogCursor, POST_RESTART_WAIT};
 use crate::hdmi_displayport_volume_control::hdmi_displayport_volume_control_status;
 use crate::launchd::{install_daemon, print_install_result};
 use crate::native_driver::{
     install_for_connected_hdmi_displayport, print_install_result as print_driver_install_result,
 };
-use crate::privacy_permissions::{
-    ensure_privacy_permissions_for_setup, print_privacy_permission_status,
-};
+use crate::privacy_permissions::ensure_privacy_permissions_for_setup;
 use crate::setup::{ensure_default_config, print_config_setup_result, terminal_is_interactive};
 use crate::RustyJackError;
 use anyhow::Result;
@@ -59,7 +58,9 @@ pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
         crate::config::default_config_path().as_deref(),
     )
     .map_err(anyhow::Error::new)?;
+    let log_cursor = LogCursor::capture_default();
     let result = install_daemon().map_err(anyhow::Error::new)?;
+    let privacy_report = privacy_report_after_restart(&privacy, &log_cursor, POST_RESTART_WAIT);
 
     if json {
         let value = serde_json::to_string_pretty(&serde_json::json!({
@@ -69,6 +70,7 @@ pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
             "hdmi_displayport_volume_control": hdmi_displayport_volume_control,
             "native_driver": native_driver,
             "privacy_permissions": privacy,
+            "privacy_report": privacy_report,
         }))?;
         println!("{value}");
     } else {
@@ -86,7 +88,9 @@ pub fn run(hal: &dyn AudioHal, json: bool) -> Result<()> {
             print_driver_install_result(native_driver);
         }
         print_install_result(&result);
-        print_privacy_permission_status(&privacy);
+        if let Some(report) = &privacy_report {
+            print_report(report);
+        }
     }
 
     Ok(())

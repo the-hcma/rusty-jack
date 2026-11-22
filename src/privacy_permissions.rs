@@ -117,6 +117,13 @@ pub fn check_privacy_permissions(
     check_privacy_permissions_with(config, probe_local_network_permission)
 }
 
+/// Probe required permissions without prompting and without the SSDP Local Network probe.
+pub fn check_privacy_permissions_no_probe(
+    config: &Config,
+) -> Result<PrivacyPermissionStatus, RustyJackError> {
+    check_privacy_permissions_with(config, || None)
+}
+
 /// Probe required permissions for the daemon log (SSDP probe logs under `daemon`).
 pub fn check_privacy_permissions_for_daemon(
     config: &Config,
@@ -217,43 +224,6 @@ fn check_privacy_permissions_with(
         local_network_required,
         notes,
     })
-}
-
-/// Print a short human summary after install/upgrade.
-pub fn print_privacy_permission_status(status: &PrivacyPermissionStatus) {
-    if !(status.accessibility_required || status.local_network_required) {
-        return;
-    }
-    println!();
-    println!("Privacy permissions");
-    if status.accessibility_required {
-        let state = match status.accessibility_trusted {
-            Some(true) => "granted (CLI only)",
-            Some(false) => "missing",
-            None => "unchecked",
-        };
-        println!("  Accessibility: {state}");
-        if status.accessibility_trusted == Some(true) {
-            println!(
-                "  note: keyboard wake needs Accessibility for the LaunchAgent; \
-                 confirm `[privacy] startup` in ~/Library/Logs/rusty-jack.log after upgrade"
-            );
-        }
-    }
-    if status.local_network_required {
-        let state = match status.local_network_ok {
-            Some(true) => "ok (SSDP probe heard a device)",
-            // Probe never emits Some(false); empty/error stays inconclusive.
-            _ => "unchecked / inconclusive",
-        };
-        println!("  Local Network: {state}");
-    }
-    for note in &status.notes {
-        println!("  note: {note}");
-    }
-    if status.force_daemon_restart {
-        println!("  daemon: force-restarted so permission changes apply");
-    }
 }
 
 /// Whether the **current process** is Accessibility-trusted (macOS TCC).
@@ -439,8 +409,8 @@ enum PrivacyPane {
 fn open_privacy_pane(pane: PrivacyPane) {
     let urls: &[&str] = match pane {
         PrivacyPane::Accessibility => &[
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
         ],
         PrivacyPane::LocalNetwork => &[
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork",

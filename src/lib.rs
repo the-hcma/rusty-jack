@@ -9,6 +9,7 @@ pub mod config;
 pub mod coreaudio;
 pub mod daemon;
 pub mod device_select;
+pub mod doctor;
 pub mod eqmac;
 pub mod error;
 pub mod hal_plugin;
@@ -52,6 +53,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             let hal = coreaudio::platform_hal()?;
             commands::apply::run(hal.as_ref(), args.json, cli.config.as_deref())?;
         }
+        cli::Commands::Completions(args) => commands::completions::run(args.shell),
         cli::Commands::Config(args) => match args.command {
             cli::ConfigCommand::Init(args) => {
                 let hal = coreaudio::platform_hal()?;
@@ -66,6 +68,7 @@ pub fn run_cli(cli: cli::Cli) -> anyhow::Result<()> {
             commands::daemon::run(hal.as_ref(), cli.config.as_deref())?;
         }
         cli::Commands::Disable(args) => commands::disable::run(args.json)?,
+        cli::Commands::Doctor(args) => commands::doctor::run(args.json, cli.config.as_deref())?,
         cli::Commands::Driver(args) => match args.command {
             cli::DriverCommand::SwapIn(args) => commands::driver::swap_in(args.json)?,
             cli::DriverCommand::SwapOut(args) => commands::driver::swap_out(args.json)?,

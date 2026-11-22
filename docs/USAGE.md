@@ -118,7 +118,7 @@ launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"
 
 If permission is missing at startup, the daemon **starts with the `idle` monitor** instead of an event tap (see `[activity] Accessibility not granted for daemon` in the log). macOS may also disable a tap immediately or leave it silent if permission is revoked later. Rusty Jack **falls back to the `idle` monitor** when the tap stops receiving events while the session is active and Accessibility is missing for the daemon, or when `activity_event_tap_include_mouse_move` is `true`. With the default `activity_event_tap_include_mouse_move: false` and Accessibility granted, a silent tap is **recreated** automatically (rate-limited) instead of falling back, so Bluetooth pointer jitter does not trigger speaker wakes. Look for `[activity] event tap using idle monitor fallback`, `[activity] event tap disabled by macOS`, `[activity] event tap appears silent`, or `event tap recreated after silent stall` in `~/Library/Logs/rusty-jack.log`. The daemon logs `[privacy]` lines on **startup** (full Accessibility and Local Network probes) and on each **idle→active wake** (Accessibility only, so wake is not delayed by SSDP). Interactive ScalarWebAPI install with `keyboard`/`mouse` wake triggers sets `event_tap` automatically.
 
-`rusty-jack status` Activity block shows idle time, state, and the last idle→active transition. When the tap is working, `idle` stays low while you use the Mac; if `idle` climbs for hours while you are active, grant Accessibility permission to the **daemon binary** (not only the CLI you used for `upgrade`) and restart the daemon. `upgrade` reports Accessibility for the foreground CLI only — confirm `[privacy] startup` in the daemon log.
+`rusty-jack status` Activity block shows idle time, state, and the last idle→active transition. When the tap is working, `idle` stays low while you use the Mac; if `idle` climbs for hours while you are active, grant Accessibility permission to the **daemon binary** (not only the CLI you used for `upgrade`) and restart the daemon. After restarting the daemon, `upgrade` and `install` wait up to 8 seconds for the daemon's own startup verdict and print it explicitly: `GRANTED` (event tap in use) or `NOT GRANTED` with the binary to enable, an `open "x-apple.systempreferences:…"` command, and `rusty-jack upgrade --force` to apply it. If the daemon has not reported in time (still starting, or paused), they say so and point to `rusty-jack doctor`.
 
 ---
 
@@ -395,9 +395,45 @@ The **`log follow`** row shows the recommended live tail command: `tail -F <log-
 
 When the daemon has run at least one activity poll, an **Activity** block shows the latest idle sample, console and daemon users, configured keyboard/mouse wake triggers, and the last idle→active transition (proxy for recent keyboard/mouse activity). Activity polls log at `debug`; transitions log at `info`.
 
+A **Privacy** block (also under `privacy` in `--json`) checks the macOS permissions the current config needs: Accessibility for the CLI and for the daemon (from its log). It does no SSDP scan, so Local Network shows `n/a`. Run `rusty-jack doctor` for fix steps and the Local Network probe.
+
 Config is optional for `status`; without it, policy reports “not configured”.
 
 When ScalarWebAPI is configured, `status` reads power state from cached/configured endpoint details only (no SSDP LAN scan). Run `rusty-jack list --discover` to refresh discovery cache.
+
+---
+
+## `doctor`
+
+Diagnose why Rusty Jack might not be working by verifying the macOS privacy permissions the current config depends on.
+
+```bash
+rusty-jack doctor
+rusty-jack doctor --json
+```
+
+Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `n/a` (not probed; `status` only). In `--json` the `state` values are `ok`, `warn`, `fail`, `skipped`, and `unchecked`. `warn` and `FAIL` checks list fix steps; the ones that involve granting a permission include an `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
+
+- **Accessibility (this CLI)** — live probe; relevant when `activity_monitor` is `event_tap`. Informational only (`warn`, never `FAIL`): from a terminal macOS checks the terminal app's grant, not the binary's.
+- **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
+- **Local Network (this CLI)** — short SSDP probe from this CLI when ScalarWebAPI is enabled; from a terminal macOS evaluates the terminal app's grant, so an `ok` says nothing about the daemon's own grant. Never `FAIL`: an empty result cannot distinguish a denial from an offline speaker, so it is a `warn`.
+
+`doctor` locates the daemon log from `RUSTY_JACK_LOG_FILE` in the installed LaunchAgent plist, else the config's `logging.file` (and this CLI's `RUSTY_JACK_LOG_FILE`), so use the same `--config` as the daemon. It reads the last 512 KB of that file. Whether the daemon logs its "granted" line depends on its `RUST_LOG`, which `doctor` reads from the installed LaunchAgent plist (the installed plist pins `RUST_LOG=info`). If `RUST_LOG` is missing, a directive string, or `warn` or higher, a logged "missing" is only a `warn` because it may be stale; `rusty-jack upgrade --force` rewrites the plist with `RUST_LOG=info`. The daemon logs its verdict at startup and on each wake, so on a long-running daemon an old verdict may be older than the recent tail or have rotated out, which shows as a `warn`. If only a wake-time "granted" line remains, with no startup record or event-tap line to show which monitor the daemon chose, that is also a `warn`. If Accessibility is granted but the event tap fails to start, the daemon check is a `warn` too.
+
+Exits non-zero when a required permission is missing (any `FAIL`, in practice the daemon's Accessibility). `status` shows the same checks in its **Privacy** block but does not run the SSDP probe, so Local Network shows `n/a` there; use `doctor` to probe it.
+
+## `completions`
+
+Print a shell completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`).
+
+```bash
+# bash (current session)
+source <(rusty-jack completions bash)
+# bash (persistent, Homebrew bash-completion)
+rusty-jack completions bash > "$(brew --prefix)/etc/bash_completion.d/rusty-jack"
+```
+
+Homebrew installs generate these automatically. Re-run after upgrading to pick up new subcommands.
 
 ---
 

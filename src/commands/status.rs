@@ -39,7 +39,7 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     } else {
         ScalarDiscoveryFeedback::Interactive
     };
-    let snapshot = build_status(
+    let mut snapshot = build_status(
         list,
         config.as_ref(),
         resolved.as_deref(),
@@ -52,6 +52,8 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         activity,
         scalar_probing_feedback,
     );
+
+    snapshot.privacy = crate::doctor::build_privacy_report(config.as_ref(), false).ok();
 
     if json {
         print_json(&snapshot)?;

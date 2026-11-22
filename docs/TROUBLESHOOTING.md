@@ -175,12 +175,14 @@ If the daemon wakes your ScalarWebAPI speaker when you are away, check for overn
 
 ### Event tap permission and silent tap fallback
 
+Run `rusty-jack doctor` first: it checks Accessibility for both the CLI and the daemon and prints the fix steps.
+
 When `activity_monitor` is `event_tap` (set automatically when ScalarWebAPI wake triggers include `keyboard` or `mouse`):
 
 **Privacy:** Rusty Jack is **not a keylogger**. The listen-only event tap does **not** record, log, or store what you type. It does not read key codes, characters, or passwords. macOS may phrase the permission as “receive keystrokes from any application”; Rusty Jack only uses it to detect that keyboard or pointer activity happened (for example “a key was pressed” or “the mouse moved”), so it can wake your speaker when you return to the Mac.
 
 1. Grant **Accessibility** permission to `rusty-jack` in System Settings → Privacy & Security.
-2. **Restart the daemon** after granting permission: `launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"`, or run interactive `rusty-jack upgrade` / `upgrade --force` (install/upgrade re-check Accessibility when `activity_monitor` is `event_tap` and force-restart so the grant applies). `upgrade` reports Accessibility for the **CLI process only** — confirm `[privacy] startup: Accessibility permission looks granted` in `~/Library/Logs/rusty-jack.log`. Permission granted while the daemon is already running does not revive a disabled tap.
+2. **Restart the daemon** after granting permission: `launchctl kickstart -k "gui/$(id -u)/com.example.rusty-jack"`, or run interactive `rusty-jack upgrade` / `upgrade --force` (install/upgrade re-check Accessibility when `activity_monitor` is `event_tap` and force-restart so the grant applies). After the restart, `upgrade` / `install` wait for the daemon's own verdict and print `GRANTED` or `NOT GRANTED` with the fix; `rusty-jack doctor` shows the same at any time (the daemon logs `[privacy] startup: Accessibility permission looks granted` in `~/Library/Logs/rusty-jack.log`). Permission granted while the daemon is already running does not revive a disabled tap.
 3. Run `rusty-jack status` and check the Activity block. While you use the Mac, `idle` should stay low (seconds, not hours). `state: idle` with a very large `idle` value while you are at the keyboard means the tap is silent — grant permission and restart, or set `"activity_monitor": "idle"` in config.
 4. Look for `[activity] Accessibility not granted for daemon`, `[activity] event tap disabled by macOS`, `[activity] event tap using idle monitor fallback`, or `[activity] event tap appears silent` / `event tap recreated after silent stall` in `~/Library/Logs/rusty-jack.log`. When Accessibility is missing for the daemon, Rusty Jack falls back to platform idle even with `activity_event_tap_include_mouse_move: false`. With Accessibility granted and the default `include_mouse_move: false`, a silent tap is **recreated** automatically (about every 10 minutes at most) instead of falling back to platform idle, so Bluetooth pointer jitter does not cause speaker wakes.
 

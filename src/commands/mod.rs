@@ -1,9 +1,11 @@
 //! CLI command implementations.
 
 pub mod apply;
+pub mod completions;
 pub mod config;
 pub mod daemon;
 pub mod disable;
+pub mod doctor;
 pub mod driver;
 pub mod install;
 pub mod list;
