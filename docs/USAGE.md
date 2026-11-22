@@ -395,9 +395,43 @@ The **`log follow`** row shows the recommended live tail command: `tail -F <log-
 
 When the daemon has run at least one activity poll, an **Activity** block shows the latest idle sample, console and daemon users, configured keyboard/mouse wake triggers, and the last idle→active transition (proxy for recent keyboard/mouse activity). Activity polls log at `debug`; transitions log at `info`.
 
+A **Privacy** block (also under `privacy` in `--json`) checks the macOS permissions the current config needs: Accessibility for the CLI and for the daemon, and Local Network when ScalarWebAPI is enabled. Run `rusty-jack doctor` for fix steps.
+
 Config is optional for `status`; without it, policy reports “not configured”.
 
 When ScalarWebAPI is configured, `status` reads power state from cached/configured endpoint details only (no SSDP LAN scan). Run `rusty-jack list --discover` to refresh discovery cache.
+
+---
+
+## `doctor`
+
+Diagnose why Rusty Jack might not be working by verifying the macOS privacy permissions the current config depends on.
+
+```bash
+rusty-jack doctor
+rusty-jack doctor --json
+```
+
+Each check reports `ok`, `warn`, `FAIL`, or `skip` (not needed by the config), with fix steps and a `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
+
+- **Accessibility (this CLI)** — live probe; required when `activity_monitor` is `event_tap`.
+- **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
+- **Local Network** — short SSDP probe when ScalarWebAPI is enabled. Never `FAIL`: an empty result cannot distinguish a denial from an offline speaker, so it is a `warn`.
+
+Exits non-zero when a required permission is missing (any `FAIL`). `status` shows the same checks in its **Privacy** block.
+
+## `completions`
+
+Print a shell completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`).
+
+```bash
+# bash (current session)
+source <(rusty-jack completions bash)
+# bash (persistent, Homebrew bash-completion)
+rusty-jack completions bash > "$(brew --prefix)/etc/bash_completion.d/rusty-jack"
+```
+
+Homebrew installs generate these automatically. Re-run after upgrading to pick up new subcommands.
 
 ---
 

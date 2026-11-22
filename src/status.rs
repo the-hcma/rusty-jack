@@ -188,6 +188,9 @@ pub struct StatusSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivitySnapshot>,
     pub binary_version: BinaryVersion,
+    /// Privacy-permission checks (filled in by `rusty-jack status`; see `doctor`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<crate::doctor::PrivacyReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -264,6 +267,7 @@ pub fn build_status(
         daemon_logs: daemon_context.daemon_logs,
         activity,
         binary_version: BinaryVersion::current(),
+        privacy: None,
     }
 }
 
@@ -1004,6 +1008,13 @@ pub fn print_text(snapshot: &StatusSnapshot) -> Result<()> {
     if let Some(activity) = &snapshot.activity {
         writeln!(out)?;
         writeln!(out, "{}", format_activity_block(activity))?;
+    }
+    if let Some(privacy) = &snapshot.privacy {
+        writeln!(out)?;
+        writeln!(out, "{}", privacy.format("Privacy"))?;
+        if privacy.has_failures() || privacy.has_warnings() {
+            writeln!(out, "  run `rusty-jack doctor` for details")?;
+        }
     }
     writeln!(out)?;
     writeln!(

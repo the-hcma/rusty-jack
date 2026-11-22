@@ -25,12 +25,16 @@ pub struct Cli {
 pub enum Commands {
     /// Apply config policy once
     Apply(ApplyArgs),
+    /// Generate shell completions (bash, zsh, fish, ...)
+    Completions(CompletionsArgs),
     /// Manage configuration (init, validate)
     Config(ConfigArgs),
     /// Run the background supervisor loop (used by launchd)
     Daemon,
     /// Uninstall the launchd LaunchAgent (stop, disable, remove plist)
     Disable(DisableArgs),
+    /// Diagnose why Rusty Jack may not be working (macOS privacy permissions)
+    Doctor(DoctorArgs),
     /// Test native driver by swapping eqMac's HAL driver out and back in
     Driver(DriverArgs),
     /// Install and start the launchd LaunchAgent for this user
@@ -52,6 +56,20 @@ pub enum Commands {
     Uninstall(UninstallArgs),
     /// Refresh the LaunchAgent to the current binary when needed
     Upgrade(UpgradeArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
+}
+
+#[derive(Parser, Debug)]
+pub struct DoctorArgs {
+    /// Emit JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -533,6 +551,25 @@ mod tests {
             Commands::Upgrade(args) => assert!(args.force),
             _ => panic!("expected upgrade"),
         }
+    }
+
+    #[test]
+    fn test_doctor_json_flag() {
+        let cli = Cli::try_parse_from(["rusty-jack", "doctor", "--json"]).unwrap();
+        match cli.command {
+            Commands::Doctor(args) => assert!(args.json),
+            _ => panic!("expected doctor"),
+        }
+    }
+
+    #[test]
+    fn test_completions_shell_arg() {
+        let cli = Cli::try_parse_from(["rusty-jack", "completions", "bash"]).unwrap();
+        match cli.command {
+            Commands::Completions(args) => assert_eq!(args.shell, clap_complete::Shell::Bash),
+            _ => panic!("expected completions"),
+        }
+        assert!(Cli::try_parse_from(["rusty-jack", "completions", "nope"]).is_err());
     }
 
     #[test]

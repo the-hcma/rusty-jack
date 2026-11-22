@@ -175,6 +175,8 @@ If the daemon wakes your ScalarWebAPI speaker when you are away, check for overn
 
 ### Event tap permission and silent tap fallback
 
+Run `rusty-jack doctor` first: it checks Accessibility for both the CLI and the daemon and prints the fix steps.
+
 When `activity_monitor` is `event_tap` (set automatically when ScalarWebAPI wake triggers include `keyboard` or `mouse`):
 
 **Privacy:** Rusty Jack is **not a keylogger**. The listen-only event tap does **not** record, log, or store what you type. It does not read key codes, characters, or passwords. macOS may phrase the permission as “receive keystrokes from any application”; Rusty Jack only uses it to detect that keyboard or pointer activity happened (for example “a key was pressed” or “the mouse moved”), so it can wake your speaker when you return to the Mac.
