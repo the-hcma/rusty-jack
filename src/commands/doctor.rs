@@ -1,6 +1,6 @@
 //! `rusty-jack doctor` — verify macOS privacy permissions and explain what is missing.
 
-use crate::config::{load_config_optional, resolve_config_path};
+use crate::config::{load_config_optional_readonly, resolve_config_path};
 use crate::doctor::build_privacy_report;
 use anyhow::Result;
 use std::path::Path;
@@ -9,7 +9,7 @@ use std::path::Path;
 pub fn run(json: bool, config_path: Option<&Path>) -> Result<()> {
     let resolved = resolve_config_path(config_path);
     let config = match resolved.as_deref() {
-        Some(path) => load_config_optional(path, config_path.is_some())?,
+        Some(path) => load_config_optional_readonly(path, config_path.is_some())?,
         None => None,
     };
     let report = build_privacy_report(config.as_ref(), true)?;

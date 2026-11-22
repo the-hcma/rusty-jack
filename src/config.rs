@@ -405,6 +405,28 @@ pub fn load_config_optional(path: &Path, explicit: bool) -> Result<Option<Config
     }
 }
 
+/// Like [`load_config_optional`], but never rewrites the file (diagnostics must not touch
+/// hand-edited configs, symlinks, or read-only directories).
+pub fn load_config_optional_readonly(
+    path: &Path,
+    explicit: bool,
+) -> Result<Option<Config>, RustyJackError> {
+    match load_config_readonly(path) {
+        Ok(config) => Ok(Some(config)),
+        Err(RustyJackError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            if explicit {
+                Err(RustyJackError::Config(format!(
+                    "config file not found: {}",
+                    path.display()
+                )))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
 fn validate_config(config: &Config) -> Result<(), RustyJackError> {
     if config.version != 1 {
         return Err(RustyJackError::Config(format!(

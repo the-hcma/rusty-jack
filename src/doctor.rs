@@ -164,11 +164,25 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
     let mut tap_running = false;
     for line in log.lines() {
         let logged_at = || line.split(" | ").next().unwrap_or("").trim().to_string();
+        // Each daemon process picks its monitor at startup (`[daemon] started` precedes that
+        // launch's `[activity]`/`[privacy]` lines), so evidence from an earlier process says
+        // nothing about this one: start over.
+        if line.contains("[daemon] started version=") {
+            latest = None;
+            latest_startup = None;
+            tap_unavailable = None;
+            tap_running = false;
+            launch_denied = false;
+            continue;
+        }
         // Startup failure, or a runtime fallback (silent stall, failed recreate, thread exit):
         // in every case the daemon is on the idle monitor.
         if line.contains("[activity] event tap unavailable")
             || line.contains("[activity] event tap using idle monitor fallback")
             || line.contains("[activity] event tap thread exited")
+            // macOS disabled the tap and the daemon switched to platform idle (the other
+            // "disabled by macOS; requesting tap recreate" variant keeps the tap alive).
+            || line.contains("[activity] event tap disabled by macOS (")
         {
             tap_unavailable = Some(logged_at());
             tap_running = false;
@@ -519,6 +533,12 @@ pub fn daemon_log_path(config: Option<&Config>) -> Option<PathBuf> {
     )
 }
 
+/// Log path of a daemon started from a freshly written LaunchAgent (no env override).
+fn replacement_daemon_log_path(config: Option<&Config>) -> PathBuf {
+    let file = config.map_or_else(|| LoggingConfig::default().file, |c| c.logging.file.clone());
+    crate::logging::expand_tilde(&file)
+}
+
 fn resolve_daemon_log_path(
     plist_log_file: Option<&str>,
     config: Option<&Config>,
@@ -584,12 +604,16 @@ pub const POST_RESTART_WAIT: std::time::Duration = std::time::Duration::from_sec
 const POST_RESTART_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 impl LogCursor {
-    /// Record the current end of the log the default-config daemon writes to.
+    /// Record the current end of the log the *restarted* daemon will write to.
+    ///
+    /// `install`/`upgrade` replace the LaunchAgent plist, and the replacement never sets
+    /// `RUSTY_JACK_LOG_FILE`, so neither the outgoing plist's override nor this CLI's own
+    /// environment applies: the new daemon logs to the default config's `logging.file`.
     #[must_use]
     pub fn capture_default() -> Self {
         let config = crate::config::default_config_path()
             .and_then(|p| crate::config::load_config_readonly(&p).ok());
-        Self::capture(daemon_log_path(config.as_ref()))
+        Self::capture(Some(replacement_daemon_log_path(config.as_ref())))
     }
 
     #[must_use]
@@ -841,6 +865,63 @@ mod tests {
                 Some(PathBuf::from("/var/tmp/from-config.log"))
             );
         }
+    }
+
+    #[test]
+    fn test_new_daemon_start_discards_earlier_process_evidence() {
+        // A granted event-tap launch, then an idle-monitor launch (config switched back to
+        // event_tap without a restart): a later wake-only grant must stay unverified.
+        let log = "\
+20261122-10:00:00.000 | INFO     | daemon       | [daemon] started version=0.12.1 commit=x poll=2000ms activity_poll=1000ms activity_monitor=event_tap
+20261122-10:00:01.000 | INFO     | daemon       | [activity] event tap active (listen-only)
+20261122-10:00:02.000 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted
+20261122-11:00:00.000 | INFO     | daemon       | [daemon] started version=0.12.1 commit=x poll=2000ms activity_poll=1000ms activity_monitor=idle
+20261122-12:00:00.000 | INFO     | daemon       | [privacy] idle→active wake: Accessibility permission looks granted";
+        assert!(matches!(
+            parse_daemon_accessibility(log),
+            DaemonAccessibility::GrantedUnverified { .. }
+        ));
+        // A fresh start with no verdict yet is unknown, not the previous launch's verdict.
+        let restarted = "\
+20261122-10:00:02.000 | WARN     | daemon       | [privacy] startup: Accessibility permission missing
+20261122-11:00:00.000 | INFO     | daemon       | [daemon] started version=0.12.1 commit=x poll=2000ms activity_poll=1000ms activity_monitor=event_tap";
+        assert_eq!(
+            parse_daemon_accessibility(restarted),
+            DaemonAccessibility::Unknown
+        );
+    }
+
+    #[test]
+    fn test_event_tap_disabled_by_macos_fallback_warns() {
+        let base = "\
+20261122-10:00:00.000 | INFO     | daemon       | [daemon] started version=0.12.1 commit=x poll=2000ms activity_poll=1000ms activity_monitor=event_tap
+20261122-10:00:01.000 | INFO     | daemon       | [activity] event tap active (listen-only)
+20261122-10:00:02.000 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted";
+        let disabled = format!(
+            "{base}\n20261122-12:00:00.000 | WARN     | daemon       | [activity] event tap disabled by macOS (grant Accessibility permission to rusty-jack)"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&disabled),
+            DaemonAccessibility::TapUnavailable { .. }
+        ));
+        // The recreate variant keeps the tap alive: not a fallback.
+        let recreating = format!(
+            "{base}\n20261122-12:00:00.000 | WARN     | daemon       | event tap disabled by macOS; requesting tap recreate (hint)"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&recreating),
+            DaemonAccessibility::Granted { .. }
+        ));
+    }
+
+    #[test]
+    fn test_replacement_log_path_ignores_cli_and_plist_overrides() {
+        let mut config = Config::default();
+        config.logging.file = "/var/tmp/new-daemon.log".into();
+        assert_eq!(
+            replacement_daemon_log_path(Some(&config)),
+            PathBuf::from("/var/tmp/new-daemon.log")
+        );
     }
 
     #[test]

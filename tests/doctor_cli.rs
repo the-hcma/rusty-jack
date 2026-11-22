@@ -97,3 +97,29 @@ fn test_doctor_succeeds_and_skips_everything_for_idle_monitor() {
         .stdout(predicate::str::contains("\"state\": \"skipped\""))
         .stdout(predicate::str::contains("\"state\": \"fail\"").not());
 }
+
+#[test]
+fn test_doctor_never_rewrites_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // Valid but non-canonical (unsorted keys, compact): `load_config` would rewrite it.
+    let config = write_config(dir.path(), "idle");
+    let original = std::fs::read(&config).unwrap();
+
+    // Precondition: the rewriting loader really does change this file.
+    let probe = dir.path().join("probe.json");
+    std::fs::write(&probe, &original).unwrap();
+    rusty_jack::config::load_config(&probe).unwrap();
+    assert_ne!(
+        std::fs::read(&probe).unwrap(),
+        original,
+        "sample must be non-canonical"
+    );
+
+    let log = dir.path().join("none.log");
+    doctor(dir.path(), &config, &log).assert().success();
+    assert_eq!(
+        std::fs::read(&config).unwrap(),
+        original,
+        "doctor rewrote the config"
+    );
+}
