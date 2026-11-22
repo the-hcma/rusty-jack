@@ -1,7 +1,10 @@
 //! `rusty-jack upgrade` — refresh the per-user LaunchAgent when needed.
 
 use crate::config::default_config_path;
-use crate::doctor::{print_report, privacy_report_after_restart, LogCursor, POST_RESTART_WAIT};
+use crate::doctor::{
+    print_report, privacy_report_after_restart, privacy_report_daemon_not_restarted, LogCursor,
+    POST_RESTART_WAIT,
+};
 use crate::launchd::{print_upgrade_result, upgrade_daemon};
 use crate::native_driver::{
     print_upgrade_result as print_driver_upgrade_result, upgrade_if_materially_changed,
@@ -24,7 +27,12 @@ pub fn run(json: bool, force_reload: bool) -> Result<()> {
     let result = upgrade_daemon(force).map_err(anyhow::Error::new)?;
     // Wait for the restarted daemon to state its own Accessibility verdict, so the output
     // says definitively whether keyboard/mouse wake works instead of pointing at a log.
-    let privacy_report = privacy_report_after_restart(&privacy, &log_cursor, POST_RESTART_WAIT);
+    let privacy_report = if result.restarted_daemon() {
+        privacy_report_after_restart(&privacy, &log_cursor, POST_RESTART_WAIT)
+    } else {
+        // No fresh startup verdict is coming; do not wait for one.
+        privacy_report_daemon_not_restarted(&privacy)
+    };
 
     if json {
         let value = serde_json::to_string_pretty(&serde_json::json!({

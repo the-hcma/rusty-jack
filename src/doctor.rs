@@ -597,6 +597,21 @@ pub fn build_privacy_report(
 pub struct LogCursor {
     path: Option<PathBuf>,
     offset: u64,
+    /// (device, inode) of the captured file, to tell a replaced file from an appended one.
+    identity: Option<(u64, u64)>,
+}
+
+fn file_identity(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
 }
 
 /// How long `upgrade`/`install` wait for the restarted daemon's startup verdict.
@@ -618,14 +633,16 @@ impl LogCursor {
 
     #[must_use]
     pub fn capture(path: Option<PathBuf>) -> Self {
-        let offset = path
-            .as_deref()
-            .and_then(|p| std::fs::metadata(p).ok())
-            .map_or(0, |m| m.len());
-        Self { path, offset }
+        let meta = path.as_deref().and_then(|p| std::fs::metadata(p).ok());
+        Self {
+            offset: meta.as_ref().map_or(0, std::fs::Metadata::len),
+            identity: meta.as_ref().and_then(file_identity),
+            path,
+        }
     }
 
-    /// Text logged since the cursor (resets to the start if the file was rotated).
+    /// Text logged since the cursor. A replaced file (different identity) or a shorter one
+    /// (truncated) is read from the start; the same file keeps the captured offset.
     fn read_new(&self) -> String {
         let Some(path) = self.path.as_deref() else {
             return String::new();
@@ -633,8 +650,17 @@ impl LogCursor {
         let Ok(mut file) = std::fs::File::open(path) else {
             return String::new();
         };
-        let len = file.metadata().map_or(0, |m| m.len());
-        let start = if len < self.offset { 0 } else { self.offset };
+        let meta = file.metadata().ok();
+        let len = meta.as_ref().map_or(0, std::fs::Metadata::len);
+        let replaced = match (self.identity, meta.as_ref().and_then(file_identity)) {
+            (Some(captured), Some(current)) => captured != current,
+            _ => false,
+        };
+        let start = if replaced || len < self.offset {
+            0
+        } else {
+            self.offset
+        };
         if file.seek(SeekFrom::Start(start)).is_err() {
             return String::new();
         }
@@ -702,6 +728,37 @@ pub fn privacy_report_after_restart(
     Some(PrivacyReport {
         checks: post_restart_checks(status, &daemon, &ctx),
     })
+}
+
+/// Report for a run that did not restart the daemon (it was paused or not running):
+/// there is no fresh verdict to wait for, so say so instead of implying one is coming.
+/// `None` when the config requires no privacy permission.
+#[must_use]
+pub fn privacy_report_daemon_not_restarted(
+    status: &PrivacyPermissionStatus,
+) -> Option<PrivacyReport> {
+    if !(status.accessibility_required || status.local_network_required) {
+        return None;
+    }
+    let ctx = CheckContext {
+        binary: current_binary_hint(),
+        terminal: current_terminal_hint(),
+        local_network_probed: true,
+        log_confirms_grants: true,
+        waited_after_restart: false,
+    };
+    let mut checks = post_restart_checks(status, &DaemonAccessibility::Unknown, &ctx);
+    for check in &mut checks {
+        if check.id == "accessibility_daemon" {
+            check.state = CheckState::Warn;
+            check.detail = "the daemon was not restarted (it is paused or not running), so its Accessibility state is unchanged and unknown".into();
+            check.fix = Some(
+                "rusty-jack resume (or rusty-jack install), then run `rusty-jack doctor` for the definitive answer"
+                    .into(),
+            );
+        }
+    }
+    Some(PrivacyReport { checks })
 }
 
 /// Print the report under a "Privacy permissions" heading.
@@ -1295,6 +1352,64 @@ mod tests {
             matches!(verdict, DaemonAccessibility::Granted { .. }),
             "{verdict:?}"
         );
+    }
+
+    #[test]
+    fn test_log_cursor_reads_from_start_when_replacement_file_is_larger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.log");
+        std::fs::write(&path, "x".repeat(1024)).unwrap();
+        let cursor = LogCursor::capture(Some(path.clone()));
+
+        // Rotation: a new, LARGER file replaces the old one (new inode). The verdict sits
+        // before the captured offset of 1024, so a length-only check would skip it.
+        let replacement = dir.path().join("daemon.log.new");
+        let mut content = String::from(
+            "20261122-11:00:00.000 | WARN     | daemon       | [privacy] startup: Accessibility permission missing\n",
+        );
+        content.push_str(&"y".repeat(3000));
+        std::fs::write(&replacement, content).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+
+        assert!(matches!(
+            await_daemon_verdict(&cursor, std::time::Duration::from_millis(100)),
+            DaemonAccessibility::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn test_log_cursor_keeps_offset_for_appended_lines_to_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.log");
+        let old = "20261122-10:00:00.000 | WARN     | daemon       | [privacy] startup: Accessibility permission missing\n";
+        std::fs::write(&path, old).unwrap();
+        let cursor = LogCursor::capture(Some(path.clone()));
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write;
+        writeln!(f, "20261122-11:00:00.000 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted").unwrap();
+        // Only the appended (granted) line counts; the old "missing" line is before the cursor.
+        assert!(matches!(
+            await_daemon_verdict(&cursor, std::time::Duration::from_millis(100)),
+            DaemonAccessibility::Granted { .. }
+        ));
+    }
+
+    #[test]
+    fn test_not_restarted_report_does_not_promise_a_verdict() {
+        let st = status(true, Some(true), false, None);
+        let report = privacy_report_daemon_not_restarted(&st).unwrap();
+        let ax = report
+            .checks
+            .iter()
+            .find(|c| c.id == "accessibility_daemon")
+            .unwrap();
+        assert_eq!(ax.state, CheckState::Warn);
+        assert!(ax.detail.contains("not restarted"));
+        assert!(ax.fix.as_deref().unwrap().contains("rusty-jack resume"));
+        assert!(privacy_report_daemon_not_restarted(&status(false, None, false, None)).is_none());
     }
 
     #[test]

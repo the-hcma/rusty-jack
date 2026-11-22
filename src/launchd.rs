@@ -54,6 +54,23 @@ pub enum UpgradeResult {
     },
 }
 
+impl UpgradeResult {
+    /// Whether this run actually (re)started the daemon process. A no-op upgrade, or one
+    /// that leaves a paused daemon paused, produces no fresh startup verdict to wait for.
+    #[must_use]
+    pub fn restarted_daemon(&self) -> bool {
+        match self {
+            Self::UpToDate { .. } => false,
+            Self::Upgraded {
+                was_loaded,
+                resumed_after_upgrade,
+                ..
+            } => *was_loaded && *resumed_after_upgrade,
+            Self::Installed { .. } => true,
+        }
+    }
+}
+
 /// Command users should run after installing or upgrading the CLI binary.
 pub const DAEMON_REFRESH_COMMAND: &str = "rusty-jack upgrade --force";
 
@@ -1145,6 +1162,44 @@ pub fn print_resume_result(result: &ResumeResult) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_upgrade_result_restarted_daemon_only_when_actually_restarted() {
+        let v = || BinaryVersion {
+            version: "1".into(),
+            commit: "c".into(),
+        };
+        let upgraded = |was_loaded, resumed_after_upgrade| UpgradeResult::Upgraded {
+            label: "l".into(),
+            plist_path: "p".into(),
+            binary_path: "b".into(),
+            binary_version: v(),
+            previous_binary_path: None,
+            previous_binary_version: None,
+            previous_running_daemon_version: None,
+            was_loaded,
+            resumed_after_upgrade,
+        };
+        assert!(upgraded(true, true).restarted_daemon());
+        // A paused daemon stays paused: nothing was started.
+        assert!(!upgraded(false, false).restarted_daemon());
+        assert!(!upgraded(true, false).restarted_daemon());
+        let up_to_date = UpgradeResult::UpToDate {
+            label: "l".into(),
+            plist_path: "p".into(),
+            binary_path: "b".into(),
+            binary_version: v(),
+            was_loaded: true,
+        };
+        assert!(!up_to_date.restarted_daemon());
+        let installed = UpgradeResult::Installed {
+            label: "l".into(),
+            plist_path: "p".into(),
+            binary_path: "b".into(),
+            binary_version: v(),
+        };
+        assert!(installed.restarted_daemon());
+    }
+
     use super::*;
 
     #[test]
