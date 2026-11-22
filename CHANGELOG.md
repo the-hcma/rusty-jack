@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.13.0...rusty-jack-v0.13.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **packaging:** drop deprecated post_install from the formula template ([#274](https://github.com/the-hcma/rusty-jack/issues/274)) ([cde457c](https://github.com/the-hcma/rusty-jack/commit/cde457c4f6771933a13e1a50baef41e67d678ded))
+
 ## [0.13.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.12.1...rusty-jack-v0.13.0) (2026-11-22)
 
 
