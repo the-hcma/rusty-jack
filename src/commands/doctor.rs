@@ -17,7 +17,7 @@ use std::path::Path;
 
 /// Gather the daemon, routing, volume-control and log facts and run the health checks.
 fn collect_health_checks(
-    hal: Option<&dyn AudioHal>,
+    hal: Result<&dyn AudioHal, String>,
     config: Option<&Config>,
     config_path: Option<&Path>,
 ) -> Vec<crate::doctor::DoctorCheck> {
@@ -28,7 +28,12 @@ fn collect_health_checks(
     });
     let version = crate::launchd::daemon_version_check(running_pid).ok();
 
-    let list = hal.and_then(|hal| hal.list_outputs().ok());
+    // Keep the error: a failed query must surface as a warning, not as "nothing to check".
+    let (list, audio_error) =
+        match hal.and_then(|hal| hal.list_outputs().map_err(|err| err.to_string())) {
+            Ok(list) => (Some(list), None),
+            Err(err) => (None, Some(err)),
+        };
     let policy = list
         .as_ref()
         .map(|list| evaluate_policy(list, config, config_path));
@@ -62,6 +67,7 @@ fn collect_health_checks(
         eqmac_virtual_default: crate::eqmac::eqmac_virtual_default_is_active(),
         native_driver_offered:
             crate::hdmi_displayport_volume_control::native_driver_user_install_offered(),
+        audio_error: audio_error.as_deref(),
         log: &log,
     })
 }
@@ -74,9 +80,9 @@ pub fn run(json: bool, config_path: Option<&Path>) -> Result<()> {
         None => None,
     };
     let mut report = build_privacy_report(config.as_ref(), true)?;
-    let hal = crate::coreaudio::platform_hal().ok();
+    let hal = crate::coreaudio::platform_hal().map_err(|err| err.to_string());
     report.checks.extend(collect_health_checks(
-        hal.as_deref(),
+        hal.as_ref().map(|hal| hal.as_ref()).map_err(Clone::clone),
         config.as_ref(),
         resolved.as_deref(),
     ));

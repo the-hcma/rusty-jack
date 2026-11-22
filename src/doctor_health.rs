@@ -34,6 +34,8 @@ pub struct HealthInputs<'a> {
     pub eqmac_virtual_default: bool,
     /// `rusty-jack install` offers the native driver (off by default until a signed bundle ships).
     pub native_driver_offered: bool,
+    /// Why CoreAudio could not be queried (HAL creation or enumeration failed), if it could not.
+    pub audio_error: Option<&'a str>,
     pub log: &'a LogSummary,
 }
 
@@ -203,17 +205,27 @@ fn daemon_state_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
 fn daemon_binary_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
     const ID: &str = "daemon_binary";
     const LABEL: &str = "Daemon binary";
-    let installed = !matches!(
-        inputs.daemon,
-        None | Some(DaemonStatus::NotInstalled { .. })
-    );
-    let Some(version) = inputs.version.filter(|_| installed) else {
+    let Some(daemon) = inputs
+        .daemon
+        .filter(|daemon| !matches!(daemon, DaemonStatus::NotInstalled { .. }))
+    else {
         return check(
             ID,
             LABEL,
             CheckState::Skipped,
             "no installed daemon to compare",
             None,
+        );
+    };
+    let _ = daemon;
+    let Some(version) = inputs.version else {
+        // The daemon is installed, but its plist or binary could not be read.
+        return check(
+            ID,
+            LABEL,
+            CheckState::Warn,
+            "the installed daemon's version could not be read, so it cannot be compared with the CLI",
+            Some("rusty-jack upgrade --force"),
         );
     };
     let cli = format!(
@@ -285,7 +297,13 @@ fn eqmac_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             None,
         );
     };
-    if volume.native_driver_installed {
+    // An installed driver that reports a warning (null/skeleton stage, or CoreAudio has not
+    // published its output) does not provide volume control: fall through to eqMac.
+    let driver_note = volume
+        .native_driver_installed
+        .then_some(volume.native_driver_warning.as_deref())
+        .flatten();
+    if volume.native_driver_installed && driver_note.is_none() {
         return check(
             ID,
             LABEL,
@@ -295,6 +313,17 @@ fn eqmac_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
         );
     }
     if !volume.eqmac_installed {
+        if let Some(note) = driver_note {
+            return check(
+                ID,
+                LABEL,
+                CheckState::Warn,
+                format!(
+                    "the Rusty Jack native driver is installed but not working ({note}) and eqMac is not installed"
+                ),
+                Some("see `rusty-jack status` for the driver details, or install eqMac (https://eqmac.app)"),
+            );
+        }
         let detail = volume
             .recommendation
             .clone()
@@ -361,6 +390,24 @@ fn routing_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             CheckState::Skipped,
             format!(
                 "the preferred output ({}) is not connected",
+                policy
+                    .preferred_device_label
+                    .as_deref()
+                    .or(policy.preferred_device_name.as_deref())
+                    .unwrap_or("unknown")
+            ),
+            None,
+        );
+    }
+    // Listed but not alive: the daemon's target selection skips it and falls back, so it will
+    // not "fix" this, and `apply` cannot either.
+    if policy.preferred_alive == Some(false) {
+        return check(
+            ID,
+            LABEL,
+            CheckState::Skipped,
+            format!(
+                "the preferred output ({}) is listed but not available",
                 policy
                     .preferred_device_label
                     .as_deref()
@@ -461,13 +508,28 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
 /// All health checks, in display order.
 #[must_use]
 pub fn health_checks(inputs: &HealthInputs<'_>) -> Vec<DoctorCheck> {
-    vec![
+    let mut checks = vec![
         daemon_state_check(inputs),
         daemon_binary_check(inputs),
         eqmac_check(inputs),
         routing_check(inputs),
         log_check(inputs),
-    ]
+    ];
+    // Without audio device data the routing and volume checks skip silently, which must not
+    // read as healthy: say why.
+    if let Some(error) = inputs.audio_error {
+        checks.insert(
+            2,
+            check(
+                "audio_devices",
+                "Audio devices",
+                CheckState::Warn,
+                format!("could not query CoreAudio, so routing and volume control were not checked: {error}"),
+                Some("run `rusty-jack list` to see the underlying error"),
+            ),
+        );
+    }
+    checks
 }
 
 #[cfg(test)]
@@ -575,6 +637,7 @@ mod tests {
         eqmac_running: bool,
         eqmac_virtual_default: bool,
         native_driver_offered: bool,
+        audio_error: Option<String>,
     }
 
     impl Fixture {
@@ -590,6 +653,7 @@ mod tests {
                 eqmac_running: true,
                 eqmac_virtual_default: true,
                 native_driver_offered: false,
+                audio_error: None,
             }
         }
 
@@ -605,6 +669,7 @@ mod tests {
                 eqmac_running: self.eqmac_running,
                 eqmac_virtual_default: self.eqmac_virtual_default,
                 native_driver_offered: self.native_driver_offered,
+                audio_error: self.audio_error.as_deref(),
                 log: &self.log,
             })
         }
@@ -752,6 +817,105 @@ mod tests {
             ..Fixture::healthy()
         };
         assert_eq!(f.state("eqmac_readiness"), CheckState::Warn);
+    }
+
+    #[test]
+    fn test_a_failed_audio_query_is_a_warning_not_a_clean_skip() {
+        let f = Fixture {
+            policy: None,
+            volume: None,
+            audio_error: Some("no CoreAudio device list".into()),
+            ..Fixture::healthy()
+        };
+        assert_eq!(f.state("audio_devices"), CheckState::Warn);
+        let checks = f.checks();
+        let c = checks.iter().find(|c| c.id == "audio_devices").unwrap();
+        assert!(
+            c.detail.contains("no CoreAudio device list"),
+            "{}",
+            c.detail
+        );
+        assert_eq!(
+            c.fix.as_deref(),
+            Some("run `rusty-jack list` to see the underlying error")
+        );
+        // Without the error the check is absent, so a healthy setup keeps five checks.
+        assert_eq!(Fixture::healthy().checks().len(), 5);
+    }
+
+    #[test]
+    fn test_an_installed_daemon_with_unreadable_version_info_warns() {
+        let f = Fixture {
+            version: None,
+            ..Fixture::healthy()
+        };
+        assert_eq!(f.state("daemon_binary"), CheckState::Warn);
+        // An absent daemon is still just "nothing to compare".
+        let absent = Fixture {
+            daemon: Some(DaemonStatus::NotInstalled {
+                plist_path: "p".into(),
+            }),
+            version: None,
+            ..Fixture::healthy()
+        };
+        assert_eq!(absent.state("daemon_binary"), CheckState::Skipped);
+    }
+
+    #[test]
+    fn test_a_native_driver_that_warns_does_not_count_as_volume_control() {
+        let mut broken = volume(true, false);
+        broken.native_driver_warning =
+            Some("CoreAudio has not published the Rusty Jack output".into());
+
+        // No eqMac fallback: warn, say the driver is installed but not working, and do not
+        // tell the user to install what is already installed.
+        let none = Fixture {
+            volume: Some(broken.clone()),
+            ..Fixture::healthy()
+        };
+        assert_eq!(none.state("eqmac_readiness"), CheckState::Warn);
+        let checks = none.checks();
+        let c = checks.iter().find(|c| c.id == "eqmac_readiness").unwrap();
+        assert!(
+            c.detail.contains("installed but not working"),
+            "{}",
+            c.detail
+        );
+        assert!(!c
+            .fix
+            .clone()
+            .unwrap_or_default()
+            .contains("rusty-jack install"));
+
+        // A working eqMac is a fine fallback.
+        let mut with_eqmac = broken.clone();
+        with_eqmac.eqmac_installed = true;
+        let ok = Fixture {
+            volume: Some(with_eqmac),
+            ..Fixture::healthy()
+        };
+        assert_eq!(ok.state("eqmac_readiness"), CheckState::Ok);
+
+        // A native driver without a warning is still ok.
+        let healthy_driver = Fixture {
+            volume: Some(volume(true, false)),
+            ..Fixture::healthy()
+        };
+        assert_eq!(healthy_driver.state("eqmac_readiness"), CheckState::Ok);
+    }
+
+    #[test]
+    fn test_a_listed_but_unavailable_preferred_output_is_not_promised_a_fix() {
+        let mut dead = policy(Some(false));
+        dead.preferred_alive = Some(false);
+        let f = Fixture {
+            policy: Some(dead),
+            ..Fixture::healthy()
+        };
+        assert_eq!(f.state("routing"), CheckState::Skipped);
+        let checks = f.checks();
+        let c = checks.iter().find(|c| c.id == "routing").unwrap();
+        assert!(c.detail.contains("not available"), "{}", c.detail);
     }
 
     #[test]
