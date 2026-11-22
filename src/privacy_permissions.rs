@@ -446,8 +446,8 @@ enum PrivacyPane {
 fn open_privacy_pane(pane: PrivacyPane) {
     let urls: &[&str] = match pane {
         PrivacyPane::Accessibility => &[
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
         ],
         PrivacyPane::LocalNetwork => &[
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork",

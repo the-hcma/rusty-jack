@@ -556,6 +556,14 @@ pub fn installed_daemon_binary_path() -> Option<String> {
     launch_agent_binary_path_from_plist(&plist)
 }
 
+/// An environment variable set in the installed LaunchAgent plist (the daemon's real environment).
+#[must_use]
+pub fn installed_daemon_env_var(key: &str) -> Option<String> {
+    let plist_path = plist_path_or_err().ok()?;
+    let plist = std::fs::read_to_string(plist_path).ok()?;
+    launch_agent_env_var_from_plist(&plist, key)
+}
+
 fn launch_agent_binary_path_from_plist(plist: &str) -> Option<String> {
     let (_, after_key) = plist.split_once("<key>ProgramArguments</key>")?;
     let (_, after_array) = after_key.split_once("<array>")?;

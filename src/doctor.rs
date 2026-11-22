@@ -201,7 +201,7 @@ pub struct CheckContext {
     pub terminal: String,
     /// Whether the Local Network SSDP probe ran (`doctor`) or not (`status`).
     pub local_network_probed: bool,
-    /// Whether the daemon's configured log level records "granted" lines (info or lower).
+    /// Whether the daemon's effective log level (from its LaunchAgent plist) records "granted" lines.
     /// When false, a stale "missing" line cannot be told apart from the current state.
     pub log_confirms_grants: bool,
 }
@@ -215,14 +215,34 @@ pub fn log_level_confirms_grants(level: &str) -> bool {
     )
 }
 
-/// Like [`log_level_confirms_grants`], applying the daemon's overrides from this
-/// process's environment: `RUST_LOG` (whole filter) over `RUSTY_JACK_LOG_LEVEL` over config.
-fn effective_log_level_confirms_grants(configured: &str) -> bool {
-    let level = std::env::var("RUST_LOG")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| crate::logging::resolve_level(configured));
-    log_level_confirms_grants(&level)
+/// The filter level the daemon actually logs at. Mirrors `logging::build_filter`:
+/// `RUST_LOG` wins over `RUSTY_JACK_LOG_LEVEL`, which wins over `logging.level`.
+/// Inputs come from the LaunchAgent plist, because that is the daemon's environment
+/// (the installed plist pins `RUST_LOG=info`), not this shell's.
+#[must_use]
+pub fn daemon_effective_log_level(
+    rust_log: Option<&str>,
+    jack_level: Option<&str>,
+    configured: &str,
+) -> String {
+    let non_empty = |v: Option<&str>| {
+        v.map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    non_empty(rust_log)
+        .or_else(|| non_empty(jack_level))
+        .unwrap_or_else(|| configured.trim().to_string())
+}
+
+fn daemon_log_confirms_grants(configured: &str) -> bool {
+    let rust_log = crate::launchd::installed_daemon_env_var("RUST_LOG");
+    let jack_level = crate::launchd::installed_daemon_env_var("RUSTY_JACK_LOG_LEVEL");
+    log_level_confirms_grants(&daemon_effective_log_level(
+        rust_log.as_deref(),
+        jack_level.as_deref(),
+        configured,
+    ))
 }
 
 fn current_terminal_hint() -> String {
@@ -334,10 +354,10 @@ pub fn privacy_checks(
                 label: "Accessibility (daemon)",
                 state: CheckState::Warn,
                 detail: format!(
-                    "last logged as missing ({logged_at}); logging.level hides \"granted\" lines, so this may be stale"
+                    "last logged as missing ({logged_at}); the daemon's log level hides \"granted\" lines, so this may be stale"
                 ),
                 fix: Some(format!(
-                    "set logging.level to info, then rusty-jack upgrade --force, and re-run doctor\n{ax_fix}"
+                    "raise the daemon's log level to info (RUST_LOG in the LaunchAgent, or logging.level), then rusty-jack upgrade --force, and re-run doctor\n{ax_fix}"
                 )),
             },
             DaemonAccessibility::Unknown => DoctorCheck {
@@ -347,7 +367,7 @@ pub fn privacy_checks(
                 detail: if ctx.log_confirms_grants {
                     "no daemon verdict in the log (the daemon logs one at startup and on wake; an old verdict may have rotated out)".into()
                 } else {
-                    "no daemon verdict in the log (logging.level hides \"granted\" lines; set it to info to confirm)".into()
+                    "no daemon verdict in the log (the daemon's log level hides \"granted\" lines; set it to info to confirm)".into()
                 },
                 fix: Some(format!(
                     "start the daemon (rusty-jack install / upgrade --force) and re-run doctor; \
@@ -449,7 +469,7 @@ pub fn build_privacy_report(
                 terminal: current_terminal_hint(),
                 local_network_probed: probe_local_network,
                 log_confirms_grants: config
-                    .is_none_or(|c| effective_log_level_confirms_grants(&c.logging.level)),
+                    .is_none_or(|c| daemon_log_confirms_grants(&c.logging.level)),
             },
         ),
     })
@@ -687,6 +707,33 @@ mod tests {
 
         let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, &ctx(true));
         assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Fail);
+    }
+
+    #[test]
+    fn test_daemon_effective_log_level_precedence() {
+        // RUST_LOG (plist-pinned) beats RUSTY_JACK_LOG_LEVEL beats config.
+        assert_eq!(
+            daemon_effective_log_level(Some("info"), Some("warn"), "error"),
+            "info"
+        );
+        assert_eq!(
+            daemon_effective_log_level(None, Some("warn"), "info"),
+            "warn"
+        );
+        assert_eq!(
+            daemon_effective_log_level(Some("  "), None, " warn "),
+            "warn"
+        );
+        assert_eq!(daemon_effective_log_level(None, None, "debug"), "debug");
+        // The installed plist pins RUST_LOG=info, so a quiet config does not hide grants.
+        assert!(log_level_confirms_grants(&daemon_effective_log_level(
+            Some("info"),
+            None,
+            "warn"
+        )));
+        assert!(!log_level_confirms_grants(&daemon_effective_log_level(
+            None, None, "warn"
+        )));
     }
 
     #[test]
