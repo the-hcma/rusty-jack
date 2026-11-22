@@ -420,9 +420,9 @@ Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `
 
 - **Daemon** — `ok` when the LaunchAgent is running. Not installed (`rusty-jack install`), paused (`rusty-jack resume`), or loaded in launchd but not running (`rusty-jack upgrade --force`, with the launchd state and last exit code) is a `FAIL` with `auto_switch`, else a `warn`.
 - **Daemon binary** — `FAIL` when the running or installed daemon's version or commit differs from the CLI (for example after `brew upgrade`), with `rusty-jack upgrade --force`. The same version from a different binary path, or a LaunchAgent without a version stamp, is a `warn`.
-- **HDMI/DisplayPort volume control** — only when the selected output is an HDMI/DisplayPort output, otherwise `skip`. `ok` when the Rusty Jack native driver is installed, or when eqMac is running and owns the default output. A `warn` when eqMac is installed but not running, when it is running without owning the default output, or when neither the native driver nor eqMac is installed (`rusty-jack install`).
+- **HDMI/DisplayPort volume control** — only when the selected output is an HDMI/DisplayPort output, otherwise `skip`. `ok` when the Rusty Jack native driver is installed, or when eqMac is running and owns the default output. A `warn` when eqMac is installed but not running, when it is running without owning the default output, or when neither the native driver nor eqMac is installed (the fix is `rusty-jack install` only when the native driver is offered, otherwise install eqMac).
 - **Audio routing** — a `warn` when the default output is not the preferred one, `auto_switch` is on, and the daemon is not running to correct it. With a running daemon that is a normal transient state and shows `ok`. `skip` when the preferred output is not connected (nothing can route to it) or `auto_switch` is off.
-- **Daemon log** — the last warning and error lines from the daemon log and the time of its newest entry (a `warn` when there are recent problems).
+- **Daemon log** — the last warning and error lines logged since the daemon last started (the `[daemon] started` line) and the time of the newest entry; a `warn` when there are any. Warnings from earlier daemon processes are ignored.
 
 ### Privacy permission checks
 

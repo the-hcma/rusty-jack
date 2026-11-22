@@ -32,6 +32,8 @@ pub struct HealthInputs<'a> {
     pub volume_needed: bool,
     pub eqmac_running: bool,
     pub eqmac_virtual_default: bool,
+    /// `rusty-jack install` offers the native driver (off by default until a signed bundle ships).
+    pub native_driver_offered: bool,
     pub log: &'a LogSummary,
 }
 
@@ -40,7 +42,7 @@ pub struct HealthInputs<'a> {
 pub struct LogSummary {
     /// Timestamp of the newest log line (as logged).
     pub last_entry_at: Option<String>,
-    /// The newest warning/error lines, oldest first, trimmed.
+    /// The newest warning/error lines since the daemon last started, oldest first, trimmed.
     pub recent_problems: Vec<String>,
 }
 
@@ -61,6 +63,11 @@ pub fn summarize_daemon_log(tail: &str) -> LogSummary {
             continue;
         }
         last_entry_at = Some(stamp.to_string());
+        // Problems from an earlier daemon process say nothing about this one: start over.
+        if message.contains("[daemon] started version=") {
+            problems.clear();
+            continue;
+        }
         if matches!(level.trim(), "WARN" | "ERROR") {
             let mut text = format!("{stamp} {}: {}", level.trim(), message.trim());
             if text.chars().count() > MAX_LOG_LINE_CHARS {
@@ -290,7 +297,13 @@ fn eqmac_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             LABEL,
             CheckState::Warn,
             detail,
-            Some("rusty-jack install"),
+            // `install` only installs the native driver when it is offered; otherwise it
+            // does nothing for volume control, so point at eqMac instead.
+            Some(if inputs.native_driver_offered {
+                "rusty-jack install (installs the Rusty Jack native driver)"
+            } else {
+                "install eqMac (https://eqmac.app); the Rusty Jack native driver is not offered yet"
+            }),
         );
     }
     if !inputs.eqmac_running {
@@ -418,7 +431,7 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             ID,
             LABEL,
             CheckState::Ok,
-            format!("no recent warnings or errors (last entry {last})"),
+            format!("no warnings or errors since the daemon started (last entry {last})"),
             None,
         );
     }
@@ -427,7 +440,7 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
         ID,
         LABEL,
         CheckState::Warn,
-        format!("recent warnings/errors (last entry {last}):\n{lines}"),
+        format!("warnings/errors since the daemon started (last entry {last}):\n{lines}"),
         Some("see `rusty-jack status` for the log path"),
     )
 }
@@ -548,6 +561,7 @@ mod tests {
         volume_needed: bool,
         eqmac_running: bool,
         eqmac_virtual_default: bool,
+        native_driver_offered: bool,
     }
 
     impl Fixture {
@@ -562,6 +576,7 @@ mod tests {
                 volume_needed: true,
                 eqmac_running: true,
                 eqmac_virtual_default: true,
+                native_driver_offered: false,
             }
         }
 
@@ -576,6 +591,7 @@ mod tests {
                 volume_needed: self.volume_needed,
                 eqmac_running: self.eqmac_running,
                 eqmac_virtual_default: self.eqmac_virtual_default,
+                native_driver_offered: self.native_driver_offered,
                 log: &self.log,
             })
         }
@@ -726,6 +742,25 @@ mod tests {
     }
 
     #[test]
+    fn test_no_volume_control_layer_points_at_eqmac_unless_the_native_driver_is_offered() {
+        let missing = |offered| Fixture {
+            volume: Some(volume(false, false)),
+            native_driver_offered: offered,
+            ..Fixture::healthy()
+        };
+        let not_offered = missing(false);
+        assert_eq!(not_offered.state("eqmac_readiness"), CheckState::Warn);
+        let fix = not_offered.fix("eqmac_readiness");
+        assert!(
+            fix.contains("eqMac") && !fix.contains("rusty-jack install"),
+            "{fix}"
+        );
+
+        let offered = missing(true).fix("eqmac_readiness");
+        assert!(offered.contains("rusty-jack install"), "{offered}");
+    }
+
+    #[test]
     fn test_eqmac_check_is_skipped_unless_volume_control_is_needed() {
         let not_needed = Fixture {
             volume_needed: false,
@@ -813,6 +848,30 @@ not a log line
         assert!(s.recent_problems[0].contains("second problem"));
         assert!(s.recent_problems[2].contains("fourth problem"));
         assert_eq!(summarize_daemon_log(""), LogSummary::default());
+    }
+
+    #[test]
+    fn test_an_old_warning_before_the_last_daemon_start_does_not_count() {
+        let log = "\
+20261120-09:00:00.000 | WARN     | daemon       | old trouble from an earlier process
+20261122-10:00:00.000 | INFO     | daemon       | [daemon] started version=0.13.1 commit=x poll=2000ms activity_poll=1000ms activity_monitor=idle
+20261122-10:00:05.000 | INFO     | daemon       | all quiet";
+        let s = summarize_daemon_log(log);
+        assert!(s.recent_problems.is_empty(), "{:?}", s.recent_problems);
+        assert_eq!(s.last_entry_at.as_deref(), Some("20261122-10:00:05.000"));
+        let f = Fixture {
+            log: s,
+            ..Fixture::healthy()
+        };
+        assert_eq!(f.state("daemon_log"), CheckState::Ok);
+
+        // A warning after the start still counts.
+        let after = format!("{log}\n20261122-11:00:00.000 | WARN     | daemon       | new trouble");
+        let f = Fixture {
+            log: summarize_daemon_log(&after),
+            ..Fixture::healthy()
+        };
+        assert_eq!(f.state("daemon_log"), CheckState::Warn);
     }
 
     #[test]

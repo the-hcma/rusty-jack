@@ -60,6 +60,8 @@ fn collect_health_checks(
         volume_needed,
         eqmac_running: crate::eqmac::eqmac_is_running(),
         eqmac_virtual_default: crate::eqmac::eqmac_virtual_default_is_active(),
+        native_driver_offered:
+            crate::hdmi_displayport_volume_control::native_driver_user_install_offered(),
         log: &log,
     })
 }
