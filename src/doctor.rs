@@ -256,6 +256,8 @@ pub struct CheckContext {
     /// Whether the daemon's `RUST_LOG` (from its LaunchAgent plist) records "granted" lines.
     /// When false, a stale "missing" line cannot be told apart from the current state.
     pub log_confirms_grants: bool,
+    /// The daemon was just restarted and its fresh verdict awaited (`upgrade`/`install`).
+    pub waited_after_restart: bool,
 }
 
 /// Whether the daemon's `RUST_LOG` lets its info-level `[privacy]` lines reach the log.
@@ -360,7 +362,9 @@ pub fn privacy_checks(
                 id: "accessibility_daemon",
                 label: "Accessibility (daemon)",
                 state: CheckState::Ok,
-                detail: format!("granted (daemon log {logged_at})"),
+                detail: format!(
+                    "GRANTED — the daemon uses the event tap for keyboard/mouse wake (daemon log {logged_at})"
+                ),
                 fix: None,
             },
             DaemonAccessibility::TapUnavailable { logged_at } => DoctorCheck {
@@ -389,7 +393,7 @@ pub fn privacy_checks(
                 label: "Accessibility (daemon)",
                 state: CheckState::Fail,
                 detail: format!(
-                    "missing (daemon log {logged_at}); keyboard/mouse wake falls back to the idle monitor"
+                    "NOT GRANTED — keyboard/mouse wake is not working: the daemon is on the idle monitor (daemon log {logged_at})"
                 ),
                 fix: Some(ax_fix),
             },
@@ -403,6 +407,15 @@ pub fn privacy_checks(
                 fix: Some(format!(
                     "rusty-jack upgrade --force rewrites the LaunchAgent with RUST_LOG=info; then re-run doctor\n{ax_fix}"
                 )),
+            },
+            DaemonAccessibility::Unknown if ctx.waited_after_restart => DoctorCheck {
+                id: "accessibility_daemon",
+                label: "Accessibility (daemon)",
+                state: CheckState::Warn,
+                detail: "the restarted daemon has not reported its Accessibility state yet (still starting, or paused?)".into(),
+                fix: Some(
+                    "run `rusty-jack doctor` in a few seconds for the definitive answer".into(),
+                ),
             },
             DaemonAccessibility::Unknown => DoctorCheck {
                 id: "accessibility_daemon",
@@ -513,9 +526,124 @@ pub fn build_privacy_report(
                 terminal: current_terminal_hint(),
                 local_network_probed: probe_local_network,
                 log_confirms_grants: daemon_log_confirms_grants(),
+                waited_after_restart: false,
             },
         ),
     })
+}
+
+/// Where the daemon log ended before a restart, so only lines written after it are read.
+#[derive(Debug, Clone)]
+pub struct LogCursor {
+    path: Option<PathBuf>,
+    offset: u64,
+}
+
+/// How long `upgrade`/`install` wait for the restarted daemon's startup verdict.
+pub const POST_RESTART_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+const POST_RESTART_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+impl LogCursor {
+    /// Record the current end of the log the default-config daemon writes to.
+    #[must_use]
+    pub fn capture_default() -> Self {
+        let config = crate::config::default_config_path()
+            .and_then(|p| crate::config::load_config_readonly(&p).ok());
+        Self::capture(daemon_log_path(config.as_ref()))
+    }
+
+    #[must_use]
+    pub fn capture(path: Option<PathBuf>) -> Self {
+        let offset = path
+            .as_deref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map_or(0, |m| m.len());
+        Self { path, offset }
+    }
+
+    /// Text logged since the cursor (resets to the start if the file was rotated).
+    fn read_new(&self) -> String {
+        let Some(path) = self.path.as_deref() else {
+            return String::new();
+        };
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return String::new();
+        };
+        let len = file.metadata().map_or(0, |m| m.len());
+        let start = if len < self.offset { 0 } else { self.offset };
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return String::new();
+        }
+        let mut bytes = Vec::new();
+        if file.read_to_end(&mut bytes).is_err() {
+            return String::new();
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+/// Poll the log (after `cursor`) until the daemon states its Accessibility verdict, or time out.
+#[must_use]
+pub fn await_daemon_verdict(
+    cursor: &LogCursor,
+    timeout: std::time::Duration,
+) -> DaemonAccessibility {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let verdict = parse_daemon_accessibility(&cursor.read_new());
+        if verdict != DaemonAccessibility::Unknown || std::time::Instant::now() >= deadline {
+            return verdict;
+        }
+        std::thread::sleep(POST_RESTART_POLL);
+    }
+}
+
+/// Checks to print after `upgrade`/`install` restarted the daemon: only what the config
+/// requires, and no CLI-process Accessibility line (it says nothing about the daemon).
+#[must_use]
+pub fn post_restart_checks(
+    status: &PrivacyPermissionStatus,
+    daemon: &DaemonAccessibility,
+    ctx: &CheckContext,
+) -> Vec<DoctorCheck> {
+    privacy_checks(status, daemon, ctx)
+        .into_iter()
+        .filter(|c| c.state != CheckState::Skipped && c.id != "accessibility_cli")
+        .collect()
+}
+
+/// Wait for the restarted daemon's verdict and build the report `upgrade`/`install` print.
+/// `None` when the config requires no privacy permission.
+#[must_use]
+pub fn privacy_report_after_restart(
+    status: &PrivacyPermissionStatus,
+    cursor: &LogCursor,
+    timeout: std::time::Duration,
+) -> Option<PrivacyReport> {
+    if !(status.accessibility_required || status.local_network_required) {
+        return None;
+    }
+    let daemon = if status.accessibility_required {
+        await_daemon_verdict(cursor, timeout)
+    } else {
+        DaemonAccessibility::Unknown
+    };
+    let ctx = CheckContext {
+        binary: current_binary_hint(),
+        terminal: current_terminal_hint(),
+        local_network_probed: true,
+        log_confirms_grants: daemon_log_confirms_grants(),
+        waited_after_restart: true,
+    };
+    Some(PrivacyReport {
+        checks: post_restart_checks(status, &daemon, &ctx),
+    })
+}
+
+/// Print the report under a "Privacy permissions" heading.
+pub fn print_report(report: &PrivacyReport) {
+    println!();
+    println!("{}", report.format("Privacy permissions"));
 }
 
 #[cfg(test)]
@@ -544,6 +672,7 @@ mod tests {
             terminal: "Terminal".into(),
             local_network_probed: probed,
             log_confirms_grants: true,
+            waited_after_restart: false,
         }
     }
 
@@ -962,5 +1091,113 @@ mod tests {
     #[test]
     fn test_read_log_tail_handles_missing_file() {
         assert_eq!(read_log_tail(Path::new("/nonexistent/rusty-jack.log")), "");
+    }
+
+    #[test]
+    fn test_await_daemon_verdict_ignores_lines_before_cursor_and_sees_new_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.log");
+        std::fs::write(
+            &path,
+            "20261122-10:45:16.336 | WARN     | daemon       | [privacy] startup: Accessibility permission missing\n",
+        )
+        .unwrap();
+        let cursor = LogCursor::capture(Some(path.clone()));
+
+        // Nothing new yet: the old "missing" line must not count.
+        assert_eq!(
+            await_daemon_verdict(&cursor, std::time::Duration::from_millis(300)),
+            DaemonAccessibility::Unknown
+        );
+
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(writer_path)
+                .unwrap();
+            use std::io::Write;
+            writeln!(f, "20261122-10:54:19.051 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted").unwrap();
+        });
+        let verdict = await_daemon_verdict(&cursor, std::time::Duration::from_secs(5));
+        writer.join().unwrap();
+        assert!(
+            matches!(verdict, DaemonAccessibility::Granted { .. }),
+            "{verdict:?}"
+        );
+    }
+
+    #[test]
+    fn test_log_cursor_handles_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.log");
+        std::fs::write(&path, "x".repeat(1000)).unwrap();
+        let cursor = LogCursor::capture(Some(path.clone()));
+        // Rotated: new, shorter file; everything in it is new.
+        std::fs::write(
+            &path,
+            "20261122-11:00:00.000 | WARN     | daemon       | [privacy] startup: Accessibility permission missing\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            await_daemon_verdict(&cursor, std::time::Duration::from_millis(100)),
+            DaemonAccessibility::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn test_post_restart_checks_are_explicit_and_actionable() {
+        let st = status(true, Some(true), false, None);
+        let c = CheckContext {
+            waited_after_restart: true,
+            ..ctx(true)
+        };
+
+        let missing = post_restart_checks(
+            &st,
+            &DaemonAccessibility::Missing {
+                logged_at: "t".into(),
+            },
+            &c,
+        );
+        assert_eq!(
+            missing.len(),
+            1,
+            "no CLI line, nothing skipped: {missing:?}"
+        );
+        assert_eq!(missing[0].state, CheckState::Fail);
+        assert!(missing[0].detail.contains("NOT GRANTED"));
+        let fix = missing[0].fix.as_deref().unwrap();
+        assert!(fix.contains("x-apple.systempreferences") && fix.contains("upgrade --force"));
+
+        let granted = post_restart_checks(
+            &st,
+            &DaemonAccessibility::Granted {
+                logged_at: "t".into(),
+            },
+            &c,
+        );
+        assert_eq!(granted[0].state, CheckState::Ok);
+        assert!(granted[0].detail.starts_with("GRANTED"));
+
+        let pending = post_restart_checks(&st, &DaemonAccessibility::Unknown, &c);
+        assert_eq!(pending[0].state, CheckState::Warn);
+        assert!(pending[0]
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("rusty-jack doctor"));
+    }
+
+    #[test]
+    fn test_privacy_report_after_restart_is_none_when_nothing_required() {
+        let cursor = LogCursor::capture(None);
+        assert!(privacy_report_after_restart(
+            &status(false, None, false, None),
+            &cursor,
+            std::time::Duration::from_millis(10)
+        )
+        .is_none());
     }
 }

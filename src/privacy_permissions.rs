@@ -226,43 +226,6 @@ fn check_privacy_permissions_with(
     })
 }
 
-/// Print a short human summary after install/upgrade.
-pub fn print_privacy_permission_status(status: &PrivacyPermissionStatus) {
-    if !(status.accessibility_required || status.local_network_required) {
-        return;
-    }
-    println!();
-    println!("Privacy permissions");
-    if status.accessibility_required {
-        let state = match status.accessibility_trusted {
-            Some(true) => "granted (CLI only)",
-            Some(false) => "missing",
-            None => "unchecked",
-        };
-        println!("  Accessibility: {state}");
-        if status.accessibility_trusted == Some(true) {
-            println!(
-                "  note: keyboard wake needs Accessibility for the LaunchAgent; \
-                 confirm `[privacy] startup` in ~/Library/Logs/rusty-jack.log after upgrade"
-            );
-        }
-    }
-    if status.local_network_required {
-        let state = match status.local_network_ok {
-            Some(true) => "ok (SSDP probe heard a device)",
-            // Probe never emits Some(false); empty/error stays inconclusive.
-            _ => "unchecked / inconclusive",
-        };
-        println!("  Local Network: {state}");
-    }
-    for note in &status.notes {
-        println!("  note: {note}");
-    }
-    if status.force_daemon_restart {
-        println!("  daemon: force-restarted so permission changes apply");
-    }
-}
-
 /// Whether the **current process** is Accessibility-trusted (macOS TCC).
 ///
 /// Foreground CLI and LaunchAgent daemon may differ; upgrade probes the CLI only.
