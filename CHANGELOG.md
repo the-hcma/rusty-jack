@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.12.1...rusty-jack-v0.13.0) (2026-11-22)
+
+
+### Features
+
+* add doctor command, status privacy checks, and shell completions ([#272](https://github.com/the-hcma/rusty-jack/issues/272)) ([0b11dd6](https://github.com/the-hcma/rusty-jack/commit/0b11dd6267519564b85e2087e32f42a4431f899a))
+
+
+### Bug Fixes
+
+* **deps:** unify sysinfo on 0.40.0 ([#266](https://github.com/the-hcma/rusty-jack/issues/266)) ([4cd4caa](https://github.com/the-hcma/rusty-jack/commit/4cd4caaeeb80e9e2785ea38b06ec3a9be8ce9f8c))
+
 ## [0.12.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.12.0...rusty-jack-v0.12.1) (2026-09-01)
 
 
