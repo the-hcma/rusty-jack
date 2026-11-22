@@ -4,14 +4,14 @@
 //! LaunchAgent daemon can disagree. The report therefore shows both: a live probe
 //! for this CLI and the daemon's own verdict recovered from its log.
 
-use crate::config::Config;
+use crate::config::{Config, LoggingConfig};
 use crate::privacy_permissions::{
     check_privacy_permissions, check_privacy_permissions_no_probe, PrivacyPermissionStatus,
 };
 use crate::RustyJackError;
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How much of the daemon log tail is scanned for the daemon's `[privacy]` verdict.
 const LOG_TAIL_BYTES: u64 = 512 * 1024;
@@ -103,6 +103,11 @@ pub enum DaemonAccessibility {
     Granted {
         logged_at: String,
     },
+    /// Granted since the daemon started, but the daemon chose its monitor at startup
+    /// (without the grant), so it stays on the idle monitor until restarted.
+    GrantedNeedsRestart {
+        logged_at: String,
+    },
     Missing {
         logged_at: String,
     },
@@ -110,26 +115,43 @@ pub enum DaemonAccessibility {
     Unknown,
 }
 
-/// Find the daemon's latest Accessibility verdict in a log excerpt.
+/// Find the daemon's current Accessibility state in a log excerpt.
+///
+/// The daemon picks event tap vs idle monitor once, at startup, but re-checks
+/// Accessibility on every idle→active wake. A wake line saying "granted" that
+/// follows a startup verdict of "missing" therefore means a restart is still needed.
 #[must_use]
 pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
-    for line in log.lines().rev() {
+    // (granted, is_startup_decision, logged_at)
+    let mut latest: Option<(bool, bool, String)> = None;
+    let mut latest_startup: Option<(bool, String)> = None;
+    for line in log.lines() {
         let granted =
             line.contains("[privacy]") && line.contains("Accessibility permission looks granted");
-        let missing = (line.contains("[privacy]")
-            && line.contains("Accessibility permission missing"))
-            || line.contains("[activity] Accessibility not granted for daemon");
+        let activity_missing = line.contains("[activity] Accessibility not granted for daemon");
+        let missing = activity_missing
+            || (line.contains("[privacy]") && line.contains("Accessibility permission missing"));
         if !(granted || missing) {
             continue;
         }
         let logged_at = line.split(" | ").next().unwrap_or("").trim().to_string();
-        return if granted {
-            DaemonAccessibility::Granted { logged_at }
-        } else {
-            DaemonAccessibility::Missing { logged_at }
-        };
+        let is_startup = activity_missing || line.contains("[privacy] startup:");
+        if is_startup {
+            latest_startup = Some((granted, logged_at.clone()));
+        }
+        latest = Some((granted, is_startup, logged_at));
     }
-    DaemonAccessibility::Unknown
+    match latest {
+        None => DaemonAccessibility::Unknown,
+        Some((false, _, logged_at)) => DaemonAccessibility::Missing { logged_at },
+        Some((true, is_startup, logged_at)) => {
+            if !is_startup && matches!(latest_startup, Some((false, _))) {
+                DaemonAccessibility::GrantedNeedsRestart { logged_at }
+            } else {
+                DaemonAccessibility::Granted { logged_at }
+            }
+        }
+    }
 }
 
 /// Read the last [`LOG_TAIL_BYTES`] of the daemon log (empty when unreadable).
@@ -157,7 +179,11 @@ pub fn read_log_tail(path: &Path) -> String {
     text
 }
 
+/// The binary to grant: the one the LaunchAgent runs, else this executable.
 fn current_binary_hint() -> String {
+    if let Some(path) = crate::launchd::installed_daemon_binary_path() {
+        return path;
+    }
     std::env::current_exe()
         .and_then(std::fs::canonicalize)
         .map_or_else(
@@ -180,6 +206,11 @@ pub fn privacy_checks(
         "System Settings → Privacy & Security → Accessibility: enable {binary}\n\
          open \"{ACCESSIBILITY_PANE_URL}\"\n\
          then restart the daemon: rusty-jack upgrade --force"
+    );
+
+    let ax_fix_short = format!(
+        "System Settings → Privacy & Security → Accessibility: enable {binary}\n\
+         open \"{ACCESSIBILITY_PANE_URL}\""
     );
 
     // Accessibility, as seen by this CLI process.
@@ -229,6 +260,15 @@ pub fn privacy_checks(
                 detail: format!("granted (daemon log {logged_at})"),
                 fix: None,
             },
+            DaemonAccessibility::GrantedNeedsRestart { logged_at } => DoctorCheck {
+                id: "accessibility_daemon",
+                label: "Accessibility (daemon)",
+                state: CheckState::Warn,
+                detail: format!(
+                    "granted since the daemon started ({logged_at}), but it is still on the idle monitor until restarted"
+                ),
+                fix: Some("restart the daemon: rusty-jack upgrade --force".into()),
+            },
             DaemonAccessibility::Missing { logged_at } => DoctorCheck {
                 id: "accessibility_daemon",
                 label: "Accessibility (daemon)",
@@ -243,11 +283,11 @@ pub fn privacy_checks(
                 label: "Accessibility (daemon)",
                 state: CheckState::Warn,
                 detail: "no daemon verdict in the log yet".into(),
-                fix: Some(
+                fix: Some(format!(
                     "start the daemon (rusty-jack install / upgrade --force) and re-run doctor; \
-                     it logs `[privacy] startup` on launch"
-                        .into(),
-                ),
+                     it logs `[privacy] startup` on launch\n\
+                     if Accessibility is not yet granted: {ax_fix_short}"
+                )),
             },
         }
     });
@@ -296,6 +336,14 @@ pub fn privacy_checks(
     checks
 }
 
+/// Where the daemon writes its log: `config.logging.file` (or the default), honoring
+/// the log-file environment override, exactly as the daemon resolves it.
+#[must_use]
+pub fn daemon_log_path(config: Option<&Config>) -> Option<PathBuf> {
+    let file = config.map_or_else(|| LoggingConfig::default().file, |c| c.logging.file.clone());
+    crate::logging::resolve_log_file_path(Path::new(&file)).ok()
+}
+
 /// Probe permissions for `config` and read the daemon's verdict from its log.
 ///
 /// `probe_local_network` runs the SSDP probe (`doctor`); `status` passes `false`
@@ -306,7 +354,6 @@ pub fn privacy_checks(
 /// Returns an error if the permission probe itself fails.
 pub fn build_privacy_report(
     config: Option<&Config>,
-    daemon_log: Option<&Path>,
     probe_local_network: bool,
 ) -> Result<PrivacyReport, RustyJackError> {
     let status = match config {
@@ -321,8 +368,8 @@ pub fn build_privacy_report(
             notes: vec!["no config loaded".into()],
         },
     };
-    let daemon = daemon_log
-        .map(|path| parse_daemon_accessibility(&read_log_tail(path)))
+    let daemon = daemon_log_path(config)
+        .map(|path| parse_daemon_accessibility(&read_log_tail(&path)))
         .unwrap_or(DaemonAccessibility::Unknown);
     Ok(PrivacyReport {
         checks: privacy_checks(
@@ -429,6 +476,74 @@ mod tests {
             parse_daemon_accessibility("nothing here"),
             DaemonAccessibility::Unknown
         );
+    }
+
+    #[test]
+    fn test_wake_granted_after_startup_missing_needs_restart() {
+        let log = "\
+20261122-10:45:14.825 | WARN     | daemon       | [activity] Accessibility not granted for daemon; using idle monitor instead of event tap
+20261122-10:45:16.336 | WARN     | daemon       | [privacy] startup: Accessibility permission missing (required for activity_monitor=event_tap)
+20261122-11:30:00.000 | INFO     | daemon       | [privacy] idle→active wake: Accessibility permission looks granted";
+        let parsed = parse_daemon_accessibility(log);
+        assert_eq!(
+            parsed,
+            DaemonAccessibility::GrantedNeedsRestart {
+                logged_at: "20261122-11:30:00.000".into()
+            }
+        );
+        let checks = privacy_checks(&status(true, Some(true), false, None), &parsed, "bin", true);
+        assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
+        assert!(checks
+            .iter()
+            .find(|c| c.id == "accessibility_daemon")
+            .unwrap()
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("upgrade --force"));
+    }
+
+    #[test]
+    fn test_startup_granted_is_ok_even_after_earlier_missing() {
+        let log = "\
+20261122-10:00:00.000 | WARN     | daemon       | [privacy] startup: Accessibility permission missing
+20261122-11:45:00.000 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted
+20261122-12:00:00.000 | INFO     | daemon       | [privacy] idle→active wake: Accessibility permission looks granted";
+        assert!(matches!(
+            parse_daemon_accessibility(log),
+            DaemonAccessibility::Granted { .. }
+        ));
+    }
+
+    #[test]
+    fn test_daemon_log_path_follows_config_logging_file() {
+        let mut config = Config::default();
+        config.logging.file = "/var/tmp/custom-rusty-jack.log".into();
+        // The env override wins over config; only assert when it is unset.
+        if std::env::var_os("RUSTY_JACK_LOG_FILE").is_none() {
+            assert_eq!(
+                daemon_log_path(Some(&config)),
+                Some(PathBuf::from("/var/tmp/custom-rusty-jack.log"))
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_daemon_fix_includes_settings_step() {
+        let checks = privacy_checks(
+            &status(true, Some(true), false, None),
+            &DaemonAccessibility::Unknown,
+            "bin",
+            true,
+        );
+        let fix = checks
+            .iter()
+            .find(|c| c.id == "accessibility_daemon")
+            .unwrap()
+            .fix
+            .clone()
+            .unwrap();
+        assert!(fix.contains("x-apple.systempreferences"));
     }
 
     #[test]

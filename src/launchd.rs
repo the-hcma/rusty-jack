@@ -548,6 +548,14 @@ fn parse_binary_version_output(output: &str) -> Option<BinaryVersion> {
     })
 }
 
+/// Binary path the installed LaunchAgent runs (what macOS attributes privacy grants to).
+#[must_use]
+pub fn installed_daemon_binary_path() -> Option<String> {
+    let plist_path = plist_path_or_err().ok()?;
+    let plist = std::fs::read_to_string(plist_path).ok()?;
+    launch_agent_binary_path_from_plist(&plist)
+}
+
 fn launch_agent_binary_path_from_plist(plist: &str) -> Option<String> {
     let (_, after_key) = plist.split_once("<key>ProgramArguments</key>")?;
     let (_, after_array) = after_key.split_once("<array>")?;

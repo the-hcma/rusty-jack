@@ -33,9 +33,6 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     });
     let daemon_version = crate::launchd::daemon_version_check(running_pid).ok();
     let daemon_logs = crate::launchd::daemon_log_paths().ok();
-    let daemon_logs_file = daemon_logs
-        .as_ref()
-        .map(|l| std::path::PathBuf::from(&l.file));
     let activity = crate::state::load_activity_snapshot().ok().flatten();
     let scalar_probing_feedback = if json {
         ScalarDiscoveryFeedback::Silent
@@ -56,9 +53,7 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
         scalar_probing_feedback,
     );
 
-    snapshot.privacy =
-        crate::doctor::build_privacy_report(config.as_ref(), daemon_logs_file.as_deref(), false)
-            .ok();
+    snapshot.privacy = crate::doctor::build_privacy_report(config.as_ref(), false).ok();
 
     if json {
         print_json(&snapshot)?;

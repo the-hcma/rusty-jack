@@ -3,7 +3,7 @@
 use crate::config::{load_config_optional, resolve_config_path};
 use crate::doctor::build_privacy_report;
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Run the diagnostics; exits non-zero when a required permission is missing.
 pub fn run(json: bool, config_path: Option<&Path>) -> Result<()> {
@@ -12,10 +12,7 @@ pub fn run(json: bool, config_path: Option<&Path>) -> Result<()> {
         Some(path) => load_config_optional(path, config_path.is_some())?,
         None => None,
     };
-    let log = crate::launchd::daemon_log_paths()
-        .ok()
-        .map(|logs| PathBuf::from(logs.file));
-    let report = build_privacy_report(config.as_ref(), log.as_deref(), true)?;
+    let report = build_privacy_report(config.as_ref(), true)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
