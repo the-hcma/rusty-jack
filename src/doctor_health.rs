@@ -42,14 +42,19 @@ pub struct HealthInputs<'a> {
 pub struct LogSummary {
     /// Timestamp of the newest log line (as logged).
     pub last_entry_at: Option<String>,
-    /// The newest warning/error lines since the daemon last started, oldest first, trimmed.
+    /// The newest warning/error lines, oldest first, trimmed. When `since_daemon_start` is set
+    /// they are only those logged since the daemon last started.
     pub recent_problems: Vec<String>,
+    /// The tail contained the daemon's `[daemon] started` line, so `recent_problems` excludes
+    /// earlier processes. A long-running daemon's start line is often beyond the tail read.
+    pub since_daemon_start: bool,
 }
 
 /// Summarize a daemon log excerpt: its newest timestamp and the last few WARN/ERROR lines.
 #[must_use]
 pub fn summarize_daemon_log(tail: &str) -> LogSummary {
     let mut last_entry_at = None;
+    let mut since_daemon_start = false;
     let mut problems: Vec<String> = Vec::new();
     for line in tail.lines() {
         let mut parts = line.splitn(4, " | ");
@@ -66,6 +71,7 @@ pub fn summarize_daemon_log(tail: &str) -> LogSummary {
         // Problems from an earlier daemon process say nothing about this one: start over.
         if message.contains("[daemon] started version=") {
             problems.clear();
+            since_daemon_start = true;
             continue;
         }
         if matches!(level.trim(), "WARN" | "ERROR") {
@@ -80,6 +86,7 @@ pub fn summarize_daemon_log(tail: &str) -> LogSummary {
     LogSummary {
         last_entry_at,
         recent_problems: problems.split_off(skip),
+        since_daemon_start,
     }
 }
 
@@ -426,12 +433,18 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             None,
         );
     };
+    // Only claim "since the daemon started" when its start line was actually in the tail.
+    let scope = if log.since_daemon_start {
+        "since the daemon started"
+    } else {
+        "in the part of the log read (the daemon's start is older, so some may predate it)"
+    };
     if log.recent_problems.is_empty() {
         return check(
             ID,
             LABEL,
             CheckState::Ok,
-            format!("no warnings or errors since the daemon started (last entry {last})"),
+            format!("no warnings or errors {scope} (last entry {last})"),
             None,
         );
     }
@@ -440,7 +453,7 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
         ID,
         LABEL,
         CheckState::Warn,
-        format!("warnings/errors since the daemon started (last entry {last}):\n{lines}"),
+        format!("warnings/errors {scope} (last entry {last}):\n{lines}"),
         Some("see `rusty-jack status` for the log path"),
     )
 }
@@ -872,6 +885,44 @@ not a log line
             ..Fixture::healthy()
         };
         assert_eq!(f.state("daemon_log"), CheckState::Warn);
+    }
+
+    #[test]
+    fn test_without_a_start_line_in_the_tail_the_log_check_does_not_claim_since_start() {
+        let log = "20261122-10:00:00.000 | WARN     | daemon       | trouble";
+        let s = summarize_daemon_log(log);
+        assert!(!s.since_daemon_start);
+        let f = Fixture {
+            log: s,
+            ..Fixture::healthy()
+        };
+        let checks = f.checks();
+        let c = checks.iter().find(|c| c.id == "daemon_log").unwrap();
+        assert_eq!(c.state, CheckState::Warn);
+        assert!(
+            !c.detail.contains("since the daemon started"),
+            "{}",
+            c.detail
+        );
+        assert!(c.detail.contains("may predate it"), "{}", c.detail);
+
+        // With the start line in the tail, the claim is accurate.
+        let with_start = format!(
+            "20261122-09:00:00.000 | INFO     | daemon       | [daemon] started version=0.13.1 commit=x poll=2000ms activity_poll=1000ms activity_monitor=idle\n{log}"
+        );
+        let s = summarize_daemon_log(&with_start);
+        assert!(s.since_daemon_start);
+        let f = Fixture {
+            log: s,
+            ..Fixture::healthy()
+        };
+        let checks = f.checks();
+        let c = checks.iter().find(|c| c.id == "daemon_log").unwrap();
+        assert!(
+            c.detail.contains("since the daemon started"),
+            "{}",
+            c.detail
+        );
     }
 
     #[test]
