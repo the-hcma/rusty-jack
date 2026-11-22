@@ -332,6 +332,24 @@ fn routing_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             None,
         );
     };
+    // An unplugged preferred output reports `matches_preferred: Some(false)`, but nothing can
+    // re-route to it, so a running or stopped daemon is beside the point.
+    if policy.preferred_present == Some(false) {
+        return check(
+            ID,
+            LABEL,
+            CheckState::Skipped,
+            format!(
+                "the preferred output ({}) is not connected",
+                policy
+                    .preferred_device_label
+                    .as_deref()
+                    .or(policy.preferred_device_name.as_deref())
+                    .unwrap_or("unknown")
+            ),
+            None,
+        );
+    }
     match policy.matches_preferred {
         Some(true) => check(
             ID,
@@ -376,7 +394,7 @@ fn routing_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             ID,
             LABEL,
             CheckState::Skipped,
-            "the preferred output is not connected",
+            "no preferred output could be resolved",
             None,
         ),
     }
@@ -743,6 +761,29 @@ mod tests {
             ..Fixture::healthy()
         };
         assert_eq!(transient.state("routing"), CheckState::Ok);
+    }
+
+    #[test]
+    fn test_unplugged_preferred_output_is_not_a_routing_failure() {
+        // evaluate_policy reports `matches_preferred: Some(false)` when the preferred device
+        // is unplugged, but no daemon can route to it, so it is neither ok nor a warning.
+        let mut unplugged = policy(Some(false));
+        unplugged.preferred_present = Some(false);
+        for daemon in [running(), paused()] {
+            let f = Fixture {
+                policy: Some(unplugged.clone()),
+                daemon: Some(daemon),
+                ..Fixture::healthy()
+            };
+            assert_eq!(f.state("routing"), CheckState::Skipped);
+            let checks = f.checks();
+            let c = checks.iter().find(|c| c.id == "routing").unwrap();
+            assert!(
+                c.detail.contains("not connected") && c.detail.contains("Monitor"),
+                "{}",
+                c.detail
+            );
+        }
     }
 
     #[test]
