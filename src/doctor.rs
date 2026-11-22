@@ -192,14 +192,50 @@ fn current_binary_hint() -> String {
         )
 }
 
+/// Environment facts that shape the wording and severity of the checks.
+#[derive(Debug, Clone)]
+pub struct CheckContext {
+    /// Binary the LaunchAgent runs (what macOS attributes the daemon's grant to).
+    pub binary: String,
+    /// Terminal app this CLI runs in (what macOS attributes the CLI's grant to).
+    pub terminal: String,
+    /// Whether the Local Network SSDP probe ran (`doctor`) or not (`status`).
+    pub local_network_probed: bool,
+    /// Whether the daemon's configured log level records "granted" lines (info or lower).
+    /// When false, a stale "missing" line cannot be told apart from the current state.
+    pub log_confirms_grants: bool,
+}
+
+/// Whether `logging.level` lets the daemon's info-level "granted" verdict reach the log.
+#[must_use]
+pub fn log_level_confirms_grants(level: &str) -> bool {
+    !matches!(
+        level.trim().to_ascii_lowercase().as_str(),
+        "warn" | "warning" | "error" | "off"
+    )
+}
+
+fn current_terminal_hint() -> String {
+    match std::env::var("TERM_PROGRAM") {
+        Ok(name) if !name.trim().is_empty() => match name.as_str() {
+            "Apple_Terminal" => "Terminal".to_string(),
+            "iTerm.app" => "iTerm".to_string(),
+            "vscode" => "Visual Studio Code".to_string(),
+            other => other.to_string(),
+        },
+        _ => "the terminal app you run this from".to_string(),
+    }
+}
+
 /// Build checks from an already-probed permission snapshot (pure; unit-tested).
 #[must_use]
 pub fn privacy_checks(
     status: &PrivacyPermissionStatus,
     daemon: &DaemonAccessibility,
-    binary: &str,
-    local_network_probed: bool,
+    ctx: &CheckContext,
 ) -> Vec<DoctorCheck> {
+    let binary = ctx.binary.as_str();
+    let local_network_probed = ctx.local_network_probed;
     let mut checks = Vec::new();
 
     let ax_fix = format!(
@@ -238,7 +274,11 @@ pub fn privacy_checks(
             label: "Accessibility (this CLI)",
             state: CheckState::Warn,
             detail: "not granted to this process or its terminal app (informational; the daemon check below is what matters)".into(),
-            fix: Some(ax_fix.clone()),
+            fix: Some(format!(
+                "only if you want the CLI itself trusted: enable {} under System Settings → Privacy & Security → Accessibility\n\
+                 this does not change the daemon's grant; see the daemon check below",
+                ctx.terminal
+            )),
         }
     });
 
@@ -269,7 +309,7 @@ pub fn privacy_checks(
                 ),
                 fix: Some("restart the daemon: rusty-jack upgrade --force".into()),
             },
-            DaemonAccessibility::Missing { logged_at } => DoctorCheck {
+            DaemonAccessibility::Missing { logged_at } if ctx.log_confirms_grants => DoctorCheck {
                 id: "accessibility_daemon",
                 label: "Accessibility (daemon)",
                 state: CheckState::Fail,
@@ -278,11 +318,26 @@ pub fn privacy_checks(
                 ),
                 fix: Some(ax_fix),
             },
+            DaemonAccessibility::Missing { logged_at } => DoctorCheck {
+                id: "accessibility_daemon",
+                label: "Accessibility (daemon)",
+                state: CheckState::Warn,
+                detail: format!(
+                    "last logged as missing ({logged_at}); logging.level hides \"granted\" lines, so this may be stale"
+                ),
+                fix: Some(format!(
+                    "set logging.level to info, then rusty-jack upgrade --force, and re-run doctor\n{ax_fix}"
+                )),
+            },
             DaemonAccessibility::Unknown => DoctorCheck {
                 id: "accessibility_daemon",
                 label: "Accessibility (daemon)",
                 state: CheckState::Warn,
-                detail: "no daemon verdict in the log yet".into(),
+                detail: if ctx.log_confirms_grants {
+                    "no daemon verdict in the log yet".into()
+                } else {
+                    "no daemon verdict in the log (logging.level hides \"granted\" lines; set it to info to confirm)".into()
+                },
                 fix: Some(format!(
                     "start the daemon (rusty-jack install / upgrade --force) and re-run doctor; \
                      it logs `[privacy] startup` on launch\n\
@@ -336,8 +391,10 @@ pub fn privacy_checks(
     checks
 }
 
-/// Where the daemon writes its log: `config.logging.file` (or the default), honoring
-/// the log-file environment override, exactly as the daemon resolves it.
+/// Where the daemon would write its log given this CLI's config and environment:
+/// `config.logging.file` (or the default), with the `RUSTY_JACK_LOG_FILE` override.
+/// The daemon takes both from its LaunchAgent, so they must match this CLI's `--config`
+/// and environment for the result to be the daemon's actual log.
 #[must_use]
 pub fn daemon_log_path(config: Option<&Config>) -> Option<PathBuf> {
     let file = config.map_or_else(|| LoggingConfig::default().file, |c| c.logging.file.clone());
@@ -375,8 +432,13 @@ pub fn build_privacy_report(
         checks: privacy_checks(
             &status,
             &daemon,
-            &current_binary_hint(),
-            probe_local_network,
+            &CheckContext {
+                binary: current_binary_hint(),
+                terminal: current_terminal_hint(),
+                local_network_probed: probe_local_network,
+                log_confirms_grants: config
+                    .is_none_or(|c| log_level_confirms_grants(&c.logging.level)),
+            },
         ),
     })
 }
@@ -401,6 +463,15 @@ mod tests {
         }
     }
 
+    fn ctx(probed: bool) -> CheckContext {
+        CheckContext {
+            binary: "bin".into(),
+            terminal: "Terminal".into(),
+            local_network_probed: probed,
+            log_confirms_grants: true,
+        }
+    }
+
     fn state_of(checks: &[DoctorCheck], id: &str) -> CheckState {
         checks.iter().find(|c| c.id == id).unwrap().state
     }
@@ -410,8 +481,7 @@ mod tests {
         let checks = privacy_checks(
             &status(false, None, false, None),
             &DaemonAccessibility::Unknown,
-            "bin",
-            true,
+            &ctx(true),
         );
         assert!(checks.iter().all(|c| c.state == CheckState::Skipped));
     }
@@ -421,7 +491,7 @@ mod tests {
         let daemon = DaemonAccessibility::Missing {
             logged_at: "20261122-10:11:53.037".into(),
         };
-        let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, "bin", true);
+        let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, &ctx(true));
         assert_eq!(state_of(&checks, "accessibility_cli"), CheckState::Ok);
         assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Fail);
         let report = PrivacyReport { checks };
@@ -434,8 +504,7 @@ mod tests {
         let checks = privacy_checks(
             &status(true, Some(false), false, None),
             &DaemonAccessibility::Unknown,
-            "bin",
-            true,
+            &ctx(true),
         );
         assert_eq!(state_of(&checks, "accessibility_cli"), CheckState::Warn);
         assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
@@ -447,15 +516,13 @@ mod tests {
         let checks = privacy_checks(
             &status(false, None, true, None),
             &DaemonAccessibility::Unknown,
-            "bin",
-            true,
+            &ctx(true),
         );
         assert_eq!(state_of(&checks, "local_network"), CheckState::Warn);
         let ok = privacy_checks(
             &status(false, None, true, Some(true)),
             &DaemonAccessibility::Unknown,
-            "bin",
-            true,
+            &ctx(true),
         );
         assert_eq!(state_of(&ok, "local_network"), CheckState::Ok);
     }
@@ -491,7 +558,7 @@ mod tests {
                 logged_at: "20261122-11:30:00.000".into()
             }
         );
-        let checks = privacy_checks(&status(true, Some(true), false, None), &parsed, "bin", true);
+        let checks = privacy_checks(&status(true, Some(true), false, None), &parsed, &ctx(true));
         assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
         assert!(checks
             .iter()
@@ -533,8 +600,7 @@ mod tests {
         let checks = privacy_checks(
             &status(true, Some(true), false, None),
             &DaemonAccessibility::Unknown,
-            "bin",
-            true,
+            &ctx(true),
         );
         let fix = checks
             .iter()
@@ -560,8 +626,7 @@ mod tests {
         let checks = privacy_checks(
             &status(false, None, true, None),
             &DaemonAccessibility::Unknown,
-            "bin",
-            false,
+            &ctx(false),
         );
         assert_eq!(state_of(&checks, "local_network"), CheckState::Unchecked);
         assert!(!PrivacyReport { checks }.has_warnings());
@@ -593,6 +658,54 @@ mod tests {
             parse_daemon_accessibility(&tail),
             DaemonAccessibility::Missing { .. }
         ));
+    }
+
+    #[test]
+    fn test_missing_downgrades_to_warn_when_log_level_hides_granted() {
+        let daemon = DaemonAccessibility::Missing {
+            logged_at: "t".into(),
+        };
+        let quiet = CheckContext {
+            log_confirms_grants: false,
+            ..ctx(true)
+        };
+        let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, &quiet);
+        assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
+        assert!(!PrivacyReport { checks }.has_failures());
+
+        let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, &ctx(true));
+        assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Fail);
+    }
+
+    #[test]
+    fn test_log_level_confirms_grants() {
+        for level in ["trace", "debug", "info", "INFO", ""] {
+            assert!(log_level_confirms_grants(level), "{level}");
+        }
+        for level in ["warn", "WARN", "error", "off"] {
+            assert!(!log_level_confirms_grants(level), "{level}");
+        }
+    }
+
+    #[test]
+    fn test_cli_fix_names_terminal_not_daemon_binary() {
+        let checks = privacy_checks(
+            &status(true, Some(false), false, None),
+            &DaemonAccessibility::Unknown,
+            &ctx(true),
+        );
+        let fix = checks
+            .iter()
+            .find(|c| c.id == "accessibility_cli")
+            .unwrap()
+            .fix
+            .clone()
+            .unwrap();
+        assert!(fix.contains("Terminal"));
+        assert!(
+            !fix.contains("bin"),
+            "CLI fix must not point at the daemon binary: {fix}"
+        );
     }
 
     #[test]

@@ -418,6 +418,8 @@ Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `
 - **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
 - **Local Network** — short SSDP probe when ScalarWebAPI is enabled. Never `FAIL`: an empty result cannot distinguish a denial from an offline speaker, so it is a `warn`.
 
+`doctor` locates the daemon log from the config's `logging.file` and the `RUSTY_JACK_LOG_FILE` override, so run it with the same `--config` and environment as the daemon. A `logging.level` of `warn` or higher hides the daemon's "granted" lines, so a logged "missing" is then only a `warn` (it may be stale); keep `info` to get a definitive verdict.
+
 Exits non-zero when a required permission is missing (any `FAIL`, in practice the daemon's Accessibility). `status` shows the same checks in its **Privacy** block but does not run the SSDP probe, so Local Network shows `n/a` there; use `doctor` to probe it.
 
 ## `completions`
