@@ -74,6 +74,22 @@ impl PrivacyReport {
         self.checks.iter().any(|c| c.state == CheckState::Warn)
     }
 
+    /// One-line conclusion for `doctor`, given whether a config was loaded.
+    #[must_use]
+    pub fn conclusion(&self, config_loaded: bool) -> &'static str {
+        if self.has_failures() {
+            "Fix the FAIL items above, then re-run `rusty-jack doctor`."
+        } else if self.has_warnings() {
+            "No required permission is confirmed missing; see warnings above."
+        } else if !config_loaded {
+            "Nothing was checked: no config is loaded, so no permissions are known to be required."
+        } else if self.checks.iter().all(|c| c.state == CheckState::Skipped) {
+            "This config does not require any privacy permissions."
+        } else {
+            "All required permissions are in place."
+        }
+    }
+
     /// Render the report as an indented text block.
     #[must_use]
     pub fn format(&self, title: &str) -> String {
@@ -133,14 +149,20 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
     let mut latest_startup: Option<(bool, String)> = None;
     // Set by "event tap unavailable", cleared by "event tap active" (file order).
     let mut tap_unavailable: Option<String> = None;
+    // The `[activity]` line is what actually picks the monitor for a launch. While a launch
+    // that chose the idle monitor is current, a later startup "granted" line (a grant that
+    // landed during the startup probes) must not be read as a clean startup.
+    let mut launch_denied = false;
     for line in log.lines() {
         let logged_at = || line.split(" | ").next().unwrap_or("").trim().to_string();
         if line.contains("[activity] event tap unavailable") {
             tap_unavailable = Some(logged_at());
+            launch_denied = false;
             continue;
         }
         if line.contains("[activity] event tap active") {
             tap_unavailable = None;
+            launch_denied = false;
             continue;
         }
         let granted =
@@ -152,7 +174,11 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
             continue;
         }
         let logged_at = logged_at();
-        let is_startup = activity_missing || line.contains("[privacy] startup:");
+        if activity_missing {
+            launch_denied = true;
+        }
+        let is_startup = activity_missing
+            || (line.contains("[privacy] startup:") && !(granted && launch_denied));
         if is_startup {
             latest_startup = Some((granted, logged_at.clone()));
         }
@@ -736,6 +762,88 @@ mod tests {
         ] {
             assert!(!log_level_confirms_grants(bad), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn test_startup_granted_after_activity_denied_needs_restart() {
+        // The grant landed in the ~1.5s between the monitor choice and the privacy probe.
+        let log = "\
+20261122-10:45:14.825 | WARN     | daemon       | [activity] Accessibility not granted for daemon; using idle monitor instead of event tap
+20261122-10:45:16.336 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted";
+        assert!(matches!(
+            parse_daemon_accessibility(log),
+            DaemonAccessibility::GrantedNeedsRestart { .. }
+        ));
+        // A fresh launch that starts the tap is clean again.
+        let relaunched = format!(
+            "{log}\n\
+20261122-10:54:17.521 | INFO     | daemon       | [activity] event tap active (listen-only)\n\
+20261122-10:54:19.051 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&relaunched),
+            DaemonAccessibility::Granted { .. }
+        ));
+    }
+
+    fn report_of(states: &[CheckState]) -> PrivacyReport {
+        PrivacyReport {
+            checks: states
+                .iter()
+                .map(|&state| DoctorCheck {
+                    id: "x",
+                    label: "x",
+                    state,
+                    detail: String::new(),
+                    fix: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn test_only_fail_makes_doctor_fail() {
+        use CheckState::{Fail, Ok, Skipped, Unchecked, Warn};
+        assert!(report_of(&[Ok, Fail]).has_failures());
+        assert!(!report_of(&[Ok, Warn, Skipped, Unchecked]).has_failures());
+    }
+
+    #[test]
+    fn test_conclusion_messages() {
+        use CheckState::{Fail, Ok, Skipped, Warn};
+        assert!(report_of(&[Fail])
+            .conclusion(true)
+            .starts_with("Fix the FAIL"));
+        assert!(report_of(&[Warn]).conclusion(true).contains("see warnings"));
+        assert!(report_of(&[Skipped])
+            .conclusion(false)
+            .starts_with("Nothing was checked"));
+        assert!(report_of(&[Skipped])
+            .conclusion(true)
+            .contains("does not require"));
+        assert_eq!(
+            report_of(&[Ok, Skipped]).conclusion(true),
+            "All required permissions are in place."
+        );
+    }
+
+    #[test]
+    fn test_check_state_json_values() {
+        let value = serde_json::to_value(report_of(&[
+            CheckState::Ok,
+            CheckState::Warn,
+            CheckState::Fail,
+            CheckState::Skipped,
+            CheckState::Unchecked,
+        ]))
+        .unwrap();
+        let states: Vec<&str> = value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, ["ok", "warn", "fail", "skipped", "unchecked"]);
     }
 
     #[test]

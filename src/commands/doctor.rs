@@ -25,26 +25,8 @@ pub fn run(json: bool, config_path: Option<&Path>) -> Result<()> {
         }
         println!();
         println!("{}", report.format("Privacy permissions"));
-        if report.has_failures() {
-            println!();
-            println!("Fix the FAIL items above, then re-run `rusty-jack doctor`.");
-        } else if report.has_warnings() {
-            println!();
-            println!("No required permission is confirmed missing; see warnings above.");
-        } else if config.is_none() {
-            println!();
-            println!("Nothing was checked: no config is loaded, so no permissions are known to be required.");
-        } else if report
-            .checks
-            .iter()
-            .all(|c| c.state == crate::doctor::CheckState::Skipped)
-        {
-            println!();
-            println!("This config does not require any privacy permissions.");
-        } else {
-            println!();
-            println!("All required permissions are in place.");
-        }
+        println!();
+        println!("{}", report.conclusion(config.is_some()));
     }
 
     if report.has_failures() {

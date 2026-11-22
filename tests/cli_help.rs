@@ -207,3 +207,24 @@ fn test_upgrade_subcommand_in_help() {
         .stdout(predicate::str::contains("Refresh"))
         .stdout(predicate::str::contains("--force"));
 }
+
+#[test]
+fn test_completions_bash_emits_script_with_new_subcommands() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .args(["completions", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_rusty__jack"))
+        .stdout(predicate::str::contains("doctor"))
+        .stdout(predicate::str::contains("completions"));
+}
+
+#[test]
+fn test_completions_rejects_unknown_shell() {
+    Command::cargo_bin("rusty-jack")
+        .unwrap()
+        .args(["completions", "nope"])
+        .assert()
+        .failure();
+}

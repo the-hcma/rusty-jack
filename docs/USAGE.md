@@ -412,7 +412,7 @@ rusty-jack doctor
 rusty-jack doctor --json
 ```
 
-Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `n/a` (not probed; `status` only). `warn` and `FAIL` checks list fix steps; the ones that involve granting a permission include an `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
+Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `n/a` (not probed; `status` only). In `--json` the `state` values are `ok`, `warn`, `fail`, `skipped`, and `unchecked`. `warn` and `FAIL` checks list fix steps; the ones that involve granting a permission include an `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
 
 - **Accessibility (this CLI)** — live probe; relevant when `activity_monitor` is `event_tap`. Informational only (`warn`, never `FAIL`): from a terminal macOS checks the terminal app's grant, not the binary's.
 - **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
