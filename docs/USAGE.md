@@ -416,9 +416,9 @@ Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `
 
 - **Accessibility (this CLI)** — live probe; relevant when `activity_monitor` is `event_tap`. Informational only (`warn`, never `FAIL`): from a terminal macOS checks the terminal app's grant, not the binary's.
 - **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
-- **Local Network** — short SSDP probe when ScalarWebAPI is enabled. Never `FAIL`: an empty result cannot distinguish a denial from an offline speaker, so it is a `warn`.
+- **Local Network (this CLI)** — short SSDP probe from this CLI when ScalarWebAPI is enabled; from a terminal macOS evaluates the terminal app's grant, so an `ok` says nothing about the daemon's own grant. Never `FAIL`: an empty result cannot distinguish a denial from an offline speaker, so it is a `warn`.
 
-`doctor` locates the daemon log from the config's `logging.file` and the `RUSTY_JACK_LOG_FILE` override, so run it with the same `--config` and environment as the daemon. A `logging.level` of `warn` or higher hides the daemon's "granted" lines, so a logged "missing" is then only a `warn` (it may be stale); keep `info` to get a definitive verdict.
+`doctor` locates the daemon log from the config's `logging.file` and the `RUSTY_JACK_LOG_FILE` override, so run it with the same `--config` and environment as the daemon (`RUST_LOG` and `RUSTY_JACK_LOG_LEVEL` also decide whether "granted" lines are logged). The daemon logs its verdict at startup and on each wake; on a long-running daemon an old verdict may have rotated out of the 10 MB log, which shows as a `warn`. A `logging.level` of `warn` or higher hides the daemon's "granted" lines, so a logged "missing" is then only a `warn` (it may be stale); keep `info` to get a definitive verdict.
 
 Exits non-zero when a required permission is missing (any `FAIL`, in practice the daemon's Accessibility). `status` shows the same checks in its **Privacy** block but does not run the SSDP probe, so Local Network shows `n/a` there; use `doctor` to probe it.
 

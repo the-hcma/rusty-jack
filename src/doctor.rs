@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 const LOG_TAIL_BYTES: u64 = 512 * 1024;
 
 const ACCESSIBILITY_PANE_URL: &str =
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility";
 const LOCAL_NETWORK_PANE_URL: &str =
     "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocalNetwork";
 
@@ -215,6 +215,16 @@ pub fn log_level_confirms_grants(level: &str) -> bool {
     )
 }
 
+/// Like [`log_level_confirms_grants`], applying the daemon's overrides from this
+/// process's environment: `RUST_LOG` (whole filter) over `RUSTY_JACK_LOG_LEVEL` over config.
+fn effective_log_level_confirms_grants(configured: &str) -> bool {
+    let level = std::env::var("RUST_LOG")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::logging::resolve_level(configured));
+    log_level_confirms_grants(&level)
+}
+
 fn current_terminal_hint() -> String {
     match std::env::var("TERM_PROGRAM") {
         Ok(name) if !name.trim().is_empty() => match name.as_str() {
@@ -235,6 +245,7 @@ pub fn privacy_checks(
     ctx: &CheckContext,
 ) -> Vec<DoctorCheck> {
     let binary = ctx.binary.as_str();
+    let terminal = ctx.terminal.as_str();
     let local_network_probed = ctx.local_network_probed;
     let mut checks = Vec::new();
 
@@ -334,7 +345,7 @@ pub fn privacy_checks(
                 label: "Accessibility (daemon)",
                 state: CheckState::Warn,
                 detail: if ctx.log_confirms_grants {
-                    "no daemon verdict in the log yet".into()
+                    "no daemon verdict in the log (the daemon logs one at startup and on wake; an old verdict may have rotated out)".into()
                 } else {
                     "no daemon verdict in the log (logging.level hides \"granted\" lines; set it to info to confirm)".into()
                 },
@@ -351,7 +362,7 @@ pub fn privacy_checks(
     checks.push(if !status.local_network_required {
         DoctorCheck {
             id: "local_network",
-            label: "Local Network",
+            label: "Local Network (this CLI)",
             state: CheckState::Skipped,
             detail: "not required (ScalarWebAPI speaker not enabled)".into(),
             fix: None,
@@ -359,7 +370,7 @@ pub fn privacy_checks(
     } else if !local_network_probed {
         DoctorCheck {
             id: "local_network",
-            label: "Local Network",
+            label: "Local Network (this CLI)",
             state: CheckState::Unchecked,
             detail: "not probed by status (no SSDP scan); run `rusty-jack doctor` to probe".into(),
             fix: None,
@@ -367,21 +378,22 @@ pub fn privacy_checks(
     } else if status.local_network_ok == Some(true) {
         DoctorCheck {
             id: "local_network",
-            label: "Local Network",
+            label: "Local Network (this CLI)",
             state: CheckState::Ok,
-            detail: "SSDP probe heard a speaker".into(),
+            detail: "SSDP probe from this CLI heard a speaker (the daemon's own grant is separate)"
+                .into(),
             fix: None,
         }
     } else {
         // Empty SSDP cannot distinguish a denial from an offline speaker, so never FAIL.
         DoctorCheck {
             id: "local_network",
-            label: "Local Network",
+            label: "Local Network (this CLI)",
             state: CheckState::Warn,
             detail: "could not be confirmed (no LAN route, or no speaker answered SSDP)".into(),
             fix: Some(format!(
-                "if the speaker is on and discovery stays empty, enable rusty-jack under \
-                 System Settings → Privacy & Security → Local Network\n\
+                "if the speaker is on and discovery stays empty, enable {terminal} (this CLI) and \
+                 {binary} (the daemon) under System Settings → Privacy & Security → Local Network\n\
                  open \"{LOCAL_NETWORK_PANE_URL}\"\n\
                  then: rusty-jack upgrade --force"
             )),
@@ -437,7 +449,7 @@ pub fn build_privacy_report(
                 terminal: current_terminal_hint(),
                 local_network_probed: probe_local_network,
                 log_confirms_grants: config
-                    .is_none_or(|c| log_level_confirms_grants(&c.logging.level)),
+                    .is_none_or(|c| effective_log_level_confirms_grants(&c.logging.level)),
             },
         ),
     })
@@ -465,7 +477,7 @@ mod tests {
 
     fn ctx(probed: bool) -> CheckContext {
         CheckContext {
-            binary: "bin".into(),
+            binary: "/sentinel/daemon-bin-xyz".into(),
             terminal: "Terminal".into(),
             local_network_probed: probed,
             log_confirms_grants: true,
@@ -706,6 +718,43 @@ mod tests {
             !fix.contains("bin"),
             "CLI fix must not point at the daemon binary: {fix}"
         );
+    }
+
+    #[test]
+    fn test_build_privacy_report_without_config_checks_nothing() {
+        let report = build_privacy_report(None, true).unwrap();
+        assert!(report.checks.iter().all(|c| c.state == CheckState::Skipped));
+        assert!(!report.has_failures());
+    }
+
+    #[test]
+    fn test_build_privacy_report_without_probe_leaves_local_network_unchecked() {
+        let config = Config {
+            scalar_webapi_device: Some(crate::config::ScalarWebApiDeviceConfig {
+                enabled: true,
+                model: "SRS-ZR5".into(),
+                host: Some("192.0.2.1".into()),
+                port: 54_480,
+                path: "sony/av".into(),
+                mac_output: crate::config::DeviceSelectorConfig {
+                    name: None,
+                    uid: Some("uid".into()),
+                },
+                triggers: vec!["output_selected".into()],
+                wake_debounce_ms: 5_000,
+                request_timeout_ms: 3_000,
+                require_quick_start: true,
+                speaker_input: None,
+            }),
+            ..Config::default()
+        };
+        let report = build_privacy_report(Some(&config), false).unwrap();
+        let ln = report
+            .checks
+            .iter()
+            .find(|c| c.id == "local_network")
+            .unwrap();
+        assert_eq!(ln.state, CheckState::Unchecked);
     }
 
     #[test]
