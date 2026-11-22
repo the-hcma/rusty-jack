@@ -103,6 +103,11 @@ pub enum DaemonAccessibility {
     Granted {
         logged_at: String,
     },
+    /// Accessibility is granted but the event tap failed to start, so the daemon is on the
+    /// idle monitor.
+    TapUnavailable {
+        logged_at: String,
+    },
     /// Granted since the daemon started, but the daemon chose its monitor at startup
     /// (without the grant), so it stays on the idle monitor until restarted.
     GrantedNeedsRestart {
@@ -120,12 +125,24 @@ pub enum DaemonAccessibility {
 /// The daemon picks event tap vs idle monitor once, at startup, but re-checks
 /// Accessibility on every idle→active wake. A wake line saying "granted" that
 /// follows a startup verdict of "missing" therefore means a restart is still needed.
+/// A granted verdict is also not "ok" when the tap itself failed to start.
 #[must_use]
 pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
     // (granted, is_startup_decision, logged_at)
     let mut latest: Option<(bool, bool, String)> = None;
     let mut latest_startup: Option<(bool, String)> = None;
+    // Set by "event tap unavailable", cleared by "event tap active" (file order).
+    let mut tap_unavailable: Option<String> = None;
     for line in log.lines() {
+        let logged_at = || line.split(" | ").next().unwrap_or("").trim().to_string();
+        if line.contains("[activity] event tap unavailable") {
+            tap_unavailable = Some(logged_at());
+            continue;
+        }
+        if line.contains("[activity] event tap active") {
+            tap_unavailable = None;
+            continue;
+        }
         let granted =
             line.contains("[privacy]") && line.contains("Accessibility permission looks granted");
         let activity_missing = line.contains("[activity] Accessibility not granted for daemon");
@@ -134,7 +151,7 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
         if !(granted || missing) {
             continue;
         }
-        let logged_at = line.split(" | ").next().unwrap_or("").trim().to_string();
+        let logged_at = logged_at();
         let is_startup = activity_missing || line.contains("[privacy] startup:");
         if is_startup {
             latest_startup = Some((granted, logged_at.clone()));
@@ -147,6 +164,8 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
         Some((true, is_startup, logged_at)) => {
             if !is_startup && matches!(latest_startup, Some((false, _))) {
                 DaemonAccessibility::GrantedNeedsRestart { logged_at }
+            } else if let Some(tap_at) = tap_unavailable {
+                DaemonAccessibility::TapUnavailable { logged_at: tap_at }
             } else {
                 DaemonAccessibility::Granted { logged_at }
             }
@@ -201,48 +220,27 @@ pub struct CheckContext {
     pub terminal: String,
     /// Whether the Local Network SSDP probe ran (`doctor`) or not (`status`).
     pub local_network_probed: bool,
-    /// Whether the daemon's effective log level (from its LaunchAgent plist) records "granted" lines.
+    /// Whether the daemon's `RUST_LOG` (from its LaunchAgent plist) records "granted" lines.
     /// When false, a stale "missing" line cannot be told apart from the current state.
     pub log_confirms_grants: bool,
 }
 
-/// Whether `logging.level` lets the daemon's info-level "granted" verdict reach the log.
+/// Whether the daemon's `RUST_LOG` lets its info-level `[privacy]` lines reach the log.
+///
+/// The installed LaunchAgent pins `RUST_LOG=info`. Without it the daemon's filter is
+/// `rusty_jack=<level>`, which drops the `daemon` log target entirely, and a directive
+/// string (`info,daemon=warn`, `rusty_jack=debug`) can filter it per target. Only a plain
+/// `trace`/`debug`/`info` is known to record the verdict; anything else is "can't tell".
 #[must_use]
-pub fn log_level_confirms_grants(level: &str) -> bool {
-    !matches!(
-        level.trim().to_ascii_lowercase().as_str(),
-        "warn" | "warning" | "error" | "off"
+pub fn log_level_confirms_grants(rust_log: Option<&str>) -> bool {
+    matches!(
+        rust_log.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("trace" | "debug" | "info")
     )
 }
 
-/// The filter level the daemon actually logs at. Mirrors `logging::build_filter`:
-/// `RUST_LOG` wins over `RUSTY_JACK_LOG_LEVEL`, which wins over `logging.level`.
-/// Inputs come from the LaunchAgent plist, because that is the daemon's environment
-/// (the installed plist pins `RUST_LOG=info`), not this shell's.
-#[must_use]
-pub fn daemon_effective_log_level(
-    rust_log: Option<&str>,
-    jack_level: Option<&str>,
-    configured: &str,
-) -> String {
-    let non_empty = |v: Option<&str>| {
-        v.map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-    };
-    non_empty(rust_log)
-        .or_else(|| non_empty(jack_level))
-        .unwrap_or_else(|| configured.trim().to_string())
-}
-
-fn daemon_log_confirms_grants(configured: &str) -> bool {
-    let rust_log = crate::launchd::installed_daemon_env_var("RUST_LOG");
-    let jack_level = crate::launchd::installed_daemon_env_var("RUSTY_JACK_LOG_LEVEL");
-    log_level_confirms_grants(&daemon_effective_log_level(
-        rust_log.as_deref(),
-        jack_level.as_deref(),
-        configured,
-    ))
+fn daemon_log_confirms_grants() -> bool {
+    log_level_confirms_grants(crate::launchd::installed_daemon_env_var("RUST_LOG").as_deref())
 }
 
 fn current_terminal_hint() -> String {
@@ -307,6 +305,7 @@ pub fn privacy_checks(
             detail: "not granted to this process or its terminal app (informational; the daemon check below is what matters)".into(),
             fix: Some(format!(
                 "only if you want the CLI itself trusted: enable {} under System Settings → Privacy & Security → Accessibility\n\
+                 open \"{ACCESSIBILITY_PANE_URL}\"\n\
                  this does not change the daemon's grant; see the daemon check below",
                 ctx.terminal
             )),
@@ -330,6 +329,18 @@ pub fn privacy_checks(
                 state: CheckState::Ok,
                 detail: format!("granted (daemon log {logged_at})"),
                 fix: None,
+            },
+            DaemonAccessibility::TapUnavailable { logged_at } => DoctorCheck {
+                id: "accessibility_daemon",
+                label: "Accessibility (daemon)",
+                state: CheckState::Warn,
+                detail: format!(
+                    "granted, but the event tap failed to start ({logged_at}); the daemon is on the idle monitor"
+                ),
+                fix: Some(
+                    "see `[activity] event tap unavailable` in the daemon log for the reason, then: rusty-jack upgrade --force"
+                        .into(),
+                ),
             },
             DaemonAccessibility::GrantedNeedsRestart { logged_at } => DoctorCheck {
                 id: "accessibility_daemon",
@@ -357,7 +368,7 @@ pub fn privacy_checks(
                     "last logged as missing ({logged_at}); the daemon's log level hides \"granted\" lines, so this may be stale"
                 ),
                 fix: Some(format!(
-                    "raise the daemon's log level to info (RUST_LOG in the LaunchAgent, or logging.level), then rusty-jack upgrade --force, and re-run doctor\n{ax_fix}"
+                    "rusty-jack upgrade --force rewrites the LaunchAgent with RUST_LOG=info; then re-run doctor\n{ax_fix}"
                 )),
             },
             DaemonAccessibility::Unknown => DoctorCheck {
@@ -365,9 +376,9 @@ pub fn privacy_checks(
                 label: "Accessibility (daemon)",
                 state: CheckState::Warn,
                 detail: if ctx.log_confirms_grants {
-                    "no daemon verdict in the log (the daemon logs one at startup and on wake; an old verdict may have rotated out)".into()
+                    "no daemon verdict in the log (the daemon logs one at startup and on wake; an old one may be beyond the log's recent tail or rotated out)".into()
                 } else {
-                    "no daemon verdict in the log (the daemon's log level hides \"granted\" lines; set it to info to confirm)".into()
+                    "no daemon verdict in the log (the daemon's RUST_LOG does not record \"granted\" lines; rusty-jack upgrade --force sets RUST_LOG=info)".into()
                 },
                 fix: Some(format!(
                     "start the daemon (rusty-jack install / upgrade --force) and re-run doctor; \
@@ -468,8 +479,7 @@ pub fn build_privacy_report(
                 binary: current_binary_hint(),
                 terminal: current_terminal_hint(),
                 local_network_probed: probe_local_network,
-                log_confirms_grants: config
-                    .is_none_or(|c| daemon_log_confirms_grants(&c.logging.level)),
+                log_confirms_grants: daemon_log_confirms_grants(),
             },
         ),
     })
@@ -710,40 +720,42 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_effective_log_level_precedence() {
-        // RUST_LOG (plist-pinned) beats RUSTY_JACK_LOG_LEVEL beats config.
-        assert_eq!(
-            daemon_effective_log_level(Some("info"), Some("warn"), "error"),
-            "info"
-        );
-        assert_eq!(
-            daemon_effective_log_level(None, Some("warn"), "info"),
-            "warn"
-        );
-        assert_eq!(
-            daemon_effective_log_level(Some("  "), None, " warn "),
-            "warn"
-        );
-        assert_eq!(daemon_effective_log_level(None, None, "debug"), "debug");
-        // The installed plist pins RUST_LOG=info, so a quiet config does not hide grants.
-        assert!(log_level_confirms_grants(&daemon_effective_log_level(
-            Some("info"),
+    fn test_log_level_confirms_grants_only_for_plain_levels_from_rust_log() {
+        for ok in ["trace", "debug", "info", " INFO "] {
+            assert!(log_level_confirms_grants(Some(ok)), "{ok}");
+        }
+        // Unset RUST_LOG drops the `daemon` target; directives can filter it; quiet levels hide it.
+        for bad in [
             None,
-            "warn"
-        )));
-        assert!(!log_level_confirms_grants(&daemon_effective_log_level(
-            None, None, "warn"
-        )));
+            Some(""),
+            Some("warn"),
+            Some("error"),
+            Some("off"),
+            Some("rusty_jack=debug"),
+            Some("info,daemon=warn"),
+        ] {
+            assert!(!log_level_confirms_grants(bad), "{bad:?}");
+        }
     }
 
     #[test]
-    fn test_log_level_confirms_grants() {
-        for level in ["trace", "debug", "info", "INFO", ""] {
-            assert!(log_level_confirms_grants(level), "{level}");
-        }
-        for level in ["warn", "WARN", "error", "off"] {
-            assert!(!log_level_confirms_grants(level), "{level}");
-        }
+    fn test_tap_unavailable_after_granted_startup_warns() {
+        let log = "\
+20261122-10:54:16.000 | WARN     | daemon       | [activity] event tap unavailable (CGEventTapCreate failed); falling back to idle monitor
+20261122-10:54:19.051 | INFO     | daemon       | [privacy] startup: Accessibility permission looks granted";
+        let parsed = parse_daemon_accessibility(log);
+        assert!(matches!(parsed, DaemonAccessibility::TapUnavailable { .. }));
+        let checks = privacy_checks(&status(true, Some(true), false, None), &parsed, &ctx(true));
+        assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
+
+        // A later successful tap clears it.
+        let recovered = format!(
+            "{log}\n20261122-11:00:00.000 | INFO     | daemon       | [activity] event tap active (listen-only)"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&recovered),
+            DaemonAccessibility::Granted { .. }
+        ));
     }
 
     #[test]

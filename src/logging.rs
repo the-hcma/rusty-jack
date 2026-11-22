@@ -191,7 +191,7 @@ fn pad_module(target: &str) -> String {
     }
 }
 
-pub fn resolve_level(configured: &str) -> String {
+fn resolve_level(configured: &str) -> String {
     std::env::var(ENV_LOG_LEVEL)
         .ok()
         .filter(|value| !value.trim().is_empty())
