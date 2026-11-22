@@ -309,9 +309,17 @@ fn is_job_loaded(domain: &str, label: &str) -> Result<bool, RustyJackError> {
     Ok(launchctl_print_service(domain, label)?.is_some())
 }
 
+/// The `launchctl` executable. `RUSTY_JACK_LAUNCHCTL` overrides it so tests (for example
+/// `doctor` end to end) never consult the real launchd.
+fn launchctl_program() -> std::ffi::OsString {
+    std::env::var_os("RUSTY_JACK_LAUNCHCTL")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "launchctl".into())
+}
+
 fn launchctl_print_service(domain: &str, label: &str) -> Result<Option<String>, RustyJackError> {
     let service = service_id(domain, label);
-    let output = Command::new("launchctl")
+    let output = Command::new(launchctl_program())
         .args(["print", &service])
         .output()
         .map_err(RustyJackError::Io)?;
@@ -323,7 +331,7 @@ fn launchctl_print_service(domain: &str, label: &str) -> Result<Option<String>, 
 }
 
 fn run_launchctl(args: &[&str]) -> Result<i32, RustyJackError> {
-    let output = Command::new("launchctl")
+    let output = Command::new(launchctl_program())
         .args(args)
         .output()
         .map_err(RustyJackError::Io)?;

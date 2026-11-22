@@ -33,7 +33,7 @@ pub enum Commands {
     Daemon,
     /// Uninstall the launchd LaunchAgent (stop, disable, remove plist)
     Disable(DisableArgs),
-    /// Diagnose why Rusty Jack may not be working (macOS privacy permissions)
+    /// Diagnose why Rusty Jack may not be working (permissions, daemon, routing, volume control)
     Doctor(DoctorArgs),
     /// Test native driver by swapping eqMac's HAL driver out and back in
     Driver(DriverArgs),
