@@ -5,7 +5,9 @@
 //! for this CLI and the daemon's own verdict recovered from its log.
 
 use crate::config::Config;
-use crate::privacy_permissions::{check_privacy_permissions, PrivacyPermissionStatus};
+use crate::privacy_permissions::{
+    check_privacy_permissions, check_privacy_permissions_no_probe, PrivacyPermissionStatus,
+};
 use crate::RustyJackError;
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
@@ -30,6 +32,8 @@ pub enum CheckState {
     Fail,
     /// Not needed by the current config.
     Skipped,
+    /// Needed, but not probed in this mode (`status` does no SSDP scan).
+    Unchecked,
 }
 
 impl CheckState {
@@ -39,6 +43,7 @@ impl CheckState {
             Self::Warn => "warn",
             Self::Fail => "FAIL",
             Self::Skipped => "skip",
+            Self::Unchecked => "n/a",
         }
     }
 }
@@ -133,15 +138,23 @@ pub fn read_log_tail(path: &Path) -> String {
     let Ok(mut file) = std::fs::File::open(path) else {
         return String::new();
     };
-    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if len > LOG_TAIL_BYTES && file.seek(SeekFrom::Start(len - LOG_TAIL_BYTES)).is_err() {
+    let len = file.metadata().map_or(0, |m| m.len());
+    let truncated = len > LOG_TAIL_BYTES;
+    if truncated && file.seek(SeekFrom::Start(len - LOG_TAIL_BYTES)).is_err() {
         return String::new();
     }
     let mut bytes = Vec::new();
     if file.read_to_end(&mut bytes).is_err() {
         return String::new();
     }
-    String::from_utf8_lossy(&bytes).into_owned()
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
+        // The seek likely landed mid-line; drop that partial first line.
+        return text
+            .split_once('\n')
+            .map_or_else(String::new, |(_, rest)| rest.to_string());
+    }
+    text
 }
 
 fn current_binary_hint() -> String {
@@ -159,6 +172,7 @@ pub fn privacy_checks(
     status: &PrivacyPermissionStatus,
     daemon: &DaemonAccessibility,
     binary: &str,
+    local_network_probed: bool,
 ) -> Vec<DoctorCheck> {
     let mut checks = Vec::new();
 
@@ -186,11 +200,13 @@ pub fn privacy_checks(
             fix: None,
         }
     } else {
+        // From a terminal, macOS evaluates the terminal app's grant, not this binary's,
+        // so this can differ from the daemon. Informational only; the daemon check decides.
         DoctorCheck {
             id: "accessibility_cli",
             label: "Accessibility (this CLI)",
-            state: CheckState::Fail,
-            detail: "missing (required for activity_monitor=event_tap)".into(),
+            state: CheckState::Warn,
+            detail: "not granted to this process or its terminal app (informational; the daemon check below is what matters)".into(),
             fix: Some(ax_fix.clone()),
         }
     });
@@ -245,6 +261,14 @@ pub fn privacy_checks(
             detail: "not required (ScalarWebAPI speaker not enabled)".into(),
             fix: None,
         }
+    } else if !local_network_probed {
+        DoctorCheck {
+            id: "local_network",
+            label: "Local Network",
+            state: CheckState::Unchecked,
+            detail: "not probed by status (no SSDP scan); run `rusty-jack doctor` to probe".into(),
+            fix: None,
+        }
     } else if status.local_network_ok == Some(true) {
         DoctorCheck {
             id: "local_network",
@@ -274,15 +298,20 @@ pub fn privacy_checks(
 
 /// Probe permissions for `config` and read the daemon's verdict from its log.
 ///
+/// `probe_local_network` runs the SSDP probe (`doctor`); `status` passes `false`
+/// so it stays free of LAN scans.
+///
 /// # Errors
 ///
 /// Returns an error if the permission probe itself fails.
 pub fn build_privacy_report(
     config: Option<&Config>,
     daemon_log: Option<&Path>,
+    probe_local_network: bool,
 ) -> Result<PrivacyReport, RustyJackError> {
     let status = match config {
-        Some(config) => check_privacy_permissions(config)?,
+        Some(config) if probe_local_network => check_privacy_permissions(config)?,
+        Some(config) => check_privacy_permissions_no_probe(config)?,
         None => PrivacyPermissionStatus {
             accessibility_required: false,
             accessibility_trusted: None,
@@ -296,7 +325,12 @@ pub fn build_privacy_report(
         .map(|path| parse_daemon_accessibility(&read_log_tail(path)))
         .unwrap_or(DaemonAccessibility::Unknown);
     Ok(PrivacyReport {
-        checks: privacy_checks(&status, &daemon, &current_binary_hint()),
+        checks: privacy_checks(
+            &status,
+            &daemon,
+            &current_binary_hint(),
+            probe_local_network,
+        ),
     })
 }
 
@@ -330,6 +364,7 @@ mod tests {
             &status(false, None, false, None),
             &DaemonAccessibility::Unknown,
             "bin",
+            true,
         );
         assert!(checks.iter().all(|c| c.state == CheckState::Skipped));
     }
@@ -339,7 +374,7 @@ mod tests {
         let daemon = DaemonAccessibility::Missing {
             logged_at: "20261122-10:11:53.037".into(),
         };
-        let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, "bin");
+        let checks = privacy_checks(&status(true, Some(true), false, None), &daemon, "bin", true);
         assert_eq!(state_of(&checks, "accessibility_cli"), CheckState::Ok);
         assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Fail);
         let report = PrivacyReport { checks };
@@ -353,9 +388,11 @@ mod tests {
             &status(true, Some(false), false, None),
             &DaemonAccessibility::Unknown,
             "bin",
+            true,
         );
-        assert_eq!(state_of(&checks, "accessibility_cli"), CheckState::Fail);
+        assert_eq!(state_of(&checks, "accessibility_cli"), CheckState::Warn);
         assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
+        assert!(!PrivacyReport { checks }.has_failures());
     }
 
     #[test]
@@ -364,12 +401,14 @@ mod tests {
             &status(false, None, true, None),
             &DaemonAccessibility::Unknown,
             "bin",
+            true,
         );
         assert_eq!(state_of(&checks, "local_network"), CheckState::Warn);
         let ok = privacy_checks(
             &status(false, None, true, Some(true)),
             &DaemonAccessibility::Unknown,
             "bin",
+            true,
         );
         assert_eq!(state_of(&ok, "local_network"), CheckState::Ok);
     }
@@ -397,6 +436,46 @@ mod tests {
         let log = "20261122-08:00:00.000 | WARN     | daemon       | [activity] Accessibility not granted for daemon; using idle monitor";
         assert!(matches!(
             parse_daemon_accessibility(log),
+            DaemonAccessibility::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn test_local_network_unchecked_when_not_probed() {
+        let checks = privacy_checks(
+            &status(false, None, true, None),
+            &DaemonAccessibility::Unknown,
+            "bin",
+            false,
+        );
+        assert_eq!(state_of(&checks, "local_network"), CheckState::Unchecked);
+        assert!(!PrivacyReport { checks }.has_warnings());
+    }
+
+    #[test]
+    fn test_read_log_tail_reads_only_tail_and_drops_partial_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rusty-jack.log");
+        // Old verdict first, then filler past the tail window, then a newer verdict.
+        let old = "20200101-00:00:00.000 | INFO | daemon | [privacy] startup: Accessibility permission looks granted\n";
+        let filler_line = "20260101-00:00:00.000 | INFO | daemon | filler line for padding\n";
+        let mut content = String::from(old);
+        while (content.len() as u64) < LOG_TAIL_BYTES + 4096 {
+            content.push_str(filler_line);
+        }
+        content.push_str("20261122-10:11:53.037 | WARN | daemon | [privacy] wake: Accessibility permission missing\n");
+        std::fs::write(&path, &content).unwrap();
+
+        let tail = read_log_tail(&path);
+        assert!(tail.len() as u64 <= LOG_TAIL_BYTES);
+        assert!(!tail.contains("20200101"), "old head must be excluded");
+        assert!(
+            tail.starts_with("20"),
+            "partial first line must be dropped, got: {:?}",
+            &tail[..tail.len().min(40)]
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&tail),
             DaemonAccessibility::Missing { .. }
         ));
     }

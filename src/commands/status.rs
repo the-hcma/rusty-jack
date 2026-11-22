@@ -57,7 +57,8 @@ pub fn run(hal: &dyn AudioHal, json: bool, config_path: Option<&Path>) -> Result
     );
 
     snapshot.privacy =
-        crate::doctor::build_privacy_report(config.as_ref(), daemon_logs_file.as_deref()).ok();
+        crate::doctor::build_privacy_report(config.as_ref(), daemon_logs_file.as_deref(), false)
+            .ok();
 
     if json {
         print_json(&snapshot)?;

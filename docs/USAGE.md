@@ -395,7 +395,7 @@ The **`log follow`** row shows the recommended live tail command: `tail -F <log-
 
 When the daemon has run at least one activity poll, an **Activity** block shows the latest idle sample, console and daemon users, configured keyboard/mouse wake triggers, and the last idle→active transition (proxy for recent keyboard/mouse activity). Activity polls log at `debug`; transitions log at `info`.
 
-A **Privacy** block (also under `privacy` in `--json`) checks the macOS permissions the current config needs: Accessibility for the CLI and for the daemon, and Local Network when ScalarWebAPI is enabled. Run `rusty-jack doctor` for fix steps.
+A **Privacy** block (also under `privacy` in `--json`) checks the macOS permissions the current config needs: Accessibility for the CLI and for the daemon (from its log). It does no SSDP scan, so Local Network shows `n/a`. Run `rusty-jack doctor` for fix steps and the Local Network probe.
 
 Config is optional for `status`; without it, policy reports “not configured”.
 
@@ -412,13 +412,13 @@ rusty-jack doctor
 rusty-jack doctor --json
 ```
 
-Each check reports `ok`, `warn`, `FAIL`, or `skip` (not needed by the config), with fix steps and a `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
+Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `n/a` (not probed; `status` only). `warn` and `FAIL` checks list fix steps, and the Accessibility and Local Network ones include an `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
 
-- **Accessibility (this CLI)** — live probe; required when `activity_monitor` is `event_tap`.
+- **Accessibility (this CLI)** — live probe; relevant when `activity_monitor` is `event_tap`. Informational only (`warn`, never `FAIL`): from a terminal macOS checks the terminal app's grant, not the binary's.
 - **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
 - **Local Network** — short SSDP probe when ScalarWebAPI is enabled. Never `FAIL`: an empty result cannot distinguish a denial from an offline speaker, so it is a `warn`.
 
-Exits non-zero when a required permission is missing (any `FAIL`). `status` shows the same checks in its **Privacy** block.
+Exits non-zero when a required permission is missing (any `FAIL`, in practice the daemon's Accessibility). `status` shows the same checks in its **Privacy** block but does not run the SSDP probe, so Local Network shows `n/a` there; use `doctor` to probe it.
 
 ## `completions`
 

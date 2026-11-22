@@ -117,6 +117,13 @@ pub fn check_privacy_permissions(
     check_privacy_permissions_with(config, probe_local_network_permission)
 }
 
+/// Probe required permissions without prompting and without the SSDP Local Network probe.
+pub fn check_privacy_permissions_no_probe(
+    config: &Config,
+) -> Result<PrivacyPermissionStatus, RustyJackError> {
+    check_privacy_permissions_with(config, || None)
+}
+
 /// Probe required permissions for the daemon log (SSDP probe logs under `daemon`).
 pub fn check_privacy_permissions_for_daemon(
     config: &Config,

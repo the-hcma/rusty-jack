@@ -15,7 +15,7 @@ pub fn run(json: bool, config_path: Option<&Path>) -> Result<()> {
     let log = crate::launchd::daemon_log_paths()
         .ok()
         .map(|logs| PathBuf::from(logs.file));
-    let report = build_privacy_report(config.as_ref(), log.as_deref())?;
+    let report = build_privacy_report(config.as_ref(), log.as_deref(), true)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
