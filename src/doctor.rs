@@ -119,6 +119,11 @@ pub enum DaemonAccessibility {
     Granted {
         logged_at: String,
     },
+    /// Only a wake-time "granted" line is retained, with no startup verdict or event-tap
+    /// evidence, so which monitor the daemon chose is unknown.
+    GrantedUnverified {
+        logged_at: String,
+    },
     /// Accessibility is granted but the event tap failed to start, so the daemon is on the
     /// idle monitor.
     TapUnavailable {
@@ -153,6 +158,10 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
     // that chose the idle monitor is current, a later startup "granted" line (a grant that
     // landed during the startup probes) must not be read as a clean startup.
     let mut launch_denied = false;
+    // Evidence that the event tap is running: set by "event tap active"/"recreated",
+    // cleared by any fallback. Without it (or a startup verdict) a lone wake-time
+    // "granted" line cannot show which monitor the daemon chose.
+    let mut tap_running = false;
     for line in log.lines() {
         let logged_at = || line.split(" | ").next().unwrap_or("").trim().to_string();
         // Startup failure, or a runtime fallback (silent stall, failed recreate, thread exit):
@@ -162,6 +171,7 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
             || line.contains("[activity] event tap thread exited")
         {
             tap_unavailable = Some(logged_at());
+            tap_running = false;
             launch_denied = false;
             continue;
         }
@@ -169,6 +179,7 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
             || line.contains("[activity] event tap recreated")
         {
             tap_unavailable = None;
+            tap_running = true;
             launch_denied = false;
             continue;
         }
@@ -199,6 +210,10 @@ pub fn parse_daemon_accessibility(log: &str) -> DaemonAccessibility {
                 DaemonAccessibility::GrantedNeedsRestart { logged_at }
             } else if let Some(tap_at) = tap_unavailable {
                 DaemonAccessibility::TapUnavailable { logged_at: tap_at }
+            } else if !is_startup && !tap_running && latest_startup.is_none() {
+                // Only a wake-time "granted" line survives (the startup record rotated out
+                // or is beyond the tail): the daemon may still be on the idle monitor.
+                DaemonAccessibility::GrantedUnverified { logged_at }
             } else {
                 DaemonAccessibility::Granted { logged_at }
             }
@@ -367,6 +382,18 @@ pub fn privacy_checks(
                 ),
                 fix: None,
             },
+            DaemonAccessibility::GrantedUnverified { logged_at } => DoctorCheck {
+                id: "accessibility_daemon",
+                label: "Accessibility (daemon)",
+                state: CheckState::Warn,
+                detail: format!(
+                    "granted as of {logged_at}, but the log has no record of the daemon's startup, so it may still be on the idle monitor"
+                ),
+                fix: Some(
+                    "rusty-jack upgrade --force restarts the daemon and logs a fresh startup verdict; then re-run doctor"
+                        .into(),
+                ),
+            },
             DaemonAccessibility::TapUnavailable { logged_at } => DoctorCheck {
                 id: "accessibility_daemon",
                 label: "Accessibility (daemon)",
@@ -480,12 +507,25 @@ pub fn privacy_checks(
     checks
 }
 
-/// Where the daemon would write its log given this CLI's config and environment:
-/// `config.logging.file` (or the default), with the `RUSTY_JACK_LOG_FILE` override.
-/// The daemon takes both from its LaunchAgent, so they must match this CLI's `--config`
-/// and environment for the result to be the daemon's actual log.
+/// Where the daemon writes its log: `RUSTY_JACK_LOG_FILE` from the installed LaunchAgent plist
+/// (the daemon's real environment), else `config.logging.file` (or the default) with this
+/// CLI's own `RUSTY_JACK_LOG_FILE` override. The config still comes from this CLI's
+/// `--config`, so use the same one the daemon runs with.
 #[must_use]
 pub fn daemon_log_path(config: Option<&Config>) -> Option<PathBuf> {
+    resolve_daemon_log_path(
+        crate::launchd::installed_daemon_env_var("RUSTY_JACK_LOG_FILE").as_deref(),
+        config,
+    )
+}
+
+fn resolve_daemon_log_path(
+    plist_log_file: Option<&str>,
+    config: Option<&Config>,
+) -> Option<PathBuf> {
+    if let Some(value) = plist_log_file.map(str::trim).filter(|v| !v.is_empty()) {
+        return Some(crate::logging::expand_tilde(value));
+    }
     let file = config.map_or_else(|| LoggingConfig::default().file, |c| c.logging.file.clone());
     crate::logging::resolve_log_file_path(Path::new(&file)).ok()
 }
@@ -783,6 +823,54 @@ mod tests {
         assert!(matches!(
             parse_daemon_accessibility(log),
             DaemonAccessibility::Granted { .. }
+        ));
+    }
+
+    #[test]
+    fn test_daemon_log_path_prefers_the_plist_environment() {
+        let mut config = Config::default();
+        config.logging.file = "/var/tmp/from-config.log".into();
+        assert_eq!(
+            resolve_daemon_log_path(Some("/tmp/from-plist.log"), Some(&config)),
+            Some(PathBuf::from("/tmp/from-plist.log"))
+        );
+        // Blank plist value falls back to the config (when no CLI env override is set).
+        if std::env::var_os("RUSTY_JACK_LOG_FILE").is_none() {
+            assert_eq!(
+                resolve_daemon_log_path(Some("  "), Some(&config)),
+                Some(PathBuf::from("/var/tmp/from-config.log"))
+            );
+        }
+    }
+
+    #[test]
+    fn test_lone_wake_granted_line_is_unverified_not_ok() {
+        // Startup record rotated out: only a wake-time "granted" line remains.
+        let lone = "20261122-12:00:00.000 | INFO     | daemon       | [privacy] idle→active wake: Accessibility permission looks granted";
+        let parsed = parse_daemon_accessibility(lone);
+        assert!(
+            matches!(parsed, DaemonAccessibility::GrantedUnverified { .. }),
+            "{parsed:?}"
+        );
+        let checks = privacy_checks(&status(true, Some(true), false, None), &parsed, &ctx(true));
+        assert_eq!(state_of(&checks, "accessibility_daemon"), CheckState::Warn);
+
+        // Retained event-tap evidence makes the same wake line trustworthy.
+        let with_tap = format!(
+            "20261122-11:00:00.000 | INFO     | daemon       | [activity] event tap active (listen-only)\n{lone}"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&with_tap),
+            DaemonAccessibility::Granted { .. }
+        ));
+
+        // A fallback after the tap was active removes that evidence.
+        let fell_back = format!(
+            "{with_tap}\n20261122-12:01:00.000 | WARN     | daemon       | [activity] event tap using idle monitor fallback (silent stall)"
+        );
+        assert!(matches!(
+            parse_daemon_accessibility(&fell_back),
+            DaemonAccessibility::TapUnavailable { .. }
         ));
     }
 
