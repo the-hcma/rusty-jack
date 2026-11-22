@@ -23,17 +23,6 @@ class RustyJack < Formula
     safe_system bin/"rusty-jack", "disable", "--json"
   end
 
-  def post_install
-    ohai "Refresh the LaunchAgent after every install or upgrade"
-    puts "  rusty-jack upgrade --force"
-    puts
-    puts "Then verify with:"
-    puts "  rusty-jack status"
-    puts
-    puts "First-time setup in each macOS user account:"
-    puts "  rusty-jack install"
-  end
-
   def caveats
     <<~EOS
       After installing the formula, set up config and the per-user LaunchAgent:
