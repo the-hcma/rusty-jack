@@ -47,8 +47,11 @@ pub struct LogSummary {
     /// The newest warning/error lines, oldest first, trimmed. When `since_daemon_start` is set
     /// they are only those logged since the last recorded daemon start.
     pub recent_problems: Vec<String>,
-    /// The tail contained the daemon's `[daemon] started` line, so `recent_problems` excludes
-    /// earlier processes. A long-running daemon's start line is often beyond the tail read.
+    /// The tail contained a `[daemon] started` line, so `recent_problems` excludes everything
+    /// logged before that line. It is the last *recorded* start: a daemon restarted with a
+    /// `RUST_LOG` below `info` writes no start line, so that line can belong to an earlier
+    /// process. When no start line is in the tail (a long-running daemon's often is not) this
+    /// is unset and the problems may predate the current process.
     pub since_daemon_start: bool,
 }
 
@@ -484,7 +487,8 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
     let scope = if log.since_daemon_start {
         "since the last recorded daemon start"
     } else {
-        "in the part of the log read (the daemon's start is older, so some may predate it)"
+        "in the part of the log read (no daemon start line is in it: the start may be older than \
+         the part read, or never logged, so some may predate the current daemon)"
     };
     if log.recent_problems.is_empty() {
         return check(
@@ -1068,7 +1072,11 @@ not a log line
             "{}",
             c.detail
         );
-        assert!(c.detail.contains("may predate it"), "{}", c.detail);
+        assert!(
+            c.detail.contains("may predate the current daemon"),
+            "{}",
+            c.detail
+        );
 
         // With the start line in the tail, the claim is accurate.
         let with_start = format!(
