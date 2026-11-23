@@ -405,14 +405,27 @@ When ScalarWebAPI is configured, `status` reads power state from cached/configur
 
 ## `doctor`
 
-Diagnose why Rusty Jack might not be working by verifying the macOS privacy permissions the current config depends on.
+Diagnose why Rusty Jack might not be working. It checks the macOS privacy permissions the config needs, then the daemon, audio routing and HDMI/DisplayPort volume control, and ends with an `Overall:` verdict line so a clean permissions result is not read as a clean bill of health.
 
 ```bash
 rusty-jack doctor
 rusty-jack doctor --json
 ```
 
-Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `n/a` (not probed; `status` only). In `--json` the `state` values are `ok`, `warn`, `fail`, `skipped`, and `unchecked`. `warn` and `FAIL` checks list fix steps; the ones that involve granting a permission include an `open "x-apple.systempreferences:…"` command for the relevant System Settings pane:
+Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `n/a` (not probed; `status` only). In `--json` the `state` values are `ok`, `warn`, `fail`, `skipped`, and `unchecked`. `warn` and `FAIL` checks list fix steps; the ones that involve granting a permission include an `open "x-apple.systempreferences:…"` command for the relevant System Settings pane. `doctor` exits non-zero when any check is a `FAIL`, and warnings exit 0.
+
+### Daemon and routing checks
+
+`auto_switch` decides how serious a daemon problem is: with it on, the daemon is expected to keep audio routed, so a missing or paused daemon is a `FAIL`; with it off, the same findings are `warn`.
+
+- **Daemon** — `ok` when the LaunchAgent is running. Not installed (`rusty-jack install`), paused (`rusty-jack resume`), or loaded in launchd but not running (`rusty-jack upgrade --force`, with the launchd state and last exit code) is a `FAIL` with `auto_switch`, else a `warn`.
+- **Daemon binary** — `FAIL` when the running or installed daemon's version or commit differs from the CLI (for example after `brew upgrade`), with `rusty-jack upgrade --force`. The same version from a different binary path, a LaunchAgent without a version stamp, or an installed daemon whose version cannot be read, is a `warn`.
+- **Audio devices** — only shown when CoreAudio could not be queried: a `warn` with the underlying error, so the routing and volume-control checks being skipped is not mistaken for a healthy result.
+- **HDMI/DisplayPort volume control** — only when the selected output is an HDMI/DisplayPort output, otherwise `skip`. `ok` when the Rusty Jack native driver is installed and not reporting a warning, or when eqMac is running and owns the default output. A native driver that reports a warning (a null or skeleton stage, or CoreAudio has not published its output) does not count as volume control, so eqMac is evaluated instead. A `warn` when eqMac is installed but not running, when it is running without owning the default output, or when no working layer is available. With neither the native driver nor eqMac installed, the fix is `rusty-jack install` only when the native driver is offered, otherwise install eqMac. With a native driver that is installed but reporting a warning and no eqMac, the fix is to check `rusty-jack status` for the driver details or install eqMac (`rusty-jack install` would not help).
+- **Audio routing** — a `warn` when the default output is not the preferred one, `auto_switch` is on, and the daemon is not running to correct it. With a running daemon that is a normal transient state and shows `ok`. `skip` when the preferred output is not connected or is listed but not available (nothing can route to it), or `auto_switch` is off.
+- **Daemon log** — the last warning and error lines logged since the last recorded daemon start (the `[daemon] started` line) and the time of the newest entry; a `warn` when there are any. Warnings logged before the last `[daemon] started` line in the last 512 KB of the log that `doctor` reads are ignored. That has two limits. A long-running daemon's start line is often older than that window, and the check then says some warnings may predate the current daemon. And a daemon restarted with a `RUST_LOG` below `info` does not record its start line at all, so the last recorded start can belong to an earlier process.
+
+### Privacy permission checks
 
 - **Accessibility (this CLI)** — live probe; relevant when `activity_monitor` is `event_tap`. Informational only (`warn`, never `FAIL`): from a terminal macOS checks the terminal app's grant, not the binary's.
 - **Accessibility (daemon)** — the LaunchAgent has its own grant, so this reads the daemon's latest `[privacy]` / `[activity]` verdict from `~/Library/Logs/rusty-jack.log`. A CLI `ok` with a daemon `FAIL` means the grant is missing for the daemon binary.
@@ -420,7 +433,7 @@ Each check reports `ok`, `warn`, `FAIL`, `skip` (not needed by the config), or `
 
 `doctor` locates the daemon log from `RUSTY_JACK_LOG_FILE` in the installed LaunchAgent plist, else the config's `logging.file` (and this CLI's `RUSTY_JACK_LOG_FILE`), so use the same `--config` as the daemon. It reads the last 512 KB of that file. Whether the daemon logs its "granted" line depends on its `RUST_LOG`, which `doctor` reads from the installed LaunchAgent plist (the installed plist pins `RUST_LOG=info`). If `RUST_LOG` is missing, a directive string, or `warn` or higher, a logged "missing" is only a `warn` because it may be stale; `rusty-jack upgrade --force` rewrites the plist with `RUST_LOG=info`. The daemon logs its verdict at startup and on each wake, so on a long-running daemon an old verdict may be older than the recent tail or have rotated out, which shows as a `warn`. If only a wake-time "granted" line remains, with no startup record or event-tap line to show which monitor the daemon chose, that is also a `warn`. If Accessibility is granted but the event tap fails to start, the daemon check is a `warn` too.
 
-Exits non-zero when a required permission is missing (any `FAIL`, in practice the daemon's Accessibility). `status` shows the same checks in its **Privacy** block but does not run the SSDP probe, so Local Network shows `n/a` there; use `doctor` to probe it.
+`status` shows the permission checks in its **Privacy** block but does not run the SSDP probe, so Local Network shows `n/a` there; use `doctor` to probe it. `RUSTY_JACK_LAUNCHCTL` overrides the `launchctl` program for tests.
 
 ## `completions`
 

@@ -10,6 +10,7 @@ pub mod coreaudio;
 pub mod daemon;
 pub mod device_select;
 pub mod doctor;
+pub mod doctor_health;
 pub mod eqmac;
 pub mod error;
 pub mod hal_plugin;

@@ -74,19 +74,22 @@ impl PrivacyReport {
         self.checks.iter().any(|c| c.state == CheckState::Warn)
     }
 
-    /// One-line conclusion for `doctor`, given whether a config was loaded.
+    /// Final `Overall:` verdict line for `doctor`, given whether a config was loaded.
+    ///
+    /// A clean permission result must not read as a clean bill of health, so this covers every
+    /// check (permissions, daemon, routing, volume control), not just the permission ones.
     #[must_use]
     pub fn conclusion(&self, config_loaded: bool) -> &'static str {
         if self.has_failures() {
-            "Fix the FAIL items above, then re-run `rusty-jack doctor`."
+            "Overall: problems found. Fix the FAIL items above, then re-run `rusty-jack doctor`."
         } else if self.has_warnings() {
-            "No required permission is confirmed missing; see warnings above."
+            "Overall: no failures, but see the warnings above."
         } else if !config_loaded {
-            "Nothing was checked: no config is loaded, so no permissions are known to be required."
+            "Overall: OK, but no config is loaded, so config-dependent checks were skipped."
         } else if self.checks.iter().all(|c| c.state == CheckState::Skipped) {
-            "This config does not require any privacy permissions."
+            "Overall: nothing to check for this config."
         } else {
-            "All required permissions are in place."
+            "Overall: OK. All checks passed."
         }
     }
 
@@ -99,7 +102,8 @@ impl PrivacyReport {
                 "  [{:<4}] {}: {}\n",
                 check.state.tag(),
                 check.label,
-                check.detail
+                // Continuation lines (for example log excerpts) align under the first line.
+                check.detail.replace('\n', "\n           ")
             ));
             if matches!(check.state, CheckState::Fail | CheckState::Warn) {
                 if let Some(fix) = &check.fix {
@@ -1173,20 +1177,43 @@ mod tests {
     #[test]
     fn test_conclusion_messages() {
         use CheckState::{Fail, Ok, Skipped, Warn};
-        assert!(report_of(&[Fail])
+        assert!(report_of(&[Fail]).conclusion(true).contains("Fix the FAIL"));
+        assert!(report_of(&[Warn])
             .conclusion(true)
-            .starts_with("Fix the FAIL"));
-        assert!(report_of(&[Warn]).conclusion(true).contains("see warnings"));
+            .contains("see the warnings"));
         assert!(report_of(&[Skipped])
             .conclusion(false)
-            .starts_with("Nothing was checked"));
+            .contains("no config is loaded"));
         assert!(report_of(&[Skipped])
             .conclusion(true)
-            .contains("does not require"));
+            .contains("nothing to check"));
+        // A clean result still names itself an overall verdict, not just permissions.
         assert_eq!(
             report_of(&[Ok, Skipped]).conclusion(true),
-            "All required permissions are in place."
+            "Overall: OK. All checks passed."
         );
+        for report in [report_of(&[Fail]), report_of(&[Warn]), report_of(&[Ok])] {
+            assert!(report.conclusion(true).starts_with("Overall:"));
+        }
+    }
+
+    #[test]
+    fn test_format_indents_multiline_details_under_the_check() {
+        let report = PrivacyReport {
+            checks: vec![DoctorCheck {
+                id: "x",
+                label: "Daemon log",
+                state: CheckState::Warn,
+                detail: "recent warnings:\nline one\nline two".into(),
+                fix: Some("do the thing".into()),
+            }],
+        };
+        let text = report.format("Diagnosis");
+        assert!(
+            text.contains("\n           line one\n           line two\n"),
+            "{text}"
+        );
+        assert!(text.contains("→ do the thing"));
     }
 
     #[test]
