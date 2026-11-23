@@ -45,7 +45,7 @@ pub struct LogSummary {
     /// Timestamp of the newest log line (as logged).
     pub last_entry_at: Option<String>,
     /// The newest warning/error lines, oldest first, trimmed. When `since_daemon_start` is set
-    /// they are only those logged since the daemon last started.
+    /// they are only those logged since the last recorded daemon start.
     pub recent_problems: Vec<String>,
     /// The tail contained the daemon's `[daemon] started` line, so `recent_problems` excludes
     /// earlier processes. A long-running daemon's start line is often beyond the tail read.
@@ -480,9 +480,9 @@ fn log_check(inputs: &HealthInputs<'_>) -> DoctorCheck {
             None,
         );
     };
-    // Only claim "since the daemon started" when its start line was actually in the tail.
+    // Only claim "since the last recorded daemon start" when its start line was actually in the tail.
     let scope = if log.since_daemon_start {
-        "since the daemon started"
+        "since the last recorded daemon start"
     } else {
         "in the part of the log read (the daemon's start is older, so some may predate it)"
     };
@@ -1064,7 +1064,7 @@ not a log line
         let c = checks.iter().find(|c| c.id == "daemon_log").unwrap();
         assert_eq!(c.state, CheckState::Warn);
         assert!(
-            !c.detail.contains("since the daemon started"),
+            !c.detail.contains("since the last recorded daemon start"),
             "{}",
             c.detail
         );
@@ -1083,7 +1083,7 @@ not a log line
         let checks = f.checks();
         let c = checks.iter().find(|c| c.id == "daemon_log").unwrap();
         assert!(
-            c.detail.contains("since the daemon started"),
+            c.detail.contains("since the last recorded daemon start"),
             "{}",
             c.detail
         );
