@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.13.1...rusty-jack-v0.14.0) (2026-11-23)
+
+
+### Features
+
+* **doctor:** diagnose daemon state, routing, and eqMac readiness ([#277](https://github.com/the-hcma/rusty-jack/issues/277)) ([16cb85c](https://github.com/the-hcma/rusty-jack/commit/16cb85c34067034d51e7797e7a319c88cc248cdf))
+
 ## [0.13.1](https://github.com/the-hcma/rusty-jack/compare/rusty-jack-v0.13.0...rusty-jack-v0.13.1) (2026-11-22)
 
 
